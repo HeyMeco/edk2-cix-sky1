@@ -8,7 +8,7 @@ checks pass), **boot** (boots an OS on hardware).
 | Radxa Orion O6 | ✓ | ✓ | – | BL1/BL2/TZ/EC/SFH/se_config identical to Radxa release 1.3.1 |
 | Radxa Orion O6N | ✓ | ✓ | – | BL1/BL2/TZ/EC/SFH/se_config identical to Radxa release 1.3.1 |
 | Minisforum MS-R1 | ✓ | ✓ | – | rebased onto CIX 2026Q3; layout identical to Minisforum's |
-| Orange Pi 6 Plus | ✓ | ✓ | – | all regions except BL33 identical to vendor 1.4 image |
+| Orange Pi 6 Plus | ✓ | ✓ | ✓ | all regions except BL33 identical to vendor 1.4 image |
 | Orange Pi 6 | ✓ | ✓ | – | all regions except BL33 identical to vendor v1.0 image; DSDT board deltas match |
 
 The PCIe 64-bit window option was verified on an Orion O6 by its original
@@ -22,12 +22,20 @@ AArch64 CIX tools had signed with a non-standard PSS salt. Since then the FIP
 certificates match each vendor's (the Plus trusted-key certificate is
 byte-identical to the vendor's).
 
+Builds before the variable-store fix booted the Orange Pi 6 Plus only once
+after each flash: the store was placed at `0x388000` (Merak) instead of the
+`0x380000` the Orange Pi layout reserves, so formatting it on first boot
+erased the memory/PM configuration, se_config and the BL33 header at
+`0x3F8000`–`0x400000`. The Orange Pi 6 had the same setting.
+
 Checked on every build (`scripts/build.py`):
 
 * every firmware-header entry lies in its flash region, holds the staged
   file, and regions do not overlap;
 * every vendor blob matches its SHA-256 (`fetch-blobs.py`);
-* every FIP certificate uses RSA-PSS with a 32-byte salt.
+* every FIP certificate uses RSA-PSS with a 32-byte salt;
+* the variable store (3 × `SPI_VARIABLE_SIZE` from `SPI_VARIABLE_BASE`) lies
+  inside the layout's reserved region.
 
 Checked during development:
 

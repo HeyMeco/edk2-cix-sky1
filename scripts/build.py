@@ -20,6 +20,7 @@ import argparse
 import datetime
 import json
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -290,8 +291,26 @@ def check_layout(cfg, outdir):
     for a, b in zip(regions, regions[1:]):
         if a[1] > b[0]:
             die(f"{cfg['board']}: regions {a[2]} and {b[2]} overlap")
+    check_nv_store(cfg, layout)
     return [{"type": r[2], "address": f"{r[0]:#x}", "region_size": f"{r[1] - r[0]:#x}", "used": f"{r[3]:#x}"}
             for r in regions]
+
+
+def check_nv_store(cfg, layout):
+    """The variable store (variables + FTW working + FTW spare, three times
+    SPI_VARIABLE_SIZE from SPI_VARIABLE_BASE) is erased and rewritten at run
+    time, so it must sit inside the layout's reserved region."""
+    dsc = (ROOT / cfg["package"] / Path(cfg["dsc"]).name).read_text()
+    defs = dict(re.findall(r"^\s*DEFINE\s+(SPI_VARIABLE_BASE|SPI_VARIABLE_SIZE)\s*=\s*(\S+)", dsc, re.M))
+    if len(defs) != 2:
+        die(f"{cfg['board']}: SPI_VARIABLE_BASE/SIZE not defined in {cfg['dsc']}")
+    start = int(defs["SPI_VARIABLE_BASE"], 0)
+    end = start + 3 * int(defs["SPI_VARIABLE_SIZE"], 0)
+    for g in layout["image_header_groups"]:
+        addr, gsize = int(g["address"], 0), int(g["size"], 0)
+        if g["image_type"] == 100 and addr <= start and end <= addr + gsize:
+            return
+    die(f"{cfg['board']}: variable store {start:#x}-{end:#x} is not inside a reserved region of the flash layout")
 
 
 def write_manifest(cfg, outdir, target, version, date, layout, capsules=()):

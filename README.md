@@ -14,8 +14,8 @@ on top of the CIX 2026Q3 BSP and booting operating systems through **ACPI**.
 | Orange Pi 6 | `opi6` | `edk2-project/Platform/CIX/Sky1/OPI6` | reconstructed from the Orange Pi firmware |
 
 > **Status:** every board builds and packages, and the images are checked
-> statically (flash layout, vendor regions, ACPI). **None of them has been
-> boot-tested on hardware yet.** Keep a way to recover (SPI programmer or the
+> statically (flash layout, vendor regions, ACPI). **Only the Orange Pi 6 Plus has been
+> boot-tested on hardware so far.** Keep a way to recover (SPI programmer or the
 > vendor's recovery method) before flashing. See [docs/validation.md](docs/validation.md).
 
 ## What is in here
