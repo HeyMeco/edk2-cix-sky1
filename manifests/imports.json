@@ -7,9 +7,9 @@
     "upstream": "Platform/Radxa",
     "local": "edk2-project/Platform/Radxa",
     "summary": {
-      "same": 167,
-      "modified": 8,
+      "same": 170,
       "removed": 1,
+      "modified": 5,
       "added": 4
     },
     "files": {
@@ -127,7 +127,7 @@
       },
       "Orion/O6/Drivers/AcpiPlatfomTables/EC.asl": {
         "upstream_blob": "9b11322cafa38735b84490d9c7e81452a81f55ed",
-        "status": "modified"
+        "status": "same"
       },
       "Orion/O6/Drivers/AcpiPlatfomTables/EfiRtc.asl": {
         "upstream_blob": "45d55458af9aa84796638739e83e99f7ac27acd5",
@@ -139,7 +139,7 @@
       },
       "Orion/O6/Drivers/AcpiPlatfomTables/GpioInt.asl": {
         "upstream_blob": "0b2c27be0ed66c406f5c8ee1cc1d5fd8edc19120",
-        "status": "modified"
+        "status": "same"
       },
       "Orion/O6/Drivers/AcpiPlatfomTables/GpioLeds.asl": {
         "upstream_blob": "45d153a1d36d11966cfa46ae77420b2cded40896",
@@ -151,7 +151,7 @@
       },
       "Orion/O6/Drivers/AcpiPlatfomTables/HardwareMonitor.asl": {
         "upstream_blob": "e57672769fd32b90d9f24368b115b03f9da34719",
-        "status": "modified"
+        "status": "same"
       },
       "Orion/O6/Drivers/AcpiPlatfomTables/I2cPD.asl": {
         "upstream_blob": "b43659a9c84f6b724c246d95f5aa31381e632090",

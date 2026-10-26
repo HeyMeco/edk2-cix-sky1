@@ -9,8 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version / tag (e.g. 2026.10.0)"
+        description: "BIOS version, used in file names and as the release tag"
         required: true
+        default: 2026Q3
       boards:
         description: "Boards to build (space separated, or 'all')"
         default: all
@@ -80,21 +81,21 @@ jobs:
       - name: Checksums and notes
         run: |
           cd dist
-          sha256sum *.zip > SHA256SUMS
+          sha256sum *.bin > SHA256SUMS
           {
-            echo "UEFI firmware built from ${GITHUB_SHA::12} (ACPI boot)."
+            echo "UEFI firmware ${{ inputs.version }} built from ${GITHUB_SHA::12} (CIX 2026Q3 BSP, ACPI boot)."
             echo
-            echo "| Board | Archive | SHA-256 |"
+            echo "| Board | File | SHA-256 |"
             echo "|---|---|---|"
-            for z in *.zip; do
-              board=$(unzip -p "$z" '*/manifest.json' | jq -r .name)
-              echo "| $board | \`$z\` | \`$(sha256sum "$z" | cut -c1-16)…\` |"
+            for f in *.bin; do
+              board="${f%%_*}"
+              name=$(sed -n 's/^name: *//p' "../boards/$board.yaml")
+              echo "| $name | \`$f\` | \`$(sha256sum "$f" | cut -c1-16)…\` |"
             done
             echo
-            echo "Each archive contains \`cix_flash_all.bin\` (full SPI image), \`cix_flash_ota.bin\`"
-            echo "(UEFI-only update), the raw FD, \`manifest.json\` and flashing notes; the MS-R1 and"
-            echo "Orange Pi archives also carry signed UEFI capsules (\`*.cap\`)."
-            echo "None of these images has been boot-tested by CI; see README.md for the validation status."
+            echo "Each file is the complete 8 MiB SPI flash image (padded with 0xFF)."
+            echo "Flashing it resets the UEFI settings. None of these images has been"
+            echo "boot-tested by CI; see README.md for the validation status."
           } > ../notes.md
       - name: Publish
         env:
@@ -103,6 +104,6 @@ jobs:
           flags=()
           [ "${{ inputs.prerelease }}" = "true" ] && flags+=(--prerelease)
           [ "${{ inputs.draft }}" = "true" ] && flags+=(--draft)
-          gh release create "${{ inputs.version }}" dist/*.zip dist/SHA256SUMS \
+          gh release create "${{ inputs.version }}" dist/*.bin dist/SHA256SUMS \
             --target "$GITHUB_SHA" --title "edk2-cix ${{ inputs.version }}" \
             --notes-file notes.md "${flags[@]}"

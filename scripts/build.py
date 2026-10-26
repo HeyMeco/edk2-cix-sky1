@@ -7,10 +7,13 @@ board it prepares the tree, stages the vendor binaries, builds the BL33 UEFI
 FD with the board DSC, generates the CIX flash configuration blobs, signs the
 FD into bootloader3.img and packages the full and OTA SPI images.
 
-Outputs go to output/<board>/<TARGET>/ and, with --dist, a release archive
-per board to dist/.
+The result for each board is dist/<board>_<version>.bin: the full SPI image
+(cix_flash_all.bin) padded with 0xFF to the size of the flash part.  The
+version defaults to bios_version in manifests/pins.json (the CIX BSP release,
+e.g. 2026Q3).  Intermediate files stay in output/<board>/<TARGET>/; --extras
+also packs the OTA image, capsules, FD and manifest into dist/extras/.
 
-Usage: build.py BOARD... | --all  [--target RELEASE|DEBUG] [--version V] [--dist]
+Usage: build.py BOARD... | --all  [--target RELEASE|DEBUG] [--version V] [--extras]
 """
 
 import argparse
@@ -45,8 +48,7 @@ def source_date():
 
 
 def default_version():
-    v = git("describe", "--tags", "--always", "--dirty", check=False)
-    return v or "dev"
+    return load_json("manifests/pins.json")["bios_version"]
 
 
 def build_env():
@@ -292,7 +294,7 @@ UEFI firmware built from https://github.com/{repo} (commit {commit}).
 Boot mode: ACPI. Build target: {target}.
 
 Files
-  cix_flash_all.bin   complete {flash_mb} MiB SPI NOR image (wipes UEFI settings)
+  cix_flash_all.bin   complete SPI NOR image, unpadded (wipes UEFI settings)
   cix_flash_ota.bin   BL33/UEFI-only update image
   SKY1_BL33_UEFI.fd   raw UEFI firmware device (for debugging)
   *.cap               signed UEFI capsules (boards with capsule update only)
@@ -310,18 +312,42 @@ status.
 """
 
 
-def make_dist(cfg, outdir, manifest, repo):
+def release_name(cfg, manifest):
+    stem = f"{cfg['board']}_{manifest['version']}"
+    if manifest["target"] != "RELEASE":
+        stem += f"_{manifest['target'].lower()}"
+    return stem
+
+
+def write_release_binary(cfg, outdir, manifest):
+    """dist/<board>_<version>.bin: cix_flash_all.bin padded to the flash size."""
     dist = ROOT / "dist"
     dist.mkdir(exist_ok=True)
-    stem = f"edk2-cix-{cfg['board']}-{manifest['version']}"
-    if manifest["target"] != "RELEASE":
-        stem += f"-{manifest['target'].lower()}"
+    data = (outdir / "cix_flash_all.bin").read_bytes()
+    size = flash_size(cfg)
+    if len(data) > size:
+        die(f"{cfg['board']}: image is larger than the {size:#x} byte flash")
+    # Pad with the erased-flash value; the variable stores in the padding are
+    # re-initialised by the firmware on first boot.
+    data += b"\xff" * (size - len(data))
+    path = dist / f"{release_name(cfg, manifest)}.bin"
+    path.write_bytes(data)
+    manifest["outputs"][path.name] = {"size": len(data), "sha256": sha256(path)}
+    (outdir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    log(f"{cfg['board']}: {path.relative_to(ROOT)} ({len(data) >> 20} MiB)")
+    return path
+
+
+def make_extras(cfg, outdir, manifest, repo):
+    dist = ROOT / "dist" / "extras"
+    dist.mkdir(parents=True, exist_ok=True)
+    stem = release_name(cfg, manifest)
     readme = FLASH_README.format(name=cfg["name"], version=manifest["version"],
                                  underline="=" * (len(cfg["name"]) + len(manifest["version"]) + 13),
                                  repo=repo, commit=manifest["commit"][:12], target=manifest["target"],
                                  flash_mb=flash_size(cfg) >> 20)
-    sums = "".join(f"{v['sha256']}  {k}\n" for k, v in manifest["outputs"].items())
-    zpath = dist / f"{stem}.zip"
+    sums = "".join(f"{v['sha256']}  {k}\n" for k, v in manifest["outputs"].items() if not k.endswith("_" + manifest["version"] + ".bin"))
+    zpath = dist / f"{stem}_extras.zip"
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
         for f in ("cix_flash_all.bin", "cix_flash_ota.bin", "SKY1_BL33_UEFI.fd", "manifest.json"):
             z.write(outdir / f, f"{stem}/{f}")
@@ -344,7 +370,8 @@ def main():
     ap.add_argument("--image", action="append", default=[], metavar="KEY=PATH|URL",
                     help="vendor firmware image, passed to fetch-blobs.py")
     ap.add_argument("--skip-prepare", action="store_true")
-    ap.add_argument("--dist", action="store_true", help="also write release archives to dist/")
+    ap.add_argument("--extras", action="store_true",
+                    help="also pack OTA image, capsules, FD and manifest into dist/extras/")
     a = ap.parse_args()
 
     all_boards = boards()
@@ -380,8 +407,9 @@ def main():
         capsules = make_capsules(cfg, outdir)
         manifest = write_manifest(cfg, outdir, a.target, version, date, layout, capsules)
         log(f"{n}: cix_flash_all.bin {manifest['outputs']['cix_flash_all.bin']['sha256']}")
-        if a.dist:
-            make_dist(cfg, outdir, manifest, repo)
+        write_release_binary(cfg, outdir, manifest)
+        if a.extras:
+            make_extras(cfg, outdir, manifest, repo)
 
 
 if __name__ == "__main__":

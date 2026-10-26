@@ -39,7 +39,6 @@ on top of the CIX 2026Q3 BSP and booting operating systems through **ACPI**.
   * **PCIe 64-bit window** setup option (Auto / 16 / 32 / 64 / 128 GB) for the
     x8 slot, so GPUs with 16 GB or 24 GB of VRAM can use Resizable BAR; Auto
     sizes it from the installed card
-  * Orion O6: the absent embedded controller is hidden from ACPI
 * **Signed UEFI capsules** (`.cap`) for the boards whose firmware supports
   capsule updates (MS-R1, Orange Pi 6, Orange Pi 6 Plus).
 * **Scripts** that fetch and verify vendor binaries, build, sign, package and
@@ -67,23 +66,26 @@ cd edk2-cix-sky1
 
 ./build.sh --list                    # boards
 ./build.sh orion-o6 ms-r1            # one or more boards
-./build.sh --all --dist              # everything, plus release zips in dist/
+./build.sh --all                     # every board
 ```
 
-Results:
+The result is one file per board:
 
 ```
-output/<board>/RELEASE/
-  cix_flash_all.bin      full SPI image
-  cix_flash_ota.bin      BL33 (UEFI) only
-  cix_flash_*.bin.cap    signed capsules (MS-R1, Orange Pi)
-  SKY1_BL33_UEFI.fd      raw firmware device
-  manifest.json          versions, hashes, staged blobs, flash layout
-  build.log
-dist/edk2-cix-<board>-<version>.zip    (with --dist)
+dist/<board>_<version>.bin     e.g. dist/orion-o6_2026Q3.bin
 ```
 
-Options: `--target DEBUG`, `--version 2026.10.0`, `--jobs N`. On Apple Silicon
+the complete SPI flash image, padded with 0xFF to exactly 8 MiB. The version
+defaults to the CIX BSP release (`bios_version` in
+[manifests/pins.json](manifests/pins.json), currently `2026Q3`) and is also the
+firmware version string shown in setup.
+
+`--extras` additionally writes `dist/extras/<board>_<version>_extras.zip` with
+the unpadded image, the BL33-only OTA image, the signed UEFI capsules (MS-R1,
+Orange Pi), the raw FD and `manifest.json`. Intermediate files and the build
+log stay in `output/<board>/RELEASE/`.
+
+Options: `--target DEBUG`, `--version 2026Q3-2`, `--extras`, `--jobs N`. On Apple Silicon
 the container runs natively (arm64) and takes about two minutes per board.
 
 ### Orange Pi vendor images
@@ -109,8 +111,9 @@ python3 scripts/fetch-blobs.py opi6plus opi6 --from-vendor \
   boards on every push and pull request.
 * **Release** ([.github/workflows/release.yml](.github/workflows/release.yml))
   is started by hand from the *Actions* tab ("Run workflow"). It builds every
-  board (or a chosen subset), attaches one zip per board plus `SHA256SUMS` to a
-  new GitHub release, and tags it with the version you enter.
+  board (or a chosen subset), attaches `<board>_<version>.bin` for each board
+  plus `SHA256SUMS` to a new GitHub release, and tags it with the version you
+  enter (default `2026Q3`; use e.g. `2026Q3-2` for a rebuild).
 
 No secrets or extra inputs are needed.
 
@@ -120,18 +123,17 @@ form; the container then uses the x86_64 toolchain and CIX tools.
 
 ## Flashing
 
-`cix_flash_all.bin` replaces the whole SPI image except the vendor variable
-sync area at the end of the flash and resets the UEFI settings. Use it when
-coming from vendor firmware. `cix_flash_ota.bin` only replaces BL33 and is for
-updates between edk2-cix builds. On MS-R1 and the Orange Pi boards the `.cap`
-files can also be applied as UEFI capsules (e.g. `fwupdtool install-blob` or
-`CapsuleApp.efi`); they are signed with the CIX test certificate the firmware
-trusts.
+`<board>_<version>.bin` is the whole 8 MiB flash. Writing it resets the UEFI
+settings (the firmware re-initialises its variable store on first boot).
 
-* From a UEFI shell: `FlashUpdate.efi -f cix_flash_all.bin` (CIX tool from
+* From a UEFI shell: `FlashUpdate.efi -f orion-o6_2026Q3.bin` (CIX tool from
   `edk2-non-osi/Platform/CIX/Sky1/FlashTool`, also shipped by the vendors).
-* With an SPI programmer: the flash is 1.8 V; write `cix_flash_all.bin` at
-  offset 0.
+* With an SPI programmer: the flash is 1.8 V; write the file at offset 0
+  (e.g. `flashrom -p ch341a_spi -w orion-o6_2026Q3.bin`).
+
+For updates without touching the rest of the flash, `--extras` provides the
+BL33-only `cix_flash_ota.bin` and, on MS-R1 and the Orange Pi boards, signed
+UEFI capsules (`*.cap`, e.g. for `CapsuleApp.efi`).
 
 All images are signed with the default CIX OEM key, like the vendor firmware.
 

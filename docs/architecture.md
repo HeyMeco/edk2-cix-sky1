@@ -33,8 +33,6 @@ against the CIX 2026Q3 shared code unchanged. Local changes (all listed in
 
 * DSC include path for `LinuxAcpiConfig.h` (Radxa used `$(WORKSPACE)/..`)
 * flash layouts copied from `radxa/edk2-non-osi` `4e99786e` into the packages
-* O6: `EC0`/`HWMN` hidden and the EC alert GPIO event removed; the board has no
-  embedded controller behind that interface (Neol00/edk2-cix-unlocked)
 * `RadxaSetupVariableInitDxe` stack overrun fix
 * `pm_config` honours `SOURCE_DATE_EPOCH`
 
@@ -131,6 +129,10 @@ git checkout --detach <pinned-commit>
    with the CIX test certificates from `Platform/CIX/Sky1/Bin`, as CIX
    `GenBiosCap.sh` does. The Radxa firmware has no capsule driver.
 8. `manifest.json` (submodule SHAs, patches, tool versions, hashes, layout).
+9. `dist/<board>_<version>.bin`: `cix_flash_all.bin` padded with 0xFF to the
+   8 MiB flash size; the default version is `bios_version` from
+   `manifests/pins.json`. `--extras` adds a zip with the OTA image, capsules,
+   FD and manifest.
 
 `BUILD_DATE` and the PM configuration timestamp come from `SOURCE_DATE_EPOCH`
 (default: the commit time), so rebuilding a commit on the same host

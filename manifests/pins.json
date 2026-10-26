@@ -1,4 +1,5 @@
 {
+  "bios_version": "2026Q3",
   "superproject": {
     "repo": "https://github.com/cixtech/bios",
     "branch": "cix_p1_dev",

@@ -47,9 +47,7 @@ Device(EC0){
   Mutex(ECMX,0)
   Method(_STA)
   {
-    // The Orion O6 has no embedded controller behind this interface; every
-    // EC0 access spins in AE_AML_LOOP_TIMEOUT against absent hardware.
-    Return(0x00)
+    Return(0x03)
   }
   OperationRegion (I2CA, SystemMemory, FixedPcdGet32 (PcdEcI2cBaseAddress), 0x100)
   Field (I2CA, DWordAcc, NoLock, Preserve)

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-2-Clause-Patent
 #
-# Reusable job: build one board in the build container and upload the
-# release archive as an artifact.
+# Reusable job: build one board in the build container and upload
+# dist/<board>_<version>.bin (full SPI image padded to 8 MiB) as an artifact.
 
 name: Build board
 
@@ -55,12 +55,12 @@ jobs:
       - name: Build
         run: |
           ./build.sh "${{ inputs.board }}" --target "${{ inputs.target }}" \
-            --version "${{ inputs.version }}" --dist
+            --version "${{ inputs.version }}"
 
       - uses: actions/upload-artifact@v7
         with:
           name: firmware-${{ inputs.board }}
-          path: dist/*.zip
+          path: dist/*.bin
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v7

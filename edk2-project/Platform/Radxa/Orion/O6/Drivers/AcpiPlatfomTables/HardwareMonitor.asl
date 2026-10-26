@@ -12,8 +12,7 @@ Device(HWMN){
 
     Method(_STA)
     {
-      // All HWMN methods route to \_SB.EC0, which is absent on this board.
-      Return(0x00)
+      Return(0x03)
     }
 
     //
