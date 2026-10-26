@@ -9,7 +9,7 @@ checks pass), **boot** (boots an OS on hardware).
 | Radxa Orion O6N | ✓ | ✓ | – | BL1/BL2/TZ/EC/SFH/se_config identical to Radxa release 1.3.1 |
 | Minisforum MS-R1 | ✓ | ✓ | – | rebased onto CIX 2026Q3; layout identical to Minisforum's |
 | Orange Pi 6 Plus | ✓ | ✓ | ✓ | all regions except BL33 identical to vendor 1.4 image |
-| Orange Pi 6 | ✓ | ✓ | – | all regions except BL33 identical to vendor v1.0 image; DSDT board deltas match |
+| Orange Pi 6 | ✓ | ✓ | ✓ | all regions except BL33 identical to vendor v1.0 image; DSDT board deltas match |
 
 The PCIe 64-bit window option was verified on an Orion O6 by its original
 author (Neol00/edk2-cix-unlocked); the other boards share the SoC and the
@@ -27,6 +27,13 @@ after each flash: the store was placed at `0x388000` (Merak) instead of the
 `0x380000` the Orange Pi layout reserves, so formatting it on first boot
 erased the memory/PM configuration, se_config and the BL33 header at
 `0x3F8000`–`0x400000`. The Orange Pi 6 had the same setting.
+
+Earlier Orange Pi 6 builds reset in a loop with a NULL-pointer exception in
+UiApp: the board's platform hooks did not install the RA8900CE I2C protocol
+that `RealTimeClockRuntimeDxe` depends on, so the RTC architectural protocol
+was never produced, no UEFI driver (ConSplitter, consoles) was dispatched,
+and `gST->ConOut` stayed NULL. The vendor image installs it from
+`PlatformDxe`, as Merak does.
 
 Checked on every build (`scripts/build.py`):
 

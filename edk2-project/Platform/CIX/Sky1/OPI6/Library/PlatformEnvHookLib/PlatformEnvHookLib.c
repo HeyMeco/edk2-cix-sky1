@@ -778,7 +778,10 @@ CixFwBootPerfInit (
 //
 // Orange Pi 6: the vendor firmware drops every hook that talks to the
 // embedded controller (device power rails, AC-loss policy, RTC wake, EC
-// defaults) and the I2C RTC protocol hook; the table below follows it.
+// defaults); the table below follows it.  The I2C RTC protocol hook stays:
+// RealTimeClockRuntimeDxe (Ra8900ceRealTimeClockLib) has a depex on the
+// protocol it installs, and without the RTC architectural protocol no UEFI
+// driver (ConSplitter, consoles, ...) is dispatched.
 //
 STATIC PLATFORM_ENV_INIT_TABLE  mPlatformEnvInitTable[] = {
   { NULL,                        NULL,                 InitGpio                        },
@@ -791,6 +794,7 @@ STATIC PLATFORM_ENV_INIT_TABLE  mPlatformEnvInitTable[] = {
   { NULL,                        NULL,                 FarmFunctionControl             },
   { NULL,                        NULL,                 UpdateFastbootSN                },
   { NULL,                        NULL,                 BlueToothEnable                 },
+  { &gEfiI2cMasterProtocolGuid,  InstallRtcProtocol,   NULL                            },
   { NULL,                        NULL,                 CixFwBootPerfInit               },
   // add platform initialization routines on ENV phase BEFORE this line, and they were invoked from top to down.
   { NULL,                        NULL,                 NULL                            }
