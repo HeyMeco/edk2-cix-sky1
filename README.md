@@ -154,11 +154,12 @@ scripts/fetch-blobs.py       vendor binaries
 scripts/imports.py           provenance of the Radxa / Minisforum imports
 scripts/extract/             vendor image tooling (FV parser, pin tables, HII)
 scripts/acpi/                ACPI device-level comparison
-docs/                        architecture, provenance, validation
+docs/                        architecture, provenance, closed firmware, validation
 ```
 
 More detail: [docs/architecture.md](docs/architecture.md),
 [docs/provenance/orangepi.md](docs/provenance/orangepi.md),
+[docs/closed-firmware.md](docs/closed-firmware.md),
 [docs/validation.md](docs/validation.md).
 
 ## Licensing

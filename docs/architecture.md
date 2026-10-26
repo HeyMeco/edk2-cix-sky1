@@ -165,3 +165,6 @@ the signing time. Releases are built on arm64 runners by default.
 All boards: 8 MiB flash, firmware header `0x100000`, `sfh_fw` `0x101000`, BL1
 `0x188000`. `cix_package_tool` stops writing after the last region, which is
 why images (vendor and ours) are shorter than 8 MiB.
+
+What each binary region contains and which ones have open-source
+counterparts: [closed firmware](closed-firmware.md).
