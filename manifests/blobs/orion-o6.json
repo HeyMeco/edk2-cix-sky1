@@ -48,6 +48,19 @@
         "commit": "14cf7bdcfe1d0e8635a16a25d4209b6e28b18fca",
         "path": "Platform/Radxa/Orion/O6/Firmwares/ec_fw.bin"
       }
+    },
+    {
+      "dest": "Certs/trusted_key_no.crt",
+      "size": 1594,
+      "sha256": "2a25ee2b9dfc8d44eacc904dcf8bad07ebc40e73d026e9974c321282d80cd5c1",
+      "license": "CIX pregenerated trusted key certificate (from the vendor edk2-non-osi tree)",
+      "note": "Signed by the CIX root key the board's BL2 trusts; certifies the default CIX OEM key.",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/radxa/edk2-non-osi",
+        "commit": "4e99786e4caaf531bb9b04f097a018917463ae81",
+        "path": "Platform/CIX/Sky1/PackageTool/certs/trusted_key_no.crt"
+      }
     }
   ]
 }

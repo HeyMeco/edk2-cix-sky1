@@ -20,3 +20,4 @@ acpi_parity:
   # OPI6 build instead (docs/provenance/orangepi.md).
   allow: []
 capsule: true                        # CIX signed capsule (.cap) for in-OS / ESRT updates
+trusted_key_cert: pregenerated          # CIX-root-signed cert shipped by the vendor (manifests/blobs)

@@ -71,7 +71,7 @@ def blob_sha(path):
 def local_files(imp):
     base = ROOT / imp["local"]
     return {str(p.relative_to(base)): p for p in sorted(base.rglob("*"))
-            if p.is_file() and p.name not in IGNORED and "Firmwares" not in p.parts}
+            if p.is_file() and p.name not in IGNORED and "Firmwares" not in p.parts and "Certs" not in p.parts}
 
 
 def status(imp):

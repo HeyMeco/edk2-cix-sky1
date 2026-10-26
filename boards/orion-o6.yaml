@@ -11,3 +11,4 @@ flash:
   config_all: edk2-project/Platform/Radxa/Orion/O6/spi_flash_config_all.json
   config_ota: edk2-project/Platform/Radxa/Orion/O6/spi_flash_config_ota.json
 blobs: manifests/blobs/orion-o6.json
+trusted_key_cert: pregenerated          # CIX-root-signed cert shipped by the vendor (manifests/blobs)

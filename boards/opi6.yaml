@@ -27,3 +27,4 @@ acpi_parity:
           \_SB.PCI0, \_SB.PCI1, \_SB.PCI2, \_SB.PCI3, \_SB.PCI4,
           \_SB.PRC0, \_SB.PRC2, \_SB.PRC4]
 capsule: true                        # CIX signed capsule (.cap) for in-OS / ESRT updates
+trusted_key_cert: regenerate            # signed with the OEM key, as in the vendor image

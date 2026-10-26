@@ -36,6 +36,19 @@
         "commit": "c22fb43e6b8385c4b43f51ca1de3111fd2990db1",
         "path": "Platform/CIX/Sky1/PackageTool/Firmwares/se_config.bin"
       }
+    },
+    {
+      "dest": "Certs/trusted_key_no.crt",
+      "size": 1594,
+      "sha256": "6a940e725afbee75543a9c6d9012429b5bcb2692426760e3eb8370bf49c178c8",
+      "license": "CIX pregenerated trusted key certificate (from the vendor edk2-non-osi tree)",
+      "note": "Signed by the CIX root key the board's BL2 trusts; certifies the default CIX OEM key.",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/minisforum-cix-p1-repo/cix_opensource__release__edk2-non-osi",
+        "commit": "c22fb43e6b8385c4b43f51ca1de3111fd2990db1",
+        "path": "Platform/CIX/Sky1/PackageTool/certs/trusted_key_no.crt"
+      }
     }
   ]
 }

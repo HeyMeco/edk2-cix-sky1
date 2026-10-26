@@ -119,9 +119,22 @@ git checkout --detach <pinned-commit>
    `mem_config`/`pm_config`/`trustzone_config` built from source when the
    package has them, board `Firmwares/` overrides, PackageTool binaries for the
    host architecture, keys, board flash layouts.
-5. `cix_regen_trusted_key_cert`, `cert_uefi_create_rsa`, `fiptool create` →
-   `bootloader3.img`; `cix_package_tool` → `cix_flash_all.bin` and
-   `cix_flash_ota.bin`.
+5. Signing: `cert_uefi_create_rsa` and `fiptool create` → `bootloader3.img`;
+   `cix_package_tool` → `cix_flash_all.bin` and `cix_flash_ota.bin`. The
+   **x86_64** CIX tools are used on every host (through `qemu-user` inside the
+   container on arm64): the AArch64 builds in `edk2-non-osi` sign with an
+   RSA-PSS salt length of 0x15E instead of 0x20, which vendor BL2 images
+   reject. The trusted-key certificate follows each vendor (`trusted_key_cert`
+   in `boards/*.yaml`):
+
+   | Board | `trusted_key_no.crt` |
+   |---|---|
+   | O6, O6N, OPI6 Plus | pregenerated, CIX root key `1e0b4d…` (`radxa/edk2-non-osi` `certs/`), as in Radxa's releases and the Plus vendor image |
+   | MS-R1 | pregenerated, root key `898ddc…` (Minisforum `edk2-non-osi` `certs/`), as Minisforum's packaging script uses |
+   | OPI6 | regenerated from the OEM key pair (`cix_regen_trusted_key_cert`), as in the vendor image |
+
+   All of them certify the default CIX OEM key, which signs the UEFI
+   certificates; the build checks that every certificate uses a 32-byte salt.
 6. Layout check: every firmware-header entry is in the layout, fits its region,
    holds the staged file, and no regions overlap.
 7. Capsules (boards with `capsule: true`): `GenerateCapsule` wraps both

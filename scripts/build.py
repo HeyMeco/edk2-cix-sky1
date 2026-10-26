@@ -135,6 +135,30 @@ def make_config(pkg, name, out_name, dest, env):
     return True
 
 
+def cix_tool(tool, *args):
+    """Command line for a CIX PackageTool binary staged in the pr/ directory.
+
+    The AArch64 builds of the CIX certificate tools sign with an RSA-PSS salt
+    length of 0x15E; the x86_64 builds, which CIX and the board vendors use,
+    sign with 0x20, and older vendor BL2 images reject anything else.  So the
+    x86_64 tools are used everywhere, through qemu-user on arm64 hosts.
+    """
+    cmd = [f"./{tool}", *args]
+    if host_arch() != "X86_64":
+        cmd = ["qemu-x86_64", "-L", "/"] + cmd
+    return cmd
+
+
+def check_certificates(cfg, pr):
+    """The FIP certificates must use RSA-PSS with a 32-byte salt."""
+    for crt in ("trusted_key_no.crt", "nt_fw_key.crt", "nt_fw_cert.crt"):
+        text = run(["openssl", "x509", "-inform", "DER", "-in", str(pr / "certs" / crt), "-noout", "-text"],
+                   capture=True)
+        salts = {l.split(":")[1].strip() for l in text.splitlines() if "Salt Length" in l}
+        if salts != {"0x20"}:
+            die(f"{cfg['board']}: {crt} uses PSS salt length {salts}, expected 0x20")
+
+
 def package(cfg, fd, outdir):
     pkg = ROOT / cfg["package"]
     pr = outdir / "pr"
@@ -161,9 +185,10 @@ def package(cfg, fd, outdir):
         if f.is_file() and not f.name.startswith("."):
             shutil.copyfile(f, fw / f.name)
 
-    # 4. tools, keys and flash layouts
+    # 4. tools, keys and flash layouts.  Always the x86_64 tools (see
+    #    cix_tool()); they are what CIX and the board vendors sign with.
     for tool in ("cert_uefi_create_rsa", "cix_package_tool", "fiptool", "cix_regen_trusted_key_cert"):
-        shutil.copyfile(PACKAGE_TOOL / host_arch() / tool, pr / tool)
+        shutil.copyfile(PACKAGE_TOOL / "X86_64" / tool, pr / tool)
         (pr / tool).chmod(0o755)
     for k in (PACKAGE_TOOL / "Keys").glob("*.pem"):
         shutil.copyfile(k, pr / "Keys" / k.name)
@@ -174,21 +199,31 @@ def package(cfg, fd, outdir):
     shutil.copyfile(ROOT / cfg["flash"]["config_ota"], pr / "spi_flash_config_ota.json")
     shutil.copyfile(fd, outdir / "SKY1_BL33_UEFI.fd")
 
-    # 5. sign the FD and wrap it in a FIP (bootloader3.img)
+    # 5. sign the FD and wrap it in a FIP (bootloader3.img).  The trusted key
+    #    certificate is either the pregenerated, CIX-root-signed one the board
+    #    vendor ships (Certs/trusted_key_no.crt, staged by fetch-blobs.py) or,
+    #    for boards whose BL2 accepts it, regenerated from the OEM key pair.
     nt_fw = str(outdir / "SKY1_BL33_UEFI.fd")
-    run(["./cix_regen_trusted_key_cert", "-p", "Keys/oem_publickey.pem", "-s", "Keys/oem_privatekey.pem",
-         "-o", "certs/trusted_key_no.crt"], cwd=pr, capture=True)
-    run(["./cert_uefi_create_rsa", "--key-alg", "rsa", "--key-size", "3072", "--hash-alg", "sha256", "-p",
+    pregenerated = pkg / "Certs" / "trusted_key_no.crt"
+    if cfg.get("trusted_key_cert", "regenerate") == "regenerate":
+        run(cix_tool("cix_regen_trusted_key_cert", "-p", "Keys/oem_publickey.pem", "-s", "Keys/oem_privatekey.pem",
+                     "-o", "certs/trusted_key_no.crt"), cwd=pr, capture=True)
+    else:
+        if not pregenerated.exists():
+            die(f"{cfg['board']}: {pregenerated} missing (run scripts/fetch-blobs.py)")
+        shutil.copyfile(pregenerated, pr / "certs" / "trusted_key_no.crt")
+    run(cix_tool("cert_uefi_create_rsa", "--key-alg", "rsa", "--key-size", "3072", "--hash-alg", "sha256", "-p",
          "--ntfw-nvctr", "223", "--nt-fw-cert", "certs/nt_fw_cert.crt", "--nt-fw-key-cert", "certs/nt_fw_key.crt",
          "--nt-fw-key", "Keys/oem_privatekey.pem", "--non-trusted-world-key", "Keys/oem_privatekey.pem",
-         "--nt-fw", nt_fw], cwd=pr, capture=True)
-    run(["./fiptool", "create", "--trusted-key-cert", "certs/trusted_key_no.crt",
+         "--nt-fw", nt_fw), cwd=pr, capture=True)
+    run(cix_tool("fiptool", "create", "--trusted-key-cert", "certs/trusted_key_no.crt",
          "--nt-fw-key-cert", "certs/nt_fw_key.crt", "--nt-fw-cert", "certs/nt_fw_cert.crt",
-         "--nt-fw", nt_fw, "Firmwares/bootloader3.img"], cwd=pr, capture=True)
+         "--nt-fw", nt_fw, "Firmwares/bootloader3.img"), cwd=pr, capture=True)
+    check_certificates(cfg, pr)
 
     # 6. SPI images
-    run(["./cix_package_tool", "-c", "spi_flash_config_all.json", "-o", "cix_flash_all.bin"], cwd=pr, capture=True)
-    run(["./cix_package_tool", "-c", "spi_flash_config_ota.json", "-O", "cix_flash_ota.bin"], cwd=pr, capture=True)
+    run(cix_tool("cix_package_tool", "-c", "spi_flash_config_all.json", "-o", "cix_flash_all.bin"), cwd=pr, capture=True)
+    run(cix_tool("cix_package_tool", "-c", "spi_flash_config_ota.json", "-O", "cix_flash_ota.bin"), cwd=pr, capture=True)
     for f in ("cix_flash_all.bin", "cix_flash_ota.bin"):
         shutil.copyfile(pr / f, outdir / f)
 

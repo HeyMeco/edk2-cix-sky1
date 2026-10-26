@@ -12,3 +12,4 @@ flash:
   config_ota: edk2-project/Platform/CIX/Sky1/MGP1WSB/spi_flash_config_ota.json
 blobs: manifests/blobs/ms-r1.json
 capsule: true                        # CIX signed capsule (.cap) for in-OS / ESRT updates
+trusted_key_cert: pregenerated          # CIX-root-signed cert shipped by the vendor (manifests/blobs)
