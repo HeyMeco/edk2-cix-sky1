@@ -1,0 +1,23 @@
+{
+  "opi6plus": {
+    "description": "Orange Pi 6 Plus BIOS 1.4 (General)",
+    "file": "OPI6PLUS_BIOS_1.4_General.bin",
+    "size": 6288078,
+    "sha256": "acf957ac8af7c391e0ee6296dd748504dde3d6b36254210ca60c93c2c16c649a",
+    "env": "EDK2CIX_OPI6PLUS_IMAGE"
+  },
+  "opi6": {
+    "description": "Orange Pi 6 BIOS delivery image 2026-10-19 (bios_v1.0.bin inside)",
+    "file": "opi6_bios_image_20261019.img",
+    "size": 104857600,
+    "sha256": "bfbffe87c842bcf81c11c2384b0334eb175994e91dfbea84ec1c7b8f183280a7",
+    "env": "EDK2CIX_OPI6_IMAGE",
+    "container": {
+      "type": "fat",
+      "offset": "0x100000",
+      "path": "bios_flash/bios_v1.0.bin",
+      "size": 6288062,
+      "sha256": "bdc47cf96eacbef4ebfa764175f7dc902d584917959f9b1b05dd59042775de2a"
+    }
+  }
+}

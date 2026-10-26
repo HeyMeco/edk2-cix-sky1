@@ -1,0 +1,1226 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: edk2-cix <edk2-cix@users.noreply.github.com>
+Date: Mon, 26 Oct 2026 08:58:11 +0100
+Subject: [PATCH] Platform/CIX/Sky1: selectable PCIe 64-bit MMIO window for
+ large BARs
+
+Every Sky1 root bridge gets a fixed 16 GB above-4G window, aligned to
+16 GB.  A Resizable BAR must be aligned to its own size, so a 16 GB BAR
+can only sit at the window base and leaves no room for the device's
+other BARs or the bridge window: GPUs with 16 GB of VRAM fail to resize
+and 24 GB cards (32 GB BAR) cannot be placed at all.
+
+Add PcieWindowLib, which grows the x8 root bridge window upward from its
+fixed hardware base to 32, 64 or 128 GB.  The new setup option 'PCIe
+64-bit Window' selects the layout; Auto (default) reads the Resizable
+BAR capability of the device behind each root port and picks the
+smallest layout with 512 MB to spare, never the experimental 128 GB.
+The other root bridges keep their stock windows.
+
+The same window is used by PciHostBridgeLib (MemAbove4G/PMemAbove4G),
+published through new ACPI RAM variables for the PCI0-4 _CRS and the
+PRC0-4 _INI, and written into the device tree ranges, so UEFI, ACPI and
+DT boots agree.
+
+From Neol00/edk2-cix-unlocked V2.5 (tested on the Radxa Orion O6).
+---
+ .../CIX/Sky1/Drivers/AcpiSocDxe/AcpiSocDxe.c  |  16 +
+ .../Sky1/Drivers/AcpiSocDxe/AcpiSocDxe.inf    |   1 +
+ .../Drivers/AcpiSocTables/Dsdt-CdnsPcie.asl   |  57 ++-
+ .../Sky1/Drivers/AcpiSocTables/Dsdt-Pcie.asl  |  46 +-
+ .../SetupManagerDxe/PcieMenu/PcieConfig.hfr   |  12 +
+ .../SetupManagerDxe/PcieMenu/PcieConfig.uni   |   8 +
+ Platform/CIX/Sky1/Include/AcpiRamVariable.h   |  19 +-
+ .../CIX/Sky1/Include/Library/PcieWindowLib.h  |  73 +++
+ Platform/CIX/Sky1/Include/PlatformSetupVar.h  |   5 +
+ .../Sky1/Library/DtbUpdateLibSi/DtbUpdate.h   |   3 +
+ .../Library/DtbUpdateLibSi/DtbUpdateLib.inf   |   1 +
+ .../Library/DtbUpdateLibSi/DtbUpdateLibSi.c   |  62 +++
+ .../Library/PcieWindowLib/PcieWindowLib.c     | 445 ++++++++++++++++++
+ .../Library/PcieWindowLib/PcieWindowLib.inf   |  39 ++
+ Platform/CIX/Sky1/Sky1Common.dsc.inc          |   1 +
+ .../PciHostBridgeLib/PciHostBridgeLib.c       |  27 +-
+ .../PciHostBridgeLib/PciHostBridgeLib.inf     |   2 +
+ 17 files changed, 803 insertions(+), 14 deletions(-)
+ create mode 100644 Platform/CIX/Sky1/Include/Library/PcieWindowLib.h
+ create mode 100644 Platform/CIX/Sky1/Library/PcieWindowLib/PcieWindowLib.c
+ create mode 100644 Platform/CIX/Sky1/Library/PcieWindowLib/PcieWindowLib.inf
+
+diff --git a/Platform/CIX/Sky1/Drivers/AcpiSocDxe/AcpiSocDxe.c b/Platform/CIX/Sky1/Drivers/AcpiSocDxe/AcpiSocDxe.c
+index ba4bf922..3f3ce222 100644
+--- a/Platform/CIX/Sky1/Drivers/AcpiSocDxe/AcpiSocDxe.c
++++ b/Platform/CIX/Sky1/Drivers/AcpiSocDxe/AcpiSocDxe.c
+@@ -13,6 +13,7 @@
+ #include <Library/PL011UartClockLib.h>
+ #include <Library/PL011UartLib.h>
+ #include <Library/HwHarvestLib.h>
++#include <Library/PcieWindowLib.h>
+ #include <Protocol/PlatformConfigParamsManageProtocol.h>
+ #include <IndustryStandard/Acpi62.h>
+ 
+@@ -779,6 +780,8 @@ InitializeSystemAcpiRam (
+ {
+   EFI_STATUS                         Status;
+   UINT8                              *pSystemGpnvArea = NULL;
++  PCIE_MEM64_WINDOW                  Mem64Windows[PCIE_MAX_ROOTBRIDGE];
++  UINTN                              Rb;
+   UINT32                             NpuSupportStatus = 0;
+   UINT32                             SupportInfoValue = 3;
+   CONFIG_PARAMS_DATA_BLOCK           *ConfigData      = NULL;
+@@ -851,6 +854,19 @@ InitializeSystemAcpiRam (
+     pSystemGpnvArea[ARV_PCIE_RP_02_ASPM_OFFSET]         = ConfigData->Pcie.PcieAspm[2];
+     pSystemGpnvArea[ARV_PCIE_RP_03_ASPM_OFFSET]         = ConfigData->Pcie.PcieAspm[3];
+     pSystemGpnvArea[ARV_PCIE_RP_04_ASPM_OFFSET]         = ConfigData->Pcie.PcieAspm[4];
++
++    //
++    // Publish the 64-bit MMIO windows the firmware programmed, so the _CRS
++    // the OS reads matches them.  Linux resizes BARs against these windows.
++    //
++    PcieGetMem64Windows (Mem64Windows);
++    for (Rb = 0; Rb < PCIE_MAX_ROOTBRIDGE; Rb++) {
++      pSystemGpnvArea[ARV_PCIE_RP_00_MEM64_BASE_OFFSET + Rb] =
++        (UINT8)RShiftU64 (Mem64Windows[Rb].Base, ARV_PCIE_MEM64_UNIT_SHIFT);
++      pSystemGpnvArea[ARV_PCIE_RP_00_MEM64_SIZE_OFFSET + Rb] =
++        (UINT8)RShiftU64 (Mem64Windows[Rb].Size, ARV_PCIE_MEM64_UNIT_SHIFT);
++    }
++
+     pSystemGpnvArea[ARV_USB3_TYPEC_DRD_ENABLE_OFFSET]   = ConfigData->UsbCDrd[0].Enable;
+     pSystemGpnvArea[ARV_USB3_TYPEC_HOST0_ENABLE_OFFSET] = ConfigData->UsbC[0].Enable;
+     pSystemGpnvArea[ARV_USB3_TYPEC_HOST1_ENABLE_OFFSET] = ConfigData->UsbC[1].Enable;
+diff --git a/Platform/CIX/Sky1/Drivers/AcpiSocDxe/AcpiSocDxe.inf b/Platform/CIX/Sky1/Drivers/AcpiSocDxe/AcpiSocDxe.inf
+index 5318b4ee..6616c1ae 100644
+--- a/Platform/CIX/Sky1/Drivers/AcpiSocDxe/AcpiSocDxe.inf
++++ b/Platform/CIX/Sky1/Drivers/AcpiSocDxe/AcpiSocDxe.inf
+@@ -50,6 +50,7 @@
+   PL011UartClockLib
+   PL011UartLib
+   HwHarvestLib
++  PcieWindowLib
+ 
+ [Protocols]
+   gEfiAcpiTableProtocolGuid
+diff --git a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-CdnsPcie.asl b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-CdnsPcie.asl
+index 8fef1ce0..5fd89e32 100644
+--- a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-CdnsPcie.asl
++++ b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-CdnsPcie.asl
+@@ -26,6 +26,28 @@ External (PCIE_X1_1_VCC_REGULATOR, DeviceObj)
+ External (PCIE_X1_0_VCC_REGULATOR, DeviceObj)
+ #endif
+ 
++
++//
++// Replace the stock 16 GB 64-bit window (descriptor Desc in buffer Buf) with
++// the window the firmware programmed for root bridge Index (PcieWindowLib,
++// published through the ACPI RAM variables).  Linux resizes BARs against _CRS.
++//
++#ifndef PCIE_MEM64_UPDATE
++#define PCIE_MEM64_UPDATE(Buf, Desc, Index) \
++    CreateQWordField (Buf, Desc._MIN, M64B) \
++    CreateQWordField (Buf, Desc._MAX, M64E) \
++    CreateQWordField (Buf, Desc._LEN, M64L) \
++    Local0 = \_SB.GETV (ARV_PCIE_RP_00_MEM64_BASE_OFFSET + Index) \
++    Local1 = \_SB.GETV (ARV_PCIE_RP_00_MEM64_SIZE_OFFSET + Index) \
++    If (Local1 != Zero) { \
++      ShiftLeft (Local0, ARV_PCIE_MEM64_UNIT_SHIFT, Local0) \
++      ShiftLeft (Local1, ARV_PCIE_MEM64_UNIT_SHIFT, Local1) \
++      M64B = Local0 \
++      M64L = Local1 \
++      M64E = Local0 + Local1 - One \
++    }
++#endif
++
+ Device (PRC0) { /* PCIE0 X8 */
+   Name (_HID, "CIXH2020")
+   Name (_UID, 0x0)
+@@ -104,6 +126,9 @@ Device (PRC0) { /* PCIE0 X8 */
+     // init pcie aspm
+     Local0 = GETV(ARV_PCIE_RP_00_ASPM_OFFSET)
+     ASPM= Local0
++
++    // 64-bit window programmed by the firmware (PcieWindowLib)
++    PCIE_MEM64_UPDATE (\_SB.PRC0._CRS, \_SB.PRC0.PM64, 0)
+   }
+ 
+   // PCIe is only available if PCIe link is up
+@@ -170,7 +195,9 @@ Device (PRC0) { /* PCIE0 X8 */
+       0x1800000000,             // Min Base Address
+       0x1BFFFFFFFF,             // Max Base Address
+       0x00000000,               // Translate
+-      0x400000000               // Length 16G
++      0x400000000,              // Length 16G, updated in _INI
++      ,,
++      PM64
+     )
+     PinGroupFunction(Exclusive, 0x0, "\\_SB.MUX1", 0, "pinctrl_pcie_x8_rc", ResourceConsumer,)
+ #if PCIE_X8_PERST
+@@ -399,6 +426,9 @@ Device (PRC1) { /* PCIE2 X4 */
+     // init pcie aspm
+     Local0 = GETV(ARV_PCIE_RP_01_ASPM_OFFSET)
+     ASPM= Local0
++
++    // 64-bit window programmed by the firmware (PcieWindowLib)
++    PCIE_MEM64_UPDATE (\_SB.PRC1._CRS, \_SB.PRC1.PM64, 1)
+   }
+ 
+   // PCIe is only available if PCIe link is up
+@@ -464,7 +494,9 @@ Device (PRC1) { /* PCIE2 X4 */
+       0x1400000000,             // Min Base Address
+       0x17FFFFFFFF,             // Max Base Address
+       0x00000000,               // Translate
+-      0x400000000               // Length 16G
++      0x400000000,              // Length 16G, updated in _INI
++      ,,
++      PM64
+     )
+     PinGroupFunction(Exclusive, 0x0, "\\_SB.MUX1", 0, "pinctrl_pcie_x4_rc", ResourceConsumer,)
+ #if PCIE_X4_PERST
+@@ -676,6 +708,9 @@ Device (PRC2) { /* PCIE3 X2 */
+     // init pcie aspm
+     Local0 = GETV(ARV_PCIE_RP_02_ASPM_OFFSET)
+     ASPM= Local0
++
++    // 64-bit window programmed by the firmware (PcieWindowLib)
++    PCIE_MEM64_UPDATE (\_SB.PRC2._CRS, \_SB.PRC2.PM64, 2)
+   }
+ 
+   // PCIe is only available if PCIe link is up
+@@ -741,7 +776,9 @@ Device (PRC2) { /* PCIE3 X2 */
+       0x1000000000,             // Min Base Address
+       0x13FFFFFFFF,             // Max Base Address
+       0x00000000,               // Translate
+-      0x400000000               // Length 16G
++      0x400000000,              // Length 16G, updated in _INI
++      ,,
++      PM64
+     )
+     PinGroupFunction(Exclusive, 0x0, "\\_SB.MUX1", 0, "pinctrl_pcie_x2_rc", ResourceConsumer,)
+ #if PCIE_X2_PERST
+@@ -879,6 +916,9 @@ Device (PRC3) { /* PCIE4 X1_1 */
+     // init pcie aspm
+     Local0 = GETV(ARV_PCIE_RP_03_ASPM_OFFSET)
+     ASPM= Local0
++
++    // 64-bit window programmed by the firmware (PcieWindowLib)
++    PCIE_MEM64_UPDATE (\_SB.PRC3._CRS, \_SB.PRC3.PM64, 3)
+   }
+ 
+   // PCIe is only available if PCIe link is up
+@@ -944,7 +984,9 @@ Device (PRC3) { /* PCIE4 X1_1 */
+       0xC00000000,             // Min Base Address
+       0xFFFFFFFFF,             // Max Base Address
+       0x00000000,               // Translate
+-      0x400000000               // Length 16G
++      0x400000000,              // Length 16G, updated in _INI
++      ,,
++      PM64
+     )
+     PinGroupFunction(Exclusive, 0x0, "\\_SB.MUX1", 0, "pinctrl_pcie_x1_1_rc", ResourceConsumer,)
+ #if PCIE_X1_1_PERST
+@@ -1091,6 +1133,9 @@ Device (PRC4) { /* PCIE3 X1_0 */
+     // init pcie aspm
+     Local0 = GETV(ARV_PCIE_RP_04_ASPM_OFFSET)
+     ASPM= Local0
++
++    // 64-bit window programmed by the firmware (PcieWindowLib)
++    PCIE_MEM64_UPDATE (\_SB.PRC4._CRS, \_SB.PRC4.PM64, 4)
+   }
+ 
+   // PCIe is only available if PCIe link is up
+@@ -1156,7 +1201,9 @@ Device (PRC4) { /* PCIE3 X1_0 */
+       0x800000000,             // Min Base Address
+       0xBFFFFFFFF,             // Max Base Address
+       0x00000000,               // Translate
+-      0x400000000               // Length 16G
++      0x400000000,              // Length 16G, updated in _INI
++      ,,
++      PM64
+     )
+     PinGroupFunction(Exclusive, 0x0, "\\_SB.MUX1", 0, "pinctrl_pcie_x1_0_rc", ResourceConsumer,)
+ #if PCIE_X1_0_PERST
+diff --git a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Pcie.asl b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Pcie.asl
+index 566582f6..0dbc9c42 100644
+--- a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Pcie.asl
++++ b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Pcie.asl
+@@ -9,6 +9,27 @@
+ /*
+   See ACPI 6.1 Spec, 6.2.11, PCI Firmware Spec 3.0, 4.5
+ */
++//
++// Replace the stock 16 GB 64-bit window (descriptor Desc in buffer Buf) with
++// the window the firmware programmed for root bridge Index (PcieWindowLib,
++// published through the ACPI RAM variables).  Linux resizes BARs against _CRS.
++//
++#ifndef PCIE_MEM64_UPDATE
++#define PCIE_MEM64_UPDATE(Buf, Desc, Index) \
++    CreateQWordField (Buf, Desc._MIN, M64B) \
++    CreateQWordField (Buf, Desc._MAX, M64E) \
++    CreateQWordField (Buf, Desc._LEN, M64L) \
++    Local0 = \_SB.GETV (ARV_PCIE_RP_00_MEM64_BASE_OFFSET + Index) \
++    Local1 = \_SB.GETV (ARV_PCIE_RP_00_MEM64_SIZE_OFFSET + Index) \
++    If (Local1 != Zero) { \
++      ShiftLeft (Local0, ARV_PCIE_MEM64_UNIT_SHIFT, Local0) \
++      ShiftLeft (Local1, ARV_PCIE_MEM64_UNIT_SHIFT, Local1) \
++      M64B = Local0 \
++      M64L = Local1 \
++      M64E = Local0 + Local1 - One \
++    }
++#endif
++
+ #define PCI_OSC_SUPPORT() \
+   Name(SUPP, Zero) /* PCI _OSC Support Field value */ \
+   Name(CTRL, Zero) /* PCI _OSC Control Field value */ \
+@@ -104,9 +125,12 @@ Device (PCI0)
+         0x1800000000,             // Min Base Address
+         0x1BFFFFFFFF,             // Max Base Address
+         0x00000000,               // Translate
+-        0x400000000               // Length 16G
++        0x400000000,              // Length 16G, updated below
++        ,,
++        PM64
+       )
+     })                            // Name(RBUF)
++    PCIE_MEM64_UPDATE (RBUF, PM64, 0)
+     Return (RBUF)
+   }                               // Method(_CRS), this method return RBUF!
+ 
+@@ -180,9 +204,12 @@ Device (PCI1)
+         0x1400000000,             // Min Base Address
+         0x17FFFFFFFF,             // Max Base Address
+         0x00000000,               // Translate
+-        0x400000000               // Length 16G
++        0x400000000,              // Length 16G, updated below
++        ,,
++        PM64
+       )
+     })                            // Name(RBUF)
++    PCIE_MEM64_UPDATE (RBUF, PM64, 1)
+     Return (RBUF)
+   }                               // Method(_CRS), this method return RBUF!
+   // Declare the PCI Routing Table.
+@@ -257,9 +284,12 @@ Device (PCI2)
+         0x1000000000,             // Min Base Address
+         0x13FFFFFFFF,             // Max Base Address
+         0x00000000,               // Translate
+-        0x400000000               // Length 16G
++        0x400000000,              // Length 16G, updated below
++        ,,
++        PM64
+       )
+     })                            // Name(RBUF)
++    PCIE_MEM64_UPDATE (RBUF, PM64, 2)
+     Return (RBUF)
+   }                               // Method(_CRS), this method return RBUF!
+ 
+@@ -335,9 +365,12 @@ Device (PCI3)
+         0x0C00000000,             // Min Base Address
+         0x0FFFFFFFFF,             // Max Base Address
+         0x00000000,               // Translate
+-        0x400000000               // Length 16G
++        0x400000000,              // Length 16G, updated below
++        ,,
++        PM64
+       )
+     })                            // Name(RBUF)
++    PCIE_MEM64_UPDATE (RBUF, PM64, 3)
+     Return (RBUF)
+   }                               // Method(_CRS), this method return RBUF!
+ 
+@@ -412,9 +445,12 @@ Device (PCI4)
+         0x0800000000,             // Min Base Address
+         0x0BFFFFFFFF,             // Max Base Address
+         0x00000000,               // Translate
+-        0x400000000               // Length 16G
++        0x400000000,              // Length 16G, updated below
++        ,,
++        PM64
+       )
+     })                            // Name(RBUF)
++    PCIE_MEM64_UPDATE (RBUF, PM64, 4)
+     Return (RBUF)
+   }                               // Method(_CRS), this method return RBUF!
+ 
+diff --git a/Platform/CIX/Sky1/Drivers/SetupManagerDxe/PcieMenu/PcieConfig.hfr b/Platform/CIX/Sky1/Drivers/SetupManagerDxe/PcieMenu/PcieConfig.hfr
+index 277eaf2f..b53e7732 100644
+--- a/Platform/CIX/Sky1/Drivers/SetupManagerDxe/PcieMenu/PcieConfig.hfr
++++ b/Platform/CIX/Sky1/Drivers/SetupManagerDxe/PcieMenu/PcieConfig.hfr
+@@ -9,6 +9,18 @@
+         title  = STRING_TOKEN(STR_PCIE_FORM_SET_TITLE);
+         subtitle text = STRING_TOKEN(STR_EMPTY_STRING);
+ 
++        oneof varid     = PlatformSetupVar.PcieBarWindow,
++            prompt      = STRING_TOKEN(STR_PCIE_BAR_WINDOW_PROMPT),
++            help        = STRING_TOKEN(STR_PCIE_BAR_WINDOW_HELP),
++            option text = STRING_TOKEN(STR_PCIE_BAR_WINDOW_AUTO),  value = 0, flags = DEFAULT | RESET_REQUIRED;
++            option text = STRING_TOKEN(STR_PCIE_BAR_WINDOW_16G),   value = 1, flags = RESET_REQUIRED;
++            option text = STRING_TOKEN(STR_PCIE_BAR_WINDOW_32G),   value = 2, flags = RESET_REQUIRED;
++            option text = STRING_TOKEN(STR_PCIE_BAR_WINDOW_64G),   value = 3, flags = RESET_REQUIRED;
++            option text = STRING_TOKEN(STR_PCIE_BAR_WINDOW_128G),  value = 4, flags = RESET_REQUIRED;
++        endoneof;
++
++        subtitle text = STRING_TOKEN(STR_EMPTY_STRING);
++
+         goto PCIE_ROOT_PORT0_CONFIG_FORM_ID,
+            prompt = STRING_TOKEN(STR_PCIERP0_OPTIONS_FORM_TITLE),
+            help = STRING_TOKEN(STR_EMPTY_STRING);
+diff --git a/Platform/CIX/Sky1/Drivers/SetupManagerDxe/PcieMenu/PcieConfig.uni b/Platform/CIX/Sky1/Drivers/SetupManagerDxe/PcieMenu/PcieConfig.uni
+index 6c72d229..b72cd946 100644
+--- a/Platform/CIX/Sky1/Drivers/SetupManagerDxe/PcieMenu/PcieConfig.uni
++++ b/Platform/CIX/Sky1/Drivers/SetupManagerDxe/PcieMenu/PcieConfig.uni
+@@ -7,6 +7,14 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
+ 
+ #langdef en-US  "English"
+ 
++#string STR_PCIE_BAR_WINDOW_PROMPT  #language en-US "PCIe 64-bit Window"
++#string STR_PCIE_BAR_WINDOW_HELP    #language en-US "Size of the 64-bit MMIO window of the x8 slot. Auto picks the smallest layout that fits the Resizable BAR of the installed card. 32G suits 16 GB GPUs, 64G suits 24 GB GPUs; 128G is experimental. Requires a reboot."
++#string STR_PCIE_BAR_WINDOW_AUTO    #language en-US "Auto"
++#string STR_PCIE_BAR_WINDOW_16G     #language en-US "16G (stock)"
++#string STR_PCIE_BAR_WINDOW_32G     #language en-US "32G"
++#string STR_PCIE_BAR_WINDOW_64G     #language en-US "64G"
++#string STR_PCIE_BAR_WINDOW_128G    #language en-US "128G (experimental)"
++
+ /*
+ * PCIE settings.
+ */
+diff --git a/Platform/CIX/Sky1/Include/AcpiRamVariable.h b/Platform/CIX/Sky1/Include/AcpiRamVariable.h
+index a72d49e2..6a707b81 100644
+--- a/Platform/CIX/Sky1/Include/AcpiRamVariable.h
++++ b/Platform/CIX/Sky1/Include/AcpiRamVariable.h
+@@ -88,7 +88,24 @@
+ #define ARV_PCIE_RP_04_ASPM_OFFSET          0x4C
+ 
+ //
+-#define ARV_VARIABLE_TABLE_TOTAL_SIZE  0x4D
++// PCIe 64-bit MMIO window programmed by the firmware (PcieWindowLib), so the
++// _CRS returned to the OS matches what UEFI handed out.  Base and size are in
++// 4 GB units, one byte each.
++//
++#define ARV_PCIE_RP_00_MEM64_BASE_OFFSET    0x4D
++#define ARV_PCIE_RP_00_MEM64_SIZE_OFFSET    0x52
++#define ARV_PCIE_RP_01_MEM64_BASE_OFFSET    0x4E
++#define ARV_PCIE_RP_01_MEM64_SIZE_OFFSET    0x53
++#define ARV_PCIE_RP_02_MEM64_BASE_OFFSET    0x4F
++#define ARV_PCIE_RP_02_MEM64_SIZE_OFFSET    0x54
++#define ARV_PCIE_RP_03_MEM64_BASE_OFFSET    0x50
++#define ARV_PCIE_RP_03_MEM64_SIZE_OFFSET    0x55
++#define ARV_PCIE_RP_04_MEM64_BASE_OFFSET    0x51
++#define ARV_PCIE_RP_04_MEM64_SIZE_OFFSET    0x56
++#define ARV_PCIE_MEM64_UNIT_SHIFT           32
++
++//
++#define ARV_VARIABLE_TABLE_TOTAL_SIZE  0x57
+ 
+ #define ARV_I2C_FREQ_UNIT_HZ   10000
+ 
+diff --git a/Platform/CIX/Sky1/Include/Library/PcieWindowLib.h b/Platform/CIX/Sky1/Include/Library/PcieWindowLib.h
+new file mode 100644
+index 00000000..2c5cfdca
+--- /dev/null
++++ b/Platform/CIX/Sky1/Include/Library/PcieWindowLib.h
+@@ -0,0 +1,73 @@
++/** @file PcieWindowLib.h
++
++  Runtime-selectable sizing of the PCIe 64-bit (above-4G) MMIO apertures.
++
++  The stock Sky1 layout gives every root bridge exactly 16 GB, 16 GB aligned.
++  That is too tight for a GPU whose Resizable BAR wants the full 16 GB: the BAR
++  can only land on the window's own base address, leaving nothing for the
++  device's remaining BARs or for the bridge window itself, so the resize fails.
++  This library picks an alternative layout so that such a device fits.
++
++  Copyright (c) 2025, Neol00 (edk2-cix-unlocked).
++  Ported to CIX 2026Q3 for edk2-cix.
++
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++
++**/
++
++#ifndef _PCIE_WINDOW_LIB_H_
++#define _PCIE_WINDOW_LIB_H_
++
++#include <Uefi.h>
++#include <Library/PlatformPcieLib.h>
++
++//
++// Values of PLATFORM_SETUP_DATA.PcieBarWindow, and of the
++// ARV_PCIE_MEM64_MODE_OFFSET byte handed to ACPI.
++//
++#define PCIE_WINDOW_MODE_AUTO   0
++#define PCIE_WINDOW_MODE_STOCK  1
++#define PCIE_WINDOW_MODE_LARGE  2
++#define PCIE_WINDOW_MODE_HUGE   3
++#define PCIE_WINDOW_MODE_MAX    4
++#define PCIE_WINDOW_MODE_COUNT  5
++
++//
++// Every base and size this library produces is a whole multiple of 4 GB, which
++// is what lets the layout be handed to ACPI as one byte per value.
++//
++#define PCIE_WINDOW_UNIT  SIZE_4GB
++
++//
++// A window must keep at least this much room beyond the largest BAR it has to
++// hold, for the device's other BARs and for the root port's bridge window.
++//
++#define PCIE_WINDOW_HEADROOM  SIZE_512MB
++
++typedef struct {
++  UINT64    Base;
++  UINT64    Size;
++} PCIE_MEM64_WINDOW;
++
++/**
++  Return the 64-bit MMIO window for every root bridge.
++
++  The result is derived from the BIOS setup selection and, in Auto mode, from
++  the Resizable BAR capability advertised by the device behind each root port.
++  It is deterministic: every caller in the same boot gets the same answer, which
++  is what keeps the UEFI host bridge and the ACPI _CRS in agreement without
++  needing a protocol between them.
++
++  @param[out]  Windows  Receives PCIE_MAX_ROOTBRIDGE window descriptors, indexed
++                        by root bridge number (0 is the x8 slot).
++
++  @return  The mode that was actually applied, never PCIE_WINDOW_MODE_AUTO.
++
++**/
++UINT8
++EFIAPI
++PcieGetMem64Windows (
++  OUT PCIE_MEM64_WINDOW  *Windows
++  );
++
++#endif
+diff --git a/Platform/CIX/Sky1/Include/PlatformSetupVar.h b/Platform/CIX/Sky1/Include/PlatformSetupVar.h
+index 862786b8..28b10f19 100644
+--- a/Platform/CIX/Sky1/Include/PlatformSetupVar.h
++++ b/Platform/CIX/Sky1/Include/PlatformSetupVar.h
+@@ -135,6 +135,11 @@ typedef struct {
+   UINT8     SPEEnable;
+   UINT8     FastBootHotKeyEnable;
+   UINT8     ForceToRecovery;
++  //
++  // PCIe 64-bit MMIO window layout, see PCIE_WINDOW_MODE_* in PcieWindowLib.h.
++  // Keep last: variables written by older builds stop before it.
++  //
++  UINT8     PcieBarWindow;
+ } PLATFORM_SETUP_DATA;
+ 
+ typedef struct {
+diff --git a/Platform/CIX/Sky1/Library/DtbUpdateLibSi/DtbUpdate.h b/Platform/CIX/Sky1/Library/DtbUpdateLibSi/DtbUpdate.h
+index e11664b7..24eb7897 100644
+--- a/Platform/CIX/Sky1/Library/DtbUpdateLibSi/DtbUpdate.h
++++ b/Platform/CIX/Sky1/Library/DtbUpdateLibSi/DtbUpdate.h
+@@ -30,6 +30,9 @@
+ #define DT_NODE_SMMU_PCIEHUB  "/iommu@0b010000"
+ #define DT_NODE_PCIEX8_RC     "/soc@0/pcie@0a010000"
+ #define DT_NODE_PCIEX4_RC     "/soc@0/pcie@0a070000"
++#define DT_NODE_PCIEX2_RC     "/soc@0/pcie@0a0c0000"
++#define DT_NODE_PCIEX1_1_RC   "/soc@0/pcie@0a0e0000"
++#define DT_NODE_PCIEX1_0_RC   "/soc@0/pcie@0a0d0000"
+ #define DT_NODE_ITS           "/soc@0/interrupt-controller@0e001000/its@0e050000"
+ // s5_gpio0
+ #define DT_NODE_S5_GPIO0  "/soc@0/gpio-controller@16004000"
+diff --git a/Platform/CIX/Sky1/Library/DtbUpdateLibSi/DtbUpdateLib.inf b/Platform/CIX/Sky1/Library/DtbUpdateLibSi/DtbUpdateLib.inf
+index 63d40cb6..855d696d 100644
+--- a/Platform/CIX/Sky1/Library/DtbUpdateLibSi/DtbUpdateLib.inf
++++ b/Platform/CIX/Sky1/Library/DtbUpdateLibSi/DtbUpdateLib.inf
+@@ -33,5 +33,6 @@
+   MemoryAllocationLib
+   HwHarvestLib
+   DtbCommonLib
++  PcieWindowLib
+ 
+ 
+diff --git a/Platform/CIX/Sky1/Library/DtbUpdateLibSi/DtbUpdateLibSi.c b/Platform/CIX/Sky1/Library/DtbUpdateLibSi/DtbUpdateLibSi.c
+index 4765b8c5..0b0bab6f 100644
+--- a/Platform/CIX/Sky1/Library/DtbUpdateLibSi/DtbUpdateLibSi.c
++++ b/Platform/CIX/Sky1/Library/DtbUpdateLibSi/DtbUpdateLibSi.c
+@@ -8,6 +8,7 @@
+ #include <fdt.h>
+ #include <Library/HwHarvestLib.h>
+ #include <Library/DtbCommonLib.h>
++#include <Library/PcieWindowLib.h>
+ #include <Protocol/PlatformConfigParamsManageProtocol.h>
+ #include <Protocol/ConfigParamsManageProtocol.h>
+ // #ifdef DEBUG
+@@ -327,6 +328,65 @@ NpuCoreStatus NpuStatus[] = {
+   {0, 3}
+ };
+ 
++/**
++  Rewrite the 64-bit memory entry of every PCIe root complex "ranges" so that
++  device-tree boots see the same windows PcieWindowLib gave the UEFI host
++  bridge.  Config and 32-bit entries are left untouched.
++**/
++STATIC
++VOID
++UpdatePcieMem64Ranges (
++  IN VOID  *fdt
++  )
++{
++  STATIC CONST CHAR8  *NodePaths[PCIE_MAX_ROOTBRIDGE] = {
++    DT_NODE_PCIEX8_RC,
++    DT_NODE_PCIEX4_RC,
++    DT_NODE_PCIEX2_RC,
++    DT_NODE_PCIEX1_1_RC,
++    DT_NODE_PCIEX1_0_RC
++  };
++  PCIE_MEM64_WINDOW  Windows[PCIE_MAX_ROOTBRIDGE];
++  UINTN              Index;
++  UINTN              Entry;
++  INT32              Node;
++  INT32              Length;
++  UINT32             *Ranges;
++  UINT32             *Cells;
++
++  PcieGetMem64Windows (Windows);
++
++  for (Index = 0; Index < PCIE_MAX_ROOTBRIDGE; Index++) {
++    Node = fdt_path_offset (fdt, NodePaths[Index]);
++    if (Node < 0) {
++      continue;
++    }
++
++    Ranges = (UINT32 *)fdt_getprop (fdt, Node, "ranges", &Length);
++    if ((Ranges == NULL) || (Length <= 0) || ((Length % (7 * sizeof (UINT32))) != 0)) {
++      continue;
++    }
++
++    for (Entry = 0; Entry < (UINTN)Length / (7 * sizeof (UINT32)); Entry++) {
++      Cells = &Ranges[Entry * 7];
++      //
++      // Bits 24..25 of the flags cell hold the space code; 3 is 64-bit memory.
++      //
++      if (((fdt32_to_cpu (Cells[0]) >> 24) & 0x3) != 0x3) {
++        continue;
++      }
++
++      Cells[1] = cpu_to_fdt32 ((UINT32)RShiftU64 (Windows[Index].Base, 32));
++      Cells[2] = cpu_to_fdt32 ((UINT32)Windows[Index].Base);
++      Cells[3] = Cells[1];
++      Cells[4] = Cells[2];
++      Cells[5] = cpu_to_fdt32 ((UINT32)RShiftU64 (Windows[Index].Size, 32));
++      Cells[6] = cpu_to_fdt32 ((UINT32)Windows[Index].Size);
++      break;
++    }
++  }
++}
++
+ EFI_STATUS
+ UpdateDtbStatus (
+   IN  VOID  *fdt
+@@ -342,6 +402,8 @@ UpdateDtbStatus (
+     DisableDtbNode (fdt, DT_NODE_PCIEX8_RC);
+   }
+ 
++  UpdatePcieMem64Ranges (fdt);
++
+   // NPU
+   NpuHarvestStatus = (IsIpHarvested (NpuCore0)<<1)|IsIpHarvested (NpuCore1_2);
+   for(UINT32 i = 0; i < 4; i++) {
+diff --git a/Platform/CIX/Sky1/Library/PcieWindowLib/PcieWindowLib.c b/Platform/CIX/Sky1/Library/PcieWindowLib/PcieWindowLib.c
+new file mode 100644
+index 00000000..d378dd48
+--- /dev/null
++++ b/Platform/CIX/Sky1/Library/PcieWindowLib/PcieWindowLib.c
+@@ -0,0 +1,445 @@
++/** @file PcieWindowLib.c
++
++  Runtime-selectable sizing of the PCIe 64-bit (above-4G) MMIO apertures.
++
++  Copyright (c) 2025, Neol00 (edk2-cix-unlocked).
++  Ported to CIX 2026Q3 for edk2-cix.
++
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++
++**/
++
++#include <Uefi.h>
++#include <Library/BaseLib.h>
++#include <Library/BaseMemoryLib.h>
++#include <Library/DebugLib.h>
++#include <Library/PciSegmentLib.h>
++#include <Library/UefiBootServicesTableLib.h>
++#include <Library/UefiRuntimeServicesTableLib.h>
++#include <Library/PcieWindowLib.h>
++#include <Library/ConfigParamsDataBlockLib.h>
++#include <Protocol/ConfigParamsManageProtocol.h>
++#include <IndustryStandard/Pci.h>
++#include <PlatformSetupVar.h>
++
++//
++// The five fixed layouts.  Indexed by root bridge number; bridge 0 is the x8
++// slot, which is the one a discrete GPU goes in.
++//
++// Every layout keeps each root bridge at its stock base address and changes
++// only the size of bridge 0's window.  This is not a style choice: on this SoC
++// the decode base of a root complex is fixed in hardware.  Relocating bridge 0
++// to 0x10_00000000 (bridge 2's stock base) was tried and fails completely --
++// the card behind the x8 slot never comes up, and the resulting allocation
++// failure takes the integrated graphics down with it.  Growing bridge 0's
++// window upward past the top of the stock aperture does work, and is measured
++// good to at least 0x27_FFFFFFFF.
++//
++// Nothing else claims 0x1C_00000000 upward; DRAM-high does not start until
++// 0x80_00000000, so the growth room is real and the other four ports are never
++// disturbed.
++//
++STATIC CONST PCIE_MEM64_WINDOW  mLayouts[PCIE_WINDOW_MODE_COUNT][PCIE_MAX_ROOTBRIDGE] = {
++  //
++  // PCIE_WINDOW_MODE_AUTO: never used as a layout, resolved before lookup.
++  //
++  { { 0, 0 } },
++
++  //
++  // PCIE_WINDOW_MODE_STOCK: the original CIX layout, 16 GB each.  Verified
++  // working, but a 16 GB BAR exactly fills bridge 0's window and so cannot be
++  // placed.
++  //
++  {
++    { 0x1800000000ULL, 0x400000000ULL },  // RB0 x8, ends at 0x1B_FFFFFFFF
++    { 0x1400000000ULL, 0x400000000ULL },  // RB1 x4
++    { 0x1000000000ULL, 0x400000000ULL },  // RB2 x2
++    { 0x0C00000000ULL, 0x400000000ULL },  // RB3 x1
++    { 0x0800000000ULL, 0x400000000ULL }   // RB4 x1
++  },
++
++  //
++  // PCIE_WINDOW_MODE_LARGE: 32 GB on the x8 slot.  The base is 32 GB aligned,
++  // so a 16 GB BAR lands at 0x18_00000000 with 16 GB left over -- the smallest
++  // window that houses a 16 GB-VRAM card.
++  //
++  {
++    { 0x1800000000ULL, 0x800000000ULL },  // RB0 x8, ends at 0x1F_FFFFFFFF
++    { 0x1400000000ULL, 0x400000000ULL },
++    { 0x1000000000ULL, 0x400000000ULL },
++    { 0x0C00000000ULL, 0x400000000ULL },
++    { 0x0800000000ULL, 0x400000000ULL }
++  },
++
++  //
++  // PCIE_WINDOW_MODE_HUGE: 64 GB on the x8 slot.  Verified working on hardware.
++  // Houses a 32 GB BAR at 0x18_00000000 with 32 GB to spare, which covers
++  // 24 GB-VRAM cards.
++  //
++  {
++    { 0x1800000000ULL, 0x1000000000ULL }, // RB0 x8, ends at 0x27_FFFFFFFF
++    { 0x1400000000ULL, 0x400000000ULL  },
++    { 0x1000000000ULL, 0x400000000ULL  },
++    { 0x0C00000000ULL, 0x400000000ULL  },
++    { 0x0800000000ULL, 0x400000000ULL  }
++  },
++
++  //
++  // PCIE_WINDOW_MODE_MAX: 128 GB on the x8 slot.  Same fixed base, but it
++  // reaches 0x37_FFFFFFFF, past the highest address confirmed to decode, so it
++  // stays an explicit opt-in and Auto never selects it.  A 64 GB BAR fits, at
++  // the 64 GB-aligned 0x20_00000000.
++  //
++  {
++    { 0x1800000000ULL, 0x2000000000ULL }, // RB0 x8, ends at 0x37_FFFFFFFF
++    { 0x1400000000ULL, 0x400000000ULL  },
++    { 0x1000000000ULL, 0x400000000ULL  },
++    { 0x0C00000000ULL, 0x400000000ULL  },
++    { 0x0800000000ULL, 0x400000000ULL  }
++  }
++};
++
++GLOBAL_REMOVE_IF_UNREFERENCED CONST CHAR8  *mModeNames[PCIE_WINDOW_MODE_COUNT] = {
++  "Auto", "Stock 16G", "Large 32G", "Huge 64G", "Max 128G"
++};
++
++/**
++  Can a BarSize-aligned block of BarSize bytes be placed in this window while
++  still leaving PCIE_WINDOW_HEADROOM for everything else on the port?
++
++**/
++STATIC
++BOOLEAN
++WindowFitsBar (
++  IN CONST PCIE_MEM64_WINDOW  *Window,
++  IN UINT64                   BarSize
++  )
++{
++  UINT64  AlignedStart;
++  UINT64  Leftover;
++
++  if (BarSize == 0) {
++    return TRUE;
++  }
++
++  AlignedStart = ALIGN_VALUE (Window->Base, BarSize);
++  if ((AlignedStart < Window->Base) ||
++      (AlignedStart - Window->Base > Window->Size) ||
++      (Window->Size - (AlignedStart - Window->Base) < BarSize))
++  {
++    return FALSE;
++  }
++
++  //
++  // Space wasted by alignment is not usable for anything large, but space past
++  // the BAR is, so only the tail counts as headroom.
++  //
++  Leftover = Window->Size - (AlignedStart - Window->Base) - BarSize;
++
++  return (BOOLEAN)(Leftover >= PCIE_WINDOW_HEADROOM);
++}
++
++/**
++  Largest size the Resizable BAR capability of one function advertises support
++  for, or 0 if the function has no such capability.
++
++**/
++STATIC
++UINT64
++GetFunctionMaxRebarSize (
++  IN UINT8  Bus,
++  IN UINT8  Device,
++  IN UINT8  Function
++  )
++{
++  UINT64  Address;
++  UINT16  Offset;
++  UINT32  Header;
++  UINT32  Capability;
++  UINT32  Control;
++  UINT32  SizeMask;
++  UINT8   BarCount;
++  UINT8   Index;
++  UINT8   Bit;
++  UINT64  Largest;
++
++  Address = PCI_SEGMENT_LIB_ADDRESS (0, Bus, Device, Function, 0);
++
++  if (PciSegmentRead16 (Address + PCI_VENDOR_ID_OFFSET) == 0xFFFF) {
++    return 0;
++  }
++
++  //
++  // Walk the PCI Express extended capability list looking for Resizable BAR
++  // (ID 0x0015).
++  //
++  Offset = 0x100;
++  while ((Offset >= 0x100) && (Offset < 0x1000)) {
++    Header = PciSegmentRead32 (Address + Offset);
++    if ((Header == 0) || (Header == MAX_UINT32)) {
++      return 0;
++    }
++
++    if ((Header & 0xFFFF) == 0x0015) {
++      break;
++    }
++
++    Offset = (UINT16)((Header >> 20) & 0xFFF);
++  }
++
++  if ((Offset < 0x100) || (Offset >= 0x1000)) {
++    return 0;
++  }
++
++  //
++  // The BAR count lives in the first control register and covers the whole
++  // capability; a value outside 1..6 means we are misreading it.
++  //
++  Control  = PciSegmentRead32 (Address + Offset + 8);
++  BarCount = (UINT8)((Control >> 5) & 0x7);
++  if ((BarCount == 0) || (BarCount > 6)) {
++    return 0;
++  }
++
++  Largest = 0;
++  for (Index = 0; Index < BarCount; Index++) {
++    Capability = PciSegmentRead32 (Address + Offset + 4 + (Index * 8));
++    Control    = PciSegmentRead32 (Address + Offset + 8 + (Index * 8));
++
++    //
++    // Capability bits 4..31 are supported sizes 1 MB << 0 .. 1 MB << 27, and
++    // control bits 16..31 continue the same series at 1 MB << 28.  Anything
++    // past 1 MB << 43 cannot be expressed in a UINT64 shift here and is far
++    // beyond what this platform can place, so stop at the low word.
++    //
++    SizeMask = Capability >> 4;
++    for (Bit = 0; Bit < 28; Bit++) {
++      if ((SizeMask & (1u << Bit)) != 0) {
++        Largest = MAX (Largest, LShiftU64 (SIZE_1MB, Bit));
++      }
++    }
++
++    SizeMask = Control >> 16;
++    for (Bit = 0; Bit < 16; Bit++) {
++      if ((SizeMask & (1u << Bit)) != 0) {
++        Largest = MAX (Largest, LShiftU64 (SIZE_1MB, 28 + Bit));
++      }
++    }
++  }
++
++  return Largest;
++}
++
++/**
++  Largest Resizable BAR size wanted by the device behind one root port.
++
++  PcieInitDxe has already assigned bus numbers by the time anything calls this,
++  so the endpoint is reachable through ECAM at the root port's secondary bus.
++
++**/
++STATIC
++UINT64
++GetPortMaxRebarSize (
++  IN UINT8  RootPortBus
++  )
++{
++  UINT64  Address;
++  UINT8   SecondaryBus;
++  UINT8   Function;
++  UINT8   HeaderType;
++  UINT64  Largest;
++  UINT64  Size;
++
++  Address = PCI_SEGMENT_LIB_ADDRESS (0, RootPortBus, 0, 0, 0);
++
++  if (PciSegmentRead16 (Address + PCI_VENDOR_ID_OFFSET) == 0xFFFF) {
++    return 0;
++  }
++
++  SecondaryBus = PciSegmentRead8 (Address + PCI_BRIDGE_SECONDARY_BUS_REGISTER_OFFSET);
++  if ((SecondaryBus == 0) || (SecondaryBus == 0xFF)) {
++    return 0;
++  }
++
++  Address = PCI_SEGMENT_LIB_ADDRESS (0, SecondaryBus, 0, 0, 0);
++  if (PciSegmentRead16 (Address + PCI_VENDOR_ID_OFFSET) == 0xFFFF) {
++    return 0;
++  }
++
++  //
++  // A graphics card presents its display and audio functions separately and
++  // only one of them carries the big BAR, so check them all.
++  //
++  HeaderType = PciSegmentRead8 (Address + PCI_HEADER_TYPE_OFFSET);
++  Largest    = 0;
++
++  for (Function = 0; Function < 8; Function++) {
++    Size    = GetFunctionMaxRebarSize (SecondaryBus, 0, Function);
++    Largest = MAX (Largest, Size);
++
++    if ((HeaderType & HEADER_TYPE_MULTI_FUNCTION) == 0) {
++      break;
++    }
++  }
++
++  return Largest;
++}
++
++/**
++  Read the setup selection, falling back to Auto when variable services are not
++  up yet or the variable has never been written.
++
++**/
++STATIC
++UINT8
++GetConfiguredMode (
++  VOID
++  )
++{
++  EFI_STATUS           Status;
++  UINTN                VarSize;
++  PLATFORM_SETUP_DATA  SetupData;
++
++  ZeroMem (&SetupData, sizeof (SetupData));
++
++  VarSize = sizeof (PLATFORM_SETUP_DATA);
++  Status  = gRT->GetVariable (
++                   PLATFORM_SETUP_VAR,
++                   &gPlatformSetupVariableGuid,
++                   NULL,
++                   &VarSize,
++                   &SetupData
++                   );
++  if (EFI_ERROR (Status)) {
++    DEBUG ((
++      DEBUG_WARN,
++      "%a: %s unavailable (%r), defaulting to Auto\n",
++      __FUNCTION__,
++      PLATFORM_SETUP_VAR,
++      Status
++      ));
++    return PCIE_WINDOW_MODE_AUTO;
++  }
++
++  //
++  // A variable written by an earlier firmware build stops short of this field,
++  // so only trust it once the stored data is known to reach that far.
++  //
++  if (VarSize < OFFSET_OF (PLATFORM_SETUP_DATA, PcieBarWindow) + sizeof (SetupData.PcieBarWindow)) {
++    DEBUG ((DEBUG_INFO, "%a: setup variable predates this option, using Auto\n", __FUNCTION__));
++    return PCIE_WINDOW_MODE_AUTO;
++  }
++
++  if (SetupData.PcieBarWindow >= PCIE_WINDOW_MODE_COUNT) {
++    return PCIE_WINDOW_MODE_AUTO;
++  }
++
++  return SetupData.PcieBarWindow;
++}
++
++/**
++  Pick the smallest known-safe layout that houses every port's largest
++  Resizable BAR.  The experimental layouts are deliberately not reachable from
++  here; a board that needs one has to be told so explicitly in setup.
++
++**/
++STATIC
++UINT8
++ResolveAutoMode (
++  VOID
++  )
++{
++  EFI_STATUS                         Status;
++  CONFIG_PARAMS_DATA_BLOCK           *ConfigData;
++  CIX_CONFIG_PARAMS_MANAGE_PROTOCOL  *ConfigManage;
++  UINT64                             Wanted[PCIE_MAX_ROOTBRIDGE];
++  UINTN                              Index;
++  UINT8                              Mode;
++  BOOLEAN                            AllFit;
++
++  Status = gBS->LocateProtocol (&gCixConfigParamsManageProtocolGuid, NULL, (VOID **)&ConfigManage);
++  if (EFI_ERROR (Status) || (ConfigManage->Data == NULL)) {
++    DEBUG ((DEBUG_WARN, "%a: no link state available, staying on Stock\n", __FUNCTION__));
++    return PCIE_WINDOW_MODE_STOCK;
++  }
++
++  ConfigData = ConfigManage->Data;
++
++  for (Index = 0; Index < PCIE_MAX_ROOTBRIDGE; Index++) {
++    if (ConfigData->Pcie.PcieLinkUpStatus[Index] == FALSE) {
++      Wanted[Index] = 0;
++      continue;
++    }
++
++    Wanted[Index] = GetPortMaxRebarSize ((UINT8)mPcieResourceAppeture[Index].BusBase);
++
++    DEBUG ((
++      DEBUG_INFO,
++      "%a: RB%d largest resizable BAR 0x%lx\n",
++      __FUNCTION__,
++      Index,
++      Wanted[Index]
++      ));
++  }
++
++  //
++  // Stock, Large and Huge are all confirmed good on hardware, so Auto may pick
++  // any of them -- the smallest that houses every device.  Max is left out: it
++  // reaches past the highest address known to decode.
++  //
++  for (Mode = PCIE_WINDOW_MODE_STOCK; Mode <= PCIE_WINDOW_MODE_HUGE; Mode++) {
++    AllFit = TRUE;
++    for (Index = 0; Index < PCIE_MAX_ROOTBRIDGE; Index++) {
++      if (!WindowFitsBar (&mLayouts[Mode][Index], Wanted[Index])) {
++        AllFit = FALSE;
++        break;
++      }
++    }
++
++    if (AllFit) {
++      return Mode;
++    }
++  }
++
++  DEBUG ((
++    DEBUG_WARN,
++    "%a: no confirmed layout houses every device; using Huge (64G). A device "
++    "needing more than a 32 GB BAR requires the Max (128G) setting.\n",
++    __FUNCTION__
++    ));
++
++  return PCIE_WINDOW_MODE_HUGE;
++}
++
++UINT8
++EFIAPI
++PcieGetMem64Windows (
++  OUT PCIE_MEM64_WINDOW  *Windows
++  )
++{
++  UINT8  Mode;
++  UINTN  Index;
++
++  ASSERT (Windows != NULL);
++
++  Mode = GetConfiguredMode ();
++  if (Mode == PCIE_WINDOW_MODE_AUTO) {
++    Mode = ResolveAutoMode ();
++  }
++
++  CopyMem (Windows, mLayouts[Mode], sizeof (PCIE_MEM64_WINDOW) * PCIE_MAX_ROOTBRIDGE);
++
++  DEBUG ((DEBUG_INFO, "%a: PCIe 64-bit window layout '%a'\n", __FUNCTION__, mModeNames[Mode]));
++  for (Index = 0; Index < PCIE_MAX_ROOTBRIDGE; Index++) {
++    DEBUG ((
++      DEBUG_INFO,
++      "  RB%d: 0x%lx..0x%lx (%ld GB)\n",
++      Index,
++      Windows[Index].Base,
++      Windows[Index].Base + Windows[Index].Size - 1,
++      RShiftU64 (Windows[Index].Size, 30)
++      ));
++  }
++
++  return Mode;
++}
+diff --git a/Platform/CIX/Sky1/Library/PcieWindowLib/PcieWindowLib.inf b/Platform/CIX/Sky1/Library/PcieWindowLib/PcieWindowLib.inf
+new file mode 100644
+index 00000000..f112c954
+--- /dev/null
++++ b/Platform/CIX/Sky1/Library/PcieWindowLib/PcieWindowLib.inf
+@@ -0,0 +1,39 @@
++#/** @file PcieWindowLib.inf
++#
++#  Copyright (c) 2025, Neol00 (edk2-cix-unlocked).
++#
++#  SPDX-License-Identifier: BSD-2-Clause-Patent
++#
++#**/
++
++[Defines]
++  INF_VERSION                    = 0x0001001A
++  BASE_NAME                      = PcieWindowLib
++  FILE_GUID                      = 6E1A2C74-0B93-4A5F-9C21-5D8E77A31B04
++  MODULE_TYPE                    = BASE
++  VERSION_STRING                 = 1.0
++  LIBRARY_CLASS                  = PcieWindowLib
++
++[Sources]
++  PcieWindowLib.c
++
++[Packages]
++  MdePkg/MdePkg.dec
++  MdeModulePkg/MdeModulePkg.dec
++  Silicon/CIX/Sky1/CixPkg.dec
++  Platform/CIX/Sky1/Sky1.dec
++
++[LibraryClasses]
++  BaseLib
++  BaseMemoryLib
++  DebugLib
++  PciSegmentLib
++  PlatformPcieLib
++  UefiBootServicesTableLib
++  UefiRuntimeServicesTableLib
++
++[Guids]
++  gPlatformSetupVariableGuid
++
++[Protocols]
++  gCixConfigParamsManageProtocolGuid
+diff --git a/Platform/CIX/Sky1/Sky1Common.dsc.inc b/Platform/CIX/Sky1/Sky1Common.dsc.inc
+index a9bcc301..67cc7138 100644
+--- a/Platform/CIX/Sky1/Sky1Common.dsc.inc
++++ b/Platform/CIX/Sky1/Sky1Common.dsc.inc
+@@ -195,6 +195,7 @@
+   PciHostBridgeLib|Silicon/CIX/Sky1/Library/PciHostBridgeLib/PciHostBridgeLib.inf
+   PciSegmentLib|Silicon/CIX/Sky1/Library/PciSegmentLib/PciSegmentLib.inf
+   PlatformPcieLib|Silicon/CIX/Sky1/Library/PlatformPcieLib/PlatformPcieLib.inf
++  PcieWindowLib|Platform/CIX/Sky1/Library/PcieWindowLib/PcieWindowLib.inf
+   NetLib|NetworkPkg/Library/DxeNetLib/DxeNetLib.inf
+ 
+ !if $(SOC_GOP_ENABLE) == TRUE
+diff --git a/Silicon/CIX/Sky1/Library/PciHostBridgeLib/PciHostBridgeLib.c b/Silicon/CIX/Sky1/Library/PciHostBridgeLib/PciHostBridgeLib.c
+index 569510d5..a6d12c14 100644
+--- a/Silicon/CIX/Sky1/Library/PciHostBridgeLib/PciHostBridgeLib.c
++++ b/Silicon/CIX/Sky1/Library/PciHostBridgeLib/PciHostBridgeLib.c
+@@ -15,6 +15,7 @@
+ #include <Protocol/PciHostBridgeResourceAllocation.h>
+ #include <Protocol/PciRootBridgeIo.h>
+ #include <Library/PlatformPcieLib.h>
++#include <Library/PcieWindowLib.h>
+ #include <Library/UefiBootServicesTableLib.h>
+ #include <Library/ConfigParamsDataBlockLib.h>
+ #include <Protocol/ConfigParamsManageProtocol.h>
+@@ -103,6 +104,7 @@ EFI_STATUS
+ ConstructRootBridge (
+   PCI_ROOT_BRIDGE                    *Bridge,
+   PCI_ROOT_BRIDGE_RESOURCE_APPETURE  *Appeture,
++  CONST PCIE_MEM64_WINDOW            *Mem64Window,
+   UINT8                              RootPortIndex
+   )
+ {
+@@ -136,7 +138,16 @@ ConstructRootBridge (
+     Bridge->Mem.Limit = 0;
+   }
+ 
+-  if (Appeture->MemAbove4G) {
++  //
++  // The above-4G window comes from PcieWindowLib rather than the aperture
++  // table so its size can be chosen in setup (Resizable BAR GPUs).  Only the
++  // x8 root bridge grows, upward from its fixed hardware base; PcieInitDxe
++  // reads just the bus fields of the table, so nothing else gets out of sync.
++  //
++  if (Mem64Window->Size != 0) {
++    Bridge->MemAbove4G.Base  = Mem64Window->Base;
++    Bridge->MemAbove4G.Limit = Mem64Window->Base + Mem64Window->Size - 1;
++  } else if (Appeture->MemAbove4G) {
+     Bridge->MemAbove4G.Base  = Appeture->MemAbove4G;
+     Bridge->MemAbove4G.Limit = Appeture->MemAbove4G + Appeture->MemAbove4GSize - 1;
+   } else {
+@@ -152,7 +163,14 @@ ConstructRootBridge (
+     Bridge->PMem.Limit = 0;
+   }
+ 
+-  if (Appeture->PMemAbove4G) {
++  //
++  // The stock table aliases PMemAbove4G to MemAbove4G and PciBusDxe takes a
++  // GPU's large BAR from the prefetchable pool, so it follows the window too.
++  //
++  if (Mem64Window->Size != 0) {
++    Bridge->PMemAbove4G.Base  = Mem64Window->Base;
++    Bridge->PMemAbove4G.Limit = Mem64Window->Base + Mem64Window->Size - 1;
++  } else if (Appeture->PMemAbove4G) {
+     Bridge->PMemAbove4G.Base  = Appeture->PMemAbove4G;
+     Bridge->PMemAbove4G.Limit = Appeture->PMemAbove4G + Appeture->PMemAbove4GSize -1;
+   } else {
+@@ -191,6 +209,7 @@ PciHostBridgeGetRootBridges (
+   PCI_ROOT_BRIDGE                    *Bridges;
+   CONFIG_PARAMS_DATA_BLOCK           *ConfigData = NULL;
+   CIX_CONFIG_PARAMS_MANAGE_PROTOCOL  *ConfigManage;
++  PCIE_MEM64_WINDOW                  Mem64Windows[PCIE_MAX_ROOTBRIDGE];
+ 
+   // Set default value to 0 in case we got any error.
+   *Count = 0;
+@@ -218,12 +237,14 @@ PciHostBridgeGetRootBridges (
+     return NULL;
+   }
+ 
++  PcieGetMem64Windows (Mem64Windows);
++
+   for (Loop = 0; Loop < PCIE_MAX_ROOTBRIDGE; Loop++) {
+     if (ConfigData->Pcie.PcieLinkUpStatus[Loop] == FALSE) {
+       continue;
+     }
+ 
+-    Status = ConstructRootBridge (&Bridges[*Count], &mPcieResourceAppeture[Loop], Loop);
++    Status = ConstructRootBridge (&Bridges[*Count], &mPcieResourceAppeture[Loop], &Mem64Windows[Loop], Loop);
+     if (EFI_ERROR (Status)) {
+       DEBUG ((DEBUG_ERROR, "[%a:%d] - ConstructRootBridge failed!\n", __FUNCTION__, __LINE__));
+       continue;
+diff --git a/Silicon/CIX/Sky1/Library/PciHostBridgeLib/PciHostBridgeLib.inf b/Silicon/CIX/Sky1/Library/PciHostBridgeLib/PciHostBridgeLib.inf
+index 1f1ec27c..ddd48c4f 100644
+--- a/Silicon/CIX/Sky1/Library/PciHostBridgeLib/PciHostBridgeLib.inf
++++ b/Silicon/CIX/Sky1/Library/PciHostBridgeLib/PciHostBridgeLib.inf
+@@ -19,6 +19,7 @@
+   MdePkg/MdePkg.dec
+   MdeModulePkg/MdeModulePkg.dec
+   Silicon/CIX/Sky1/CixPkg.dec
++  Platform/CIX/Sky1/Sky1.dec
+ 
+ [LibraryClasses]
+   BaseLib
+@@ -29,6 +30,7 @@
+   PcdLib
+   UefiBootServicesTableLib
+   PlatformPcieLib
++  PcieWindowLib
+ 
+ [Protocols]
+   gCixConfigParamsManageProtocolGuid

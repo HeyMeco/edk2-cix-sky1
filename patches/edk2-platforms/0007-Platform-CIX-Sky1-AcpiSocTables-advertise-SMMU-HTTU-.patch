@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: edk2-cix <edk2-cix@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 23:49:48 +0100
+Subject: [PATCH] Platform/CIX/Sky1: AcpiSocTables: advertise SMMU HTTU in IORT
+
+The SMMUv3 nodes left the HTTU override field at 0, so Linux disabled
+hardware access-flag and dirty-state updates and warned that the IDR0
+HTTU features were overridden by firmware.  Advertise HA and HD.
+
+From Neol00/edk2-cix-unlocked V2.0.
+---
+ Platform/CIX/Sky1/Drivers/AcpiSocTables/Iort.aslc | 14 +++++++++++---
+ 1 file changed, 11 insertions(+), 3 deletions(-)
+
+diff --git a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Iort.aslc b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Iort.aslc
+index 88392c2c..2f1a84a7 100644
+--- a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Iort.aslc
++++ b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Iort.aslc
+@@ -14,6 +14,14 @@
+ #include "Include/InterruptId.h"
+ #include "CommonDefines.h"
+ 
++//
++// The HTTU override field is bits [2:1] of the SMMUv3 node flags
++// (0: none, 1: HA, 2: HA and HD).  All Sky1 SMMUs implement both access-flag
++// and dirty-state updates; advertising 0 made Linux drop them with
++// "IDR0.HTTU features overridden by FW configuration".
++//
++#define SKY1_SMMU_HTTU_HA_HD  (2 << 1)
++
+ #define PMCG_COUNT       (PCIE_PMCG_ENABLE + MM_HUB_PMCG_ENABLE + SUB_SYSTEM_PMCG_ENABLE)
+ #define MM_NODE_COUNT    (MM_HUB_SMMU_ENABLE + DPU_SMMU_ENABLE*10 + NPU_SMMU_ENABLE*1 + ISP_SMMU_ENABLE*1 + CSI_SMMU_ENABLE*2)
+ // PCIe: ITS + RC always (2); when SMMU enabled add SMMU + optional PMCG
+@@ -180,7 +188,7 @@ ARM_EFI_ACPI_6_0_IO_REMAPPING_TABLE  Iort =
+         OFFSET_OF (ARM_EFI_ACPI_6_0_IO_REMAPPING_SMMU3_NODE, SmmuIdMap), // IdReference
+       },
+       SMMU0_BASE,                                    // Base address
+-      EFI_ACPI_IORT_SMMUv3_FLAG_COHAC_OVERRIDE,      // Flags
++      EFI_ACPI_IORT_SMMUv3_FLAG_COHAC_OVERRIDE | SKY1_SMMU_HTTU_HA_HD,      // Flags
+       0,                                             // Reserved
+       0,                                             // VATOS address
+       EFI_ACPI_IORT_SMMUv3_MODEL_GENERIC,            // SMMUv3 Model
+@@ -266,7 +274,7 @@ ARM_EFI_ACPI_6_0_IO_REMAPPING_TABLE  Iort =
+       0,                                                 // IdReference
+     },
+     SMMU2_BASE,                                  // Base address
+-    EFI_ACPI_IORT_SMMUv3_FLAG_COHAC_OVERRIDE,    // Flags
++    EFI_ACPI_IORT_SMMUv3_FLAG_COHAC_OVERRIDE | SKY1_SMMU_HTTU_HA_HD,    // Flags
+     0,                                           // Reserved
+     0,                                           // VATOS address
+     EFI_ACPI_IORT_SMMUv3_MODEL_GENERIC,          // SMMUv3 Model
+@@ -426,7 +434,7 @@ ARM_EFI_ACPI_6_0_IO_REMAPPING_TABLE  Iort =
+       0,                                                 // IdReference
+     },
+     SMMU1_BASE,                                   // Base address
+-    EFI_ACPI_IORT_SMMUv3_FLAG_COHAC_OVERRIDE,     // Flags
++    EFI_ACPI_IORT_SMMUv3_FLAG_COHAC_OVERRIDE | SKY1_SMMU_HTTU_HA_HD,     // Flags
+     0,                                            // Reserved
+     0,                                            // VATOS address
+     EFI_ACPI_IORT_SMMUv3_MODEL_GENERIC,           // SMMUv3 Model

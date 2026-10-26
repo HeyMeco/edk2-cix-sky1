@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: edk2-cix <edk2-cix@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 23:48:30 +0100
+Subject: [PATCH] Silicon/CIX/Sky1: GlobalWatchdogDxe: raise the boot watchdog
+ to 90s
+
+The global watchdog covers everything from DXE entry to ReadyToBoot and
+its expiry is an unconditional SoC reset.  20s could trip on a slow but
+progressing cold boot; a hung boot still never reaches ReadyToBoot, so
+the longer period keeps the hang recovery.
+
+From Neol00/edk2-cix-unlocked V2.4.
+---
+ .../CIX/Sky1/Drivers/GenericWatchdogDxe/GlobalWatchdogDxe.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/Silicon/CIX/Sky1/Drivers/GenericWatchdogDxe/GlobalWatchdogDxe.c b/Silicon/CIX/Sky1/Drivers/GenericWatchdogDxe/GlobalWatchdogDxe.c
+index 7627ae1f..bbac50e4 100644
+--- a/Silicon/CIX/Sky1/Drivers/GenericWatchdogDxe/GlobalWatchdogDxe.c
++++ b/Silicon/CIX/Sky1/Drivers/GenericWatchdogDxe/GlobalWatchdogDxe.c
+@@ -14,7 +14,11 @@
+ #include <Library/CixPostCodeLib.h>
+ #include <Protocol/WatchdogTimer.h>
+ 
+-#define GLOBAL_WDT_DEFAULT_TIME 20 //seconds
++// The watchdog is armed at driver entry and only disarmed at ReadyToBoot, so
++// one period has to cover console connection and device enumeration.  20s
++// could expire on a slow but healthy cold boot (USB hubs, several NVMe
++// drives, network boot attempts) and reset the board.
++#define GLOBAL_WDT_DEFAULT_TIME 90 //seconds
+ 
+ VOID
+ EFIAPI

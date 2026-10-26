@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: edk2-cix <edk2-cix@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 23:48:58 +0100
+Subject: [PATCH] Platform/CIX/Sky1: AcpiSocTables: fix PCIe X4 bus-range
+
+PRC1 advertised bus-range 0x90-0xbf in _DSD while its _CRS, and the
+PNP0A08 host bridge PCI1, decode buses 0x90-0xaf.  Make _DSD match.
+
+From Neol00/edk2-cix-unlocked V2.4.
+---
+ Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-CdnsPcie.asl | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-CdnsPcie.asl b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-CdnsPcie.asl
+index 2dffc4f9..8fef1ce0 100644
+--- a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-CdnsPcie.asl
++++ b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-CdnsPcie.asl
+@@ -478,7 +478,7 @@ Device (PRC1) { /* PCIE2 X4 */
+           Package () { "device_type", "pci" },
+           Package () { "vendor-id", 0x1f6c },
+           Package () { "device-id", 0x0001 },
+-          Package () { "bus-range", Package () { 0x90, 0xbf } },
++          Package () { "bus-range", Package () { 0x90, 0xaf } },
+           Package () { "max-link-speed", MLKS },
+           Package () { "num-lanes", NUML },
+           Package () { "cdns,no-inbound-bar", 0 },

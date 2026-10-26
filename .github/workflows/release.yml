@@ -1,0 +1,107 @@
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+# Manually triggered release: builds every board and publishes the firmware
+# archives as a GitHub release.
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version / tag (e.g. 2026.10.0)"
+        required: true
+      boards:
+        description: "Boards to build (space separated, or 'all')"
+        default: all
+      target:
+        description: "EDK2 build target"
+        type: choice
+        options: [RELEASE, DEBUG]
+        default: RELEASE
+      prerelease:
+        description: "Mark as pre-release"
+        type: boolean
+        default: true
+      draft:
+        description: "Create the release as a draft"
+        type: boolean
+        default: false
+      runner:
+        description: "Runner (arm64 runners are free for public repositories)"
+        type: choice
+        options: [ubuntu-24.04-arm, ubuntu-24.04]
+        default: ubuntu-24.04-arm
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    runs-on: ubuntu-24.04
+    outputs:
+      boards: ${{ steps.list.outputs.boards }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: list
+        run: |
+          if [ "${{ inputs.boards }}" = "all" ]; then
+            boards=$(ls boards/*.yaml | xargs -n1 basename | sed 's/\.yaml$//')
+          else
+            boards="${{ inputs.boards }}"
+          fi
+          echo "boards=$(printf '%s\n' $boards | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        board: ${{ fromJSON(needs.matrix.outputs.boards) }}
+    uses: ./.github/workflows/build-board.yml
+    with:
+      board: ${{ matrix.board }}
+      version: ${{ inputs.version }}
+      target: ${{ inputs.target }}
+      runner: ${{ inputs.runner }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: firmware-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums and notes
+        run: |
+          cd dist
+          sha256sum *.zip > SHA256SUMS
+          {
+            echo "UEFI firmware built from ${GITHUB_SHA::12} (ACPI boot)."
+            echo
+            echo "| Board | Archive | SHA-256 |"
+            echo "|---|---|---|"
+            for z in *.zip; do
+              board=$(unzip -p "$z" '*/manifest.json' | jq -r .name)
+              echo "| $board | \`$z\` | \`$(sha256sum "$z" | cut -c1-16)…\` |"
+            done
+            echo
+            echo "Each archive contains \`cix_flash_all.bin\` (full SPI image), \`cix_flash_ota.bin\`"
+            echo "(UEFI-only update), the raw FD, \`manifest.json\` and flashing notes."
+            echo "None of these images has been boot-tested by CI; see README.md for the validation status."
+          } > ../notes.md
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=()
+          [ "${{ inputs.prerelease }}" = "true" ] && flags+=(--prerelease)
+          [ "${{ inputs.draft }}" = "true" ] && flags+=(--draft)
+          gh release create "${{ inputs.version }}" dist/*.zip dist/SHA256SUMS \
+            --target "$GITHUB_SHA" --title "edk2-cix ${{ inputs.version }}" \
+            --notes-file notes.md "${flags[@]}"

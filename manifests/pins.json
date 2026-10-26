@@ -1,0 +1,23 @@
+{
+  "superproject": {
+    "repo": "https://github.com/cixtech/bios",
+    "branch": "cix_p1_dev",
+    "commit": "7799770553c018cf4c6c6e34be4fca6245361583"
+  },
+  "submodules": {
+    "edk2": "9212cf3996ef8d134e8af38e5ab2c78a52d7b65c",
+    "edk2-platforms": "e5cb70f632756654672c66e0c2628d501feffa2c",
+    "edk2-non-osi": "e725a1d3fed47cdc7656d1cb4d77120951ce2eb5"
+  },
+  "imports": {
+    "radxa-edk2-platforms": "14cf7bdcfe1d0e8635a16a25d4209b6e28b18fca",
+    "radxa-edk2-non-osi": "4e99786e4caaf531bb9b04f097a018917463ae81",
+    "minisforum-edk2-platforms": "119ae9cc84abade22a48081ec3aa11eb8ee6e74a",
+    "minisforum-edk2-non-osi": "c22fb43e6b8385c4b43f51ca1de3111fd2990db1"
+  },
+  "toolchain": {
+    "gcc": "gcc-arm-10.2-2020.11 aarch64-none-elf",
+    "acpica": "R2024_12_12 (7dae72155bf06b0edda9f3aea713da1d48c1c418)",
+    "container": "debian:12-slim"
+  }
+}

@@ -1,0 +1,51 @@
+#/** @file
+#
+#  Copyright 2024 Cix Technology Group Co., Ltd. All Rights Reserved.
+#
+#**/
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = AcpiPlatformDxe
+  FILE_GUID                      = dc92cda1-5d43-4e3f-a594-15b6886893f3
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = AcpiPlatformDxeEntryPoint
+
+#
+# The following information is for reference only and not required by the build tools.
+#
+#  VALID_ARCHITECTURES           = IA32 X64 EBC
+#
+
+[Sources]
+  AcpiPlatformDxe.c
+
+[Packages]
+  ArmPkg/ArmPkg.dec
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  EmbeddedPkg/EmbeddedPkg.dec
+  Silicon/CIX/Sky1/CixPkg.dec
+  Platform/CIX/Sky1/Sky1.dec
+  Platform/Radxa/Radxa.dec
+
+[LibraryClasses]
+  UefiLib
+  DebugLib
+  UefiDriverEntryPoint
+  AcpiLib
+  AslUpdateLib
+
+[Protocols]
+  gCixPlatformConfigParamsManageProtocolGuid
+
+[Guids]
+  gEfiEventReadyToBootGuid
+  gRadxaSetupVariableGuid
+
+[Pcd]
+  gRadxaTokenSpaceGuid.PcdBoardId
+  gEfiMdeModulePkgTokenSpaceGuid.PcdTestKeyUsed
+
+[Depex]
+  TRUE

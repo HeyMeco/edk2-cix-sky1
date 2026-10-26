@@ -1,0 +1,14 @@
+# Minisforum MS-R1 (board MGP1WSB)
+board: ms-r1
+name: Minisforum MS-R1
+vendor: Minisforum
+dsc: Platform/CIX/Sky1/MGP1WSB/MGP1WSB.dsc
+build_dir: MGP1WSB
+package: edk2-project/Platform/CIX/Sky1/MGP1WSB
+fastboot: disable
+flash:
+  size: 0x800000
+  config_all: edk2-project/Platform/CIX/Sky1/MGP1WSB/spi_flash_config_all.json
+  config_ota: edk2-project/Platform/CIX/Sky1/MGP1WSB/spi_flash_config_ota.json
+blobs: manifests/blobs/ms-r1.json
+capsule: true                        # CIX signed capsule (.cap) for in-OS / ESRT updates

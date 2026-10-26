@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+# Build check for pushes and pull requests.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Script syntax
+        run: python3 -m py_compile scripts/*.py scripts/extract/*.py scripts/acpi/*.py
+      - name: Import manifest
+        run: python3 scripts/imports.py --check
+      - name: Patch queue applies
+        run: |
+          for p in patches/edk2-platforms/*.patch; do
+            git -C edk2-platforms apply --check --whitespace=nowarn "../$p" || exit 1
+            git -C edk2-platforms apply --whitespace=nowarn "../$p"
+          done
+
+  build:
+    needs: checks
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [orion-o6, orion-o6n, ms-r1, opi6plus, opi6]
+    uses: ./.github/workflows/build-board.yml
+    with:
+      board: ${{ matrix.board }}
+      version: ci-${{ github.run_number }}

@@ -1,0 +1,13 @@
+# Radxa Orion O6N
+board: orion-o6n
+name: Radxa Orion O6N
+vendor: Radxa
+dsc: Platform/Radxa/Orion/O6N/O6N.dsc
+build_dir: O6N                       # Build/<build_dir>/<TARGET>_GCC5
+package: edk2-project/Platform/Radxa/Orion/O6N
+fastboot: disable
+flash:
+  size: 0x800000
+  config_all: edk2-project/Platform/Radxa/Orion/O6N/spi_flash_config_all.json
+  config_ota: edk2-project/Platform/Radxa/Orion/O6N/spi_flash_config_ota.json
+blobs: manifests/blobs/orion-o6n.json

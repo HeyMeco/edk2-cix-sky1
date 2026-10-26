@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: edk2-cix <edk2-cix@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 23:48:15 +0100
+Subject: [PATCH] Platform/CIX/Sky1: PlatformSetupVariableInitDxe: fix stack
+ overrun
+
+GetVariable() returns EFI_BUFFER_TOO_SMALL and the stored size when the
+variable is larger than the current structure (for example after
+flashing an older firmware).  Both init paths then called ZeroMem() with
+that size on a stack buffer of sizeof (structure), overrunning the stack
+before the variable was rewritten.  Clear the structure with its own size.
+
+From Neol00/edk2-cix-unlocked V2.4.
+---
+ .../PlatformSetupVariableInitDxe.c                            | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/Platform/CIX/Sky1/Drivers/PlatformSetupVariableInitDxe/PlatformSetupVariableInitDxe.c b/Platform/CIX/Sky1/Drivers/PlatformSetupVariableInitDxe/PlatformSetupVariableInitDxe.c
+index 731ea28c..5da6ec06 100644
+--- a/Platform/CIX/Sky1/Drivers/PlatformSetupVariableInitDxe/PlatformSetupVariableInitDxe.c
++++ b/Platform/CIX/Sky1/Drivers/PlatformSetupVariableInitDxe/PlatformSetupVariableInitDxe.c
+@@ -553,7 +553,7 @@ PlatformSetupVariableInit (
+     //
+     // Variable does not exist yet - create it
+     //
+-    ZeroMem (&PlatformSetupVar, VarSize);
++    ZeroMem (&PlatformSetupVar, sizeof (PlatformSetupVar));
+     ConstructSetupVariable (&PlatformSetupVar);
+ 
+     Status = gRT->SetVariable (
+@@ -592,7 +592,7 @@ NetworkStackVariableInit (
+                   &NetworkStack
+                   );
+   if (EFI_ERROR (Status)) {
+-    ZeroMem (&NetworkStack, VarSize);
++    ZeroMem (&NetworkStack, sizeof (NetworkStack));
+     //
+     // Variable does not exist yet - create it
+     //

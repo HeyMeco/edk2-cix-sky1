@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: edk2-cix <edk2-cix@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 23:48:40 +0100
+Subject: [PATCH] Platform/CIX/Sky1: AcpiSocTables: describe 32-bit SCMI shared
+ memory
+
+Linux 6.13 and later honour the reg-io-width property of arm,scmi-shmem
+and otherwise use byte accesses, which the Sky1 shared memory does not
+support; the SCMI transport then fails to probe and takes DVFS, clocks
+and the GPU driver with it.
+
+From Neol00/edk2-cix-unlocked V2.4.
+---
+ Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-ScmiMailbox.asl | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-ScmiMailbox.asl b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-ScmiMailbox.asl
+index 2c06245d..2d3ade2d 100644
+--- a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-ScmiMailbox.asl
++++ b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-ScmiMailbox.asl
+@@ -109,6 +109,7 @@ Device (SHM0) {
+     ToUUID ("daffd814-6eba-4d8c-8a91-bc9bbf4aa301"),
+     Package () {
+         Package () {"compatible", "arm,scmi-shmem"},
++        Package () {"reg-io-width", 4},
+     }
+   })
+ }
+@@ -127,6 +128,7 @@ Device (SHM1) {
+     ToUUID ("daffd814-6eba-4d8c-8a91-bc9bbf4aa301"),
+     Package () {
+         Package () {"compatible", "arm,scmi-shmem"},
++        Package () {"reg-io-width", 4},
+     }
+   })
+ }

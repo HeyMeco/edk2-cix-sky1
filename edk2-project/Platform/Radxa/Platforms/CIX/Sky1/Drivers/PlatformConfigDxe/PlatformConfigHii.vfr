@@ -1,0 +1,235 @@
+/** @file
+*
+*  Copyright 2024 Radxa Computer (Shenzhen) Co., Ltd. All Rights Reserved.
+*  Copyright 2023 Cix Technology (Shanghai) Co., Ltd. All Rights Reserved.
+*  Copyright (c) 2017, Linaro, Ltd. All rights reserved.
+*
+*  SPDX-License-Identifier: BSD-2-Clause-Patent
+*
+**/
+
+#include <DtPlatformDxe.h>
+#include <Uefi/UefiMultiPhase.h>
+#include <PlatformInfoTypes.h>
+#include "PlatformConfigHii.h"
+#include "../../Include/RadxaSetupVar.h"
+
+formset
+  guid      = PLATFORM_CONFIG_FORMSET_GUID,
+  title     = STRING_TOKEN(STR_FORM_SET_TITLE),
+  help      = STRING_TOKEN(STR_FORM_SET_TITLE_HELP),
+  classguid = EFI_HII_PLATFORM_SETUP_FORMSET_GUID,
+
+  efivarstore PLATFORM_SETUP_DATA,
+    attribute = EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_NON_VOLATILE,
+    name  = PlatformSetupVar,
+    guid  = PLATFORM_SETUP_VARIABLE_GUID;
+
+  efivarstore DT_ACPI_VARSTORE_DATA,
+    attribute = EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_NON_VOLATILE,
+    name  = DtAcpiPref,
+    guid  = DT_PLATFORM_FORMSET_GUID;
+
+  efivarstore NETWORK_STACK,
+    attribute = EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_NON_VOLATILE,
+    name  = NetworkStackVar,
+    guid  = NETWORK_STACK_SETUP_VARIABLE_GUID;
+
+  efivarstore RADXA_SETUP_DATA,
+    attribute = EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_NON_VOLATILE,
+    name  = RadxaSetupVar,
+    guid  = RADXA_SETUP_VARIABLE_GUID;
+
+  efivarstore CONSOLE_PREF_VARSTORE_DATA,
+    attribute = EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_NON_VOLATILE,
+    name  = ConsolePref,
+    guid  = CONSOLE_PREF_FORMSET_GUID;
+
+  varstore COMPLIANCE_VARSTORE_DATA,
+    name = ComplianceVar,
+    guid = PLATFORM_CONFIG_FORMSET_GUID;
+
+  form formid = PLATFORM_CONFIG_FORM_ID,
+    title  = STRING_TOKEN(STR_MAIN_FORM_TITLE);
+    subtitle text = STRING_TOKEN(STR_EMPTY_STRING);
+
+suppressif ideqval DtAcpiPref.Pref == DT_ACPI_SELECT_DT;
+    goto CPU_CONFIG_FORM_ID,
+      prompt = STRING_TOKEN(STR_CPU_FORM_SET_TITLE),
+      help = STRING_TOKEN(STR_CPU_FORM_SET_TITLE_HELP);
+
+    goto PCIE_CONFIG_FORM_ID,
+      prompt = STRING_TOKEN(STR_PCIE_FORM_SET_TITLE),
+      help = STRING_TOKEN(STR_PCIE_FORM_SET_TITLE_HELP);
+
+    goto USB_CONFIG_FORM_ID,
+      prompt = STRING_TOKEN(STR_USB_FORM_SET_TITLE),
+      help = STRING_TOKEN(STR_USB_FORM_SET_TITLE_HELP);
+
+    goto I2C_CONFIG_FORM_ID,
+      prompt = STRING_TOKEN(STR_I2C_FORM_SET_TITLE),
+      help   = STRING_TOKEN(STR_I2C_FORM_SET_TITLE_HELP);
+
+//    goto GMAC_CONFIG_FORM_ID,
+//      prompt = STRING_TOKEN(STR_GMAC_FORM_SET_TITLE),
+//      help   = STRING_TOKEN(STR_GMAC_FORM_SET_TITLE_HELP);
+
+    goto ADVANCED_FORM_SET_ID,
+      prompt = STRING_TOKEN(STR_ADVANCED_FORM_SET_TITLE),
+      help = STRING_TOKEN(STR_ADVANCED_FORM_SET_TITLE_HELP);
+endif;
+
+    goto COMPLIANCE_CONFIG_FORM_ID,
+      prompt = STRING_TOKEN(STR_COMPLIANCE_FORM_SET_TITLE),
+      help = STRING_TOKEN(STR_COMPLIANCE_FORM_SET_TITLE_HELP);
+
+    subtitle text = STRING_TOKEN(STR_EMPTY_STRING);
+
+    suppressif FixedPcdGetBool (PcdEcAcpiI2cEn) == 0;
+      oneof varid     = PlatformSetupVar.StateAfterG3,
+        questionid    = QUESTION_STATE_AFTER_G3_ID,
+        prompt        = STRING_TOKEN(STR_STATE_AFTER_G3),
+        help          = STRING_TOKEN(STR_STATE_AFTER_G3_HELP),
+        flags         = NUMERIC_SIZE_1 | INTERACTIVE | RESET_REQUIRED,
+        default       = FixedPcdGet8 (PcdStateAfterG3),
+        option text   = STRING_TOKEN(STR_S5_AFTER_G3_STRING),        value = 0, flags = RESET_REQUIRED;
+        option text   = STRING_TOKEN(STR_S0_AFTER_G3_STRING),        value = 1, flags = RESET_REQUIRED;
+      endoneof;
+    endif;
+
+    suppressif FixedPcdGetBool (PcdEcAcpiI2cEn) == 0;
+      oneof varid   = PlatformSetupVar.EcFanMode,
+        prompt      = STRING_TOKEN(STR_EC_FAN_MODE_PROMPT),
+        help        = STRING_TOKEN(STR_EC_FAN_MODE_PROMPT_HELP),
+        default     = FixedPcdGet8 (PcdEcDefaultFanMode),
+        option text = STRING_TOKEN(STR_AUTO_MODE), value = 0, flags = RESET_REQUIRED;
+        option text = STRING_TOKEN(STR_PERF_MODE), value = 1, flags = RESET_REQUIRED;
+        option text = STRING_TOKEN(STR_MUTE_MODE), value = 2, flags = RESET_REQUIRED;
+      endoneof;
+    endif;
+
+#if (FW_CONFIG_UPDATE_SUPPORT == 1)
+    suppressif FixedPcdGet8 (PcdUFSPowerMode) == 0xFF;
+      oneof varid   = RadxaSetupVar.UFSPowerMode,
+        prompt      = STRING_TOKEN(STR_UFS_POWER_MODE_PROMPT),
+        help        = STRING_TOKEN(STR_UFS_POWER_MODE_PROMPT_HELP),
+        default     = FixedPcdGet8 (PcdUFSPowerMode),
+        option text = STRING_TOKEN(STR_UFS_POWER_AUTO), value = 0, flags = RESET_REQUIRED;
+        option text = STRING_TOKEN(STR_UFS_POWER_ALWAYS_ON), value = 1, flags = RESET_REQUIRED;
+        option text = STRING_TOKEN(STR_UFS_POWER_ALWAYS_OFF), value = 2, flags = RESET_REQUIRED;
+      endoneof;
+    endif;
+#endif // FW_CONFIG_UPDATE_SUPPORT == 1
+
+    oneof varid     = NetworkStackVar.Enable,
+      prompt        = STRING_TOKEN(STR_NETWORK_STACK_PROMPT),
+      help          = STRING_TOKEN(STR_NETWORK_STACK_PROMPT_HELP),
+      default       = FixedPcdGet8 (PcdNetworkStackSupport),
+      option text   = STRING_TOKEN(STR_DISABLED), value = 0, flags = RESET_REQUIRED;
+      option text   = STRING_TOKEN(STR_ENABLED),  value = 1, flags = RESET_REQUIRED;
+    endoneof;
+    suppressif ideqval NetworkStackVar.Enable == 0x0;
+      oneof varid   = NetworkStackVar.Ipv4Pxe,
+        prompt      = STRING_TOKEN(STR_IPV4_PXE_BOOT_PROMPT),
+        help        = STRING_TOKEN(STR_IPV4_PXE_BOOT_PROMPT_HELP),
+        default     = FixedPcdGet8 (PcdIPv4PXESupport),
+        option text = STRING_TOKEN(STR_DISABLED), value = 0, flags = RESET_REQUIRED;
+        option text = STRING_TOKEN(STR_ENABLED),  value = 1, flags = RESET_REQUIRED;
+      endoneof;
+
+      oneof varid   = NetworkStackVar.Ipv6Pxe,
+        prompt      = STRING_TOKEN(STR_IPV6_PXE_BOOT_PROMPT),
+        help        = STRING_TOKEN(STR_IPV6_PXE_BOOT_PROMPT_HELP),
+        default     = FixedPcdGet8 (PcdIPv6PXESupport),
+        option text = STRING_TOKEN(STR_DISABLED), value = 0, flags = RESET_REQUIRED;
+        option text = STRING_TOKEN(STR_ENABLED),  value = 1, flags = RESET_REQUIRED;
+      endoneof;
+
+      oneof varid   = NetworkStackVar.Ipv4Http,
+        prompt      = STRING_TOKEN(STR_IPV4_HTTP_BOOT_PROMPT),
+        help        = STRING_TOKEN(STR_IPV4_HTTP_BOOT_PROMPT_HELP),
+        default     = FixedPcdGet8 (PcdIPv4HttpSupport),
+        option text = STRING_TOKEN(STR_DISABLED), value = 0, flags = RESET_REQUIRED;
+        option text = STRING_TOKEN(STR_ENABLED),  value = 1, flags = RESET_REQUIRED;
+      endoneof;
+
+      oneof varid   = NetworkStackVar.Ipv6Http,
+        prompt      = STRING_TOKEN(STR_IPV6_HTTP_BOOT_PROMPT),
+        help        = STRING_TOKEN(STR_IPV6_HTTP_BOOT_PROMPT_HELP),
+        default     = FixedPcdGet8 (PcdIPv6HttpSupport),
+        option text = STRING_TOKEN(STR_DISABLED), value = 0, flags = RESET_REQUIRED;
+        option text = STRING_TOKEN(STR_ENABLED),  value = 1, flags = RESET_REQUIRED;
+      endoneof;
+    endif;
+
+#ifdef DEBUG_MODE_SUPPORT
+    oneof varid   = PlatformSetupVar.DebugMode,
+      prompt      = STRING_TOKEN(STR_DEBUG_MODE_PROMPT),
+      help        = STRING_TOKEN(STR_DEBUG_MODE_HELP),
+      default     = 0,
+      option text = STRING_TOKEN(STR_DISABLED), value = 0, flags = RESET_REQUIRED;
+      option text = STRING_TOKEN(STR_ENABLED), value = 1, flags = RESET_REQUIRED;
+    endoneof;
+#endif
+
+suppressif FixedPcdGetBool (PcdRegisterFastBootSupport) == 0;
+    oneof varid   = PlatformSetupVar.FastBootHotKeyEnable,
+      prompt      = STRING_TOKEN(STR_FASTBOOT_HOTKEY),
+      help        = STRING_TOKEN(STR_FASTBOOT_HOTKEY_HELP),
+      default     = 0x0,
+      option text = STRING_TOKEN(STR_DISABLED), value = 0, flags = RESET_REQUIRED;
+      option text = STRING_TOKEN(STR_ENABLED), value = 1, flags = RESET_REQUIRED;
+    endoneof;
+endif;
+
+    subtitle text = STRING_TOKEN(STR_EMPTY_STRING);
+
+suppressif ideqval DtAcpiPref.Pref == DT_ACPI_SELECT_ACPI;
+    text
+      help  = STRING_TOKEN(STR_ACPI_FEATURE_HELP),
+      text  = STRING_TOKEN(STR_ACPI_FEATURE_STRING);
+
+    subtitle text = STRING_TOKEN(STR_EMPTY_STRING);
+endif;
+
+    subtitle text = STRING_TOKEN(STR_EMPTY_STRING);
+    subtitle text = STRING_TOKEN(STR_EXIT_STRING);
+  endform;
+
+  form formid = ADVANCED_FORM_SET_ID,
+    title  = STRING_TOKEN(STR_ADVANCED_FORM_SET_TITLE);
+    subtitle text = STRING_TOKEN(STR_EMPTY_STRING);
+
+    text
+      help  = STRING_TOKEN(STR_ADVANCED_FORM_SET_RECOVERY),
+      text  = STRING_TOKEN(STR_ADVANCED_FORM_SET_TITLE_HELP);
+
+    subtitle text = STRING_TOKEN(STR_EMPTY_STRING);
+
+    goto MEMORY_CONFIG_FORM_ID,
+      prompt = STRING_TOKEN(STR_MEMORY_FORM_SET_TITLE),
+      help = STRING_TOKEN(STR_MEMORY_FORM_SET_TITLE_HELP);
+
+    oneof varid = PlatformSetupVar.SmmuEnable,
+      prompt  = STRING_TOKEN(STR_ENABLE_SMMU_PROMPT),
+      help    = STRING_TOKEN(STR_ENABLE_SMMU_PROMPT_HELP),
+      default = FixedPcdGet8 (PcdAcpiSmmuEnable),
+      option text = STRING_TOKEN(STR_DISABLED), value = 0, flags = RESET_REQUIRED;
+      option text = STRING_TOKEN(STR_ENABLED),  value = 1, flags = RESET_REQUIRED;
+    endoneof;
+
+    subtitle text = STRING_TOKEN(STR_EMPTY_STRING);
+    subtitle text = STRING_TOKEN(STR_EMPTY_STRING);
+    subtitle text = STRING_TOKEN(STR_EXIT_STRING);
+  endform;
+
+// #include "Platform.hfr"
+#include "MemoryConfig.hfr"
+#include "PcieConfig.hfr"
+#include "UsbConfig.hfr"
+#include "I2cConfig.hfr"
+#include "CpuConfig.hfr"
+// #include "GmacConfig.hfr"
+#include "ComplianceConfig.hfr"
+
+endformset;

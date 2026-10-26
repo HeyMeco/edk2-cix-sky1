@@ -1,0 +1,1210 @@
+[
+  {
+    "name": "radxa",
+    "repo": "https://github.com/radxa/edk2-platforms",
+    "branch": "cix_p1_dev_2026q2",
+    "commit": "14cf7bdcfe1d0e8635a16a25d4209b6e28b18fca",
+    "upstream": "Platform/Radxa",
+    "local": "edk2-project/Platform/Radxa",
+    "summary": {
+      "same": 167,
+      "modified": 8,
+      "removed": 1,
+      "added": 4
+    },
+    "files": {
+      "ACS/acs_waiver.json": {
+        "upstream_blob": "f62deaaeb8c5307660db68a6902003079c179cc4",
+        "status": "same"
+      },
+      "Drivers/AcpiPlatformDxe/AcpiPlatformDxe.c": {
+        "upstream_blob": "9ad3c0273ae1232c2429400ffc61860d1a84305e",
+        "status": "same"
+      },
+      "Drivers/AcpiPlatformDxe/AcpiPlatformDxe.inf": {
+        "upstream_blob": "d13e1a3bdc7652230dc9e6f5be213b507cc3a001",
+        "status": "same"
+      },
+      "Drivers/Logo/Logo.bmp": {
+        "upstream_blob": "2cdf2dca3cc0a1942299ad96a0b7bf6df7c0aedf",
+        "status": "same"
+      },
+      "Drivers/Logo/Logo.idf": {
+        "upstream_blob": "47dbb9c2fe974d6649536ea79450915f50ae9cf7",
+        "status": "same"
+      },
+      "Drivers/Logo/LogoDxe.inf": {
+        "upstream_blob": "70fb40cd15ed131782afeb85ef9e8b2b43ba1f7e",
+        "status": "same"
+      },
+      "Drivers/RTL8126/AArch64/RtkUndiDxe.efi": {
+        "upstream_blob": "709f7627c93e5572c1665dc18e782d8492c75f8e",
+        "status": "same"
+      },
+      "Drivers/RTL8126/License.txt": {
+        "upstream_blob": "63a78a220e1a7a50bb3ab1469c1bc9ea805239ce",
+        "status": "same"
+      },
+      "Drivers/RTL8126/RtkUndiDxe.inf": {
+        "upstream_blob": "bd262b8b3a2206767f1d2eb4c305a8094a5e226b",
+        "status": "same"
+      },
+      "Include/Library/Cs32g051EcLib.h": {
+        "upstream_blob": "ee9952fd19030b326682d9f1e13a7c72778aefce",
+        "status": "same"
+      },
+      "Include/Library/PdEcLib.h": {
+        "upstream_blob": "0b83cca6ac76354947455b7e54f9aa66ff02471c",
+        "status": "same"
+      },
+      "Include/PlatformInfoTypes.h": {
+        "upstream_blob": "1619cc2ff1b1b15f0d601952411f83676c89180c",
+        "status": "same"
+      },
+      "Library/ArmPsciResetSystemLib/ArmPsciResetSystemLib.c": {
+        "upstream_blob": "bc41d2b66ae3cc53a0a1660eae3e32b62d0c42f6",
+        "status": "same"
+      },
+      "Library/ArmPsciResetSystemLib/ArmPsciResetSystemLib.inf": {
+        "upstream_blob": "3fb16311a49e50a55dd8e8a70eba55e005e8b1dd",
+        "status": "same"
+      },
+      "Library/Cs32g051EcLib/Cs32g051EcLib.c": {
+        "upstream_blob": "6046fe3113320d209ff613b94de93909f8926600",
+        "status": "same"
+      },
+      "Library/Cs32g051EcLib/Cs32g051EcLib.inf": {
+        "upstream_blob": "dfdb62cb0ff453e348912d044f4f00987086b7d8",
+        "status": "same"
+      },
+      "Library/Cs32g051PdLib/Cs32g051PdLib.c": {
+        "upstream_blob": "7cdac1f1d76a2076fcfafcff51087aa2e89e1b29",
+        "status": "same"
+      },
+      "Library/Cs32g051PdLib/Cs32g051PdLib.inf": {
+        "upstream_blob": "9cc41afdd7efb737c5b8dd6c6b644c8ecb6ae1ef",
+        "status": "same"
+      },
+      "Library/Hym8563RealTimeClockLib/Hym8563RealTimeClockLib.c": {
+        "upstream_blob": "bf3a1e55992d43dc89630bcbc2260fc2ff47e784",
+        "status": "same"
+      },
+      "Library/Hym8563RealTimeClockLib/Hym8563RealTimeClockLib.dec": {
+        "upstream_blob": "762dd8f9a761f1a308f9322a5bbf13ec4f96d55f",
+        "status": "same"
+      },
+      "Library/Hym8563RealTimeClockLib/Hym8563RealTimeClockLib.inf": {
+        "upstream_blob": "115d4df5edfb2821bb322a178ee47764040c4cf5",
+        "status": "same"
+      },
+      "Library/PdEcLibNull/PdEcLibNull.c": {
+        "upstream_blob": "b3534ab0ed253863a77ca0bebe2245ba2b1d1e76",
+        "status": "same"
+      },
+      "Library/PdEcLibNull/PdEcLibNull.inf": {
+        "upstream_blob": "0e7ef650f1b614f13b8b7b7dd99718cb6a77fbb8",
+        "status": "same"
+      },
+      "Orion/O6/DeviceTree/DeviceTree.inf": {
+        "upstream_blob": "8a1d68d52b3384727d20ff792d471e549a976771",
+        "status": "same"
+      },
+      "Orion/O6/DeviceTree/sky1-orion-o6.dtb": {
+        "upstream_blob": "1e1e177bc3b7557733540e5adfd41a53bbe5348f",
+        "status": "same"
+      },
+      "Orion/O6/Drivers/AcpiPlatfomTables/AcpiPlatfomTables.inf": {
+        "upstream_blob": "6fdc2eb70d51e588317079b807afcbb4036475d6",
+        "status": "same"
+      },
+      "Orion/O6/Drivers/AcpiPlatfomTables/Audio.asl": {
+        "upstream_blob": "61c1b24ba000ad71053bb166dbf8954628979e7e",
+        "status": "same"
+      },
+      "Orion/O6/Drivers/AcpiPlatfomTables/CdnsPciePwr.asl": {
+        "upstream_blob": "4d6dad76d40c45e815e1e7c7bccc97159ebf1896",
+        "status": "same"
+      },
+      "Orion/O6/Drivers/AcpiPlatfomTables/EC.asl": {
+        "upstream_blob": "9b11322cafa38735b84490d9c7e81452a81f55ed",
+        "status": "modified"
+      },
+      "Orion/O6/Drivers/AcpiPlatfomTables/EfiRtc.asl": {
+        "upstream_blob": "45d55458af9aa84796638739e83e99f7ac27acd5",
+        "status": "same"
+      },
+      "Orion/O6/Drivers/AcpiPlatfomTables/Gpio.h": {
+        "upstream_blob": "6081f506dd581e57a0ecb7e7c84d1449d9a8c230",
+        "status": "same"
+      },
+      "Orion/O6/Drivers/AcpiPlatfomTables/GpioInt.asl": {
+        "upstream_blob": "0b2c27be0ed66c406f5c8ee1cc1d5fd8edc19120",
+        "status": "modified"
+      },
+      "Orion/O6/Drivers/AcpiPlatfomTables/GpioLeds.asl": {
+        "upstream_blob": "45d153a1d36d11966cfa46ae77420b2cded40896",
+        "status": "same"
+      },
+      "Orion/O6/Drivers/AcpiPlatfomTables/GpioLines.asl": {
+        "upstream_blob": "7e1c95f6ec27bdf8fba2e151913aa72c5a4bc23d",
+        "status": "same"
+      },
+      "Orion/O6/Drivers/AcpiPlatfomTables/HardwareMonitor.asl": {
+        "upstream_blob": "e57672769fd32b90d9f24368b115b03f9da34719",
+        "status": "modified"
+      },
+      "Orion/O6/Drivers/AcpiPlatfomTables/I2cPD.asl": {
+        "upstream_blob": "b43659a9c84f6b724c246d95f5aa31381e632090",
+        "status": "same"
+      },
+      "Orion/O6/Drivers/AcpiPlatfomTables/MipiCamera.asl": {
+        "upstream_blob": "c7fe7762fb5adc1a3d75da22fcd0a438ab2058f0",
+        "status": "same"
+      },
+      "Orion/O6/Drivers/AcpiPlatfomTables/RadxaO6Iomux.asl": {
+        "upstream_blob": "d8d708f2aeda7691b286a82fd6988a4efb9e5627",
+        "status": "same"
+      },
+      "Orion/O6/Drivers/AcpiPlatfomTables/Ssdt.asl": {
+        "upstream_blob": "9b9c3679bf4d168de0c5983026a7fb1af5c01082",
+        "status": "same"
+      },
+      "Orion/O6/Drivers/AcpiPlatfomTables/UsbPwr.asl": {
+        "upstream_blob": "9393b3d9d760fb1aeb4b238a2112d9943591cbad",
+        "status": "same"
+      },
+      "Orion/O6/Drivers/AcpiPlatfomTables/Wireless.asl": {
+        "upstream_blob": "b1bd0ffbdd194c0a0e09d7bd946fa5ea7f5b9257",
+        "status": "same"
+      },
+      "Orion/O6/Drivers/LinuxAcpiConfig.h": {
+        "upstream_blob": "bd5e036d24b945a65ab4211dc951409ea19406f9",
+        "status": "same"
+      },
+      "Orion/O6/Drivers/PlatformSmbios/PlatformSmbios.c": {
+        "upstream_blob": "dc76eec7850d35acec456d274a20f2ef93987bc7",
+        "status": "same"
+      },
+      "Orion/O6/Drivers/PlatformSmbios/PlatformSmbios.h": {
+        "upstream_blob": "8df319c6444474435ba8befb00bd5fa380539e1d",
+        "status": "same"
+      },
+      "Orion/O6/Drivers/PlatformSmbios/PlatformSmbios.inf": {
+        "upstream_blob": "a6a6069239584689aab742f746c6238ee52cc82c",
+        "status": "same"
+      },
+      "Orion/O6/Drivers/PlatformSmbios/SmbiosType0.c": {
+        "upstream_blob": "7ca979048dc216116d01bef8cbf0a600dc5e0410",
+        "status": "same"
+      },
+      "Orion/O6/Drivers/PlatformSmbios/SmbiosType1.c": {
+        "upstream_blob": "ed3e2e93632236d7239380b7839d49ca015e251d",
+        "status": "same"
+      },
+      "Orion/O6/Drivers/PlatformSmbios/SmbiosType2.c": {
+        "upstream_blob": "6d2f829f103a31ca76868a85cc0d34127bfa0a3e",
+        "status": "same"
+      },
+      "Orion/O6/Drivers/PlatformSmbios/SmbiosType3.c": {
+        "upstream_blob": "225bb35eb08e967a13ab756b4bc154e3bda677e7",
+        "status": "same"
+      },
+      "Orion/O6/Drivers/PlatformSmbios/SmbiosType32.c": {
+        "upstream_blob": "2b29ecfef9ce3c770df2c5143842b5ec11d3ce5c",
+        "status": "same"
+      },
+      "Orion/O6/Firmwares/ec_fw.bin": {
+        "upstream_blob": "c33561216329e31ded6196e1d6d0b615c880c0f1",
+        "status": "removed"
+      },
+      "Orion/O6/Library/PlatformConfigParamsHookLib/Hym8563.h": {
+        "upstream_blob": "15a90a80bb42f5055375d586af979608c16b2587",
+        "status": "same"
+      },
+      "Orion/O6/Library/PlatformConfigParamsHookLib/PlatformConfigParamsHookLib.c": {
+        "upstream_blob": "00c7909828a1ca6d63e6363a0ac14a6b28a85151",
+        "status": "same"
+      },
+      "Orion/O6/Library/PlatformConfigParamsHookLib/PlatformConfigParamsHookLib.inf": {
+        "upstream_blob": "cd80f17bfeba52c6eb979309f427aa47f82e5a37",
+        "status": "same"
+      },
+      "Orion/O6/Library/PlatformEnvHookLib/PlatformEnvHookLib.c": {
+        "upstream_blob": "ac79cad1ab35e44500faf63bb8525aff32447ed6",
+        "status": "same"
+      },
+      "Orion/O6/Library/PlatformEnvHookLib/PlatformEnvHookLib.inf": {
+        "upstream_blob": "9197b98d98aa45d1580e3cd3164bd53ee75d1b56",
+        "status": "same"
+      },
+      "Orion/O6/O6.dsc": {
+        "upstream_blob": "661916437c1b250778c8c7c1d026fc524494b2b6",
+        "status": "modified"
+      },
+      "Orion/O6/O6.fdf": {
+        "upstream_blob": "ed857c593a722c679a52e6e36a1c35f67f72b5ac",
+        "status": "same"
+      },
+      "Orion/O6/mem_config/Makefile": {
+        "upstream_blob": "29fdcca85bdc5a5c47230ae4b966f173eb67b33d",
+        "status": "same"
+      },
+      "Orion/O6/mem_config/MemConfigBinLayout.h": {
+        "upstream_blob": "18799d9b4cbf6fd9796de7b4449054f787672353",
+        "status": "same"
+      },
+      "Orion/O6/mem_config/MemConfigBinTool.c": {
+        "upstream_blob": "2be5b515e10a9d537286bbf32b87cf596030f34d",
+        "status": "same"
+      },
+      "Orion/O6/mem_config/RS600/GlobalConfig.c": {
+        "upstream_blob": "5c5e9b9a6ac1827d55a9aead3894cc31eda107bf",
+        "status": "same"
+      },
+      "Orion/O6/mem_config/default/BoardIdMap.c": {
+        "upstream_blob": "30d856f81b7c3d377a67fbcf980fdc91fac01b68",
+        "status": "same"
+      },
+      "Orion/O6/mem_config/default/GlobalConfig.c": {
+        "upstream_blob": "770f77ad70eaae916fcfb9e11cb58729f42d387b",
+        "status": "same"
+      },
+      "Orion/O6/mem_config/default/MemBiosSetup.c": {
+        "upstream_blob": "3cd30551f2d5b0235cc09e95759a7193e52c9fa7",
+        "status": "same"
+      },
+      "Orion/O6/mem_config/default/MemDqSwap.c": {
+        "upstream_blob": "89ce327243c9f6788fd3d76b556d99d90c9223bf",
+        "status": "same"
+      },
+      "Orion/O6/mem_config/default/MemFeatures.c": {
+        "upstream_blob": "ed47a4ac354e39e911c5f5a10f701311e227aa26",
+        "status": "same"
+      },
+      "Orion/O6/mem_config/default/MemLpddr5BusCfg.c": {
+        "upstream_blob": "f9e3c90c78e722acc51656f2e83b6f6bad599808",
+        "status": "same"
+      },
+      "Orion/O6/mem_config/default/MemPhyPadCfg.c": {
+        "upstream_blob": "177fa464b1e902bd8817fd7333d5c31b20ded2b9",
+        "status": "same"
+      },
+      "Orion/O6/mem_config/default/MemTraceLenDiff.c": {
+        "upstream_blob": "c3124d46012207341466bfc837514c96a5d3c77a",
+        "status": "same"
+      },
+      "Orion/O6/mem_config/default/MemTrainOptimize.c": {
+        "upstream_blob": "edbdfbcab5be9fddf3efdcfc87d3d8abd2f76e84",
+        "status": "same"
+      },
+      "Orion/O6/mem_config/default/QuickConfig.c": {
+        "upstream_blob": "aa7d3fb4e8fbf12059c009c36a45d69e0edf00ad",
+        "status": "same"
+      },
+      "Orion/O6/mem_config/include/BoardConfig.h": {
+        "upstream_blob": "03b795ab1345a24efffb1f5237b316e0dfcd92b6",
+        "status": "same"
+      },
+      "Orion/O6/mem_config/include/MemConfigBinTool.h": {
+        "upstream_blob": "1e919c25943375ef36d24a945384ff8fc7f481dd",
+        "status": "same"
+      },
+      "Orion/O6/mem_config/include/MemConfigurationTable.h": {
+        "upstream_blob": "d79483714ccc532600c32d41745548364655ea48",
+        "status": "same"
+      },
+      "Orion/O6/pm_config/Makefile": {
+        "upstream_blob": "e5d5fc487031117f3041fdd3d261a5a6d47d445c",
+        "status": "same"
+      },
+      "Orion/O6/pm_config/MakefileWin": {
+        "upstream_blob": "44fd7db4b2e4cfc960de8ad5d7aea7b2d1e23ddf",
+        "status": "same"
+      },
+      "Orion/O6/pm_config/cfg_dpm_pwrrail.h": {
+        "upstream_blob": "7e2b6c2906278d286969259b16d113557a8c3827",
+        "status": "same"
+      },
+      "Orion/O6/pm_config/csupm_bin_config.c": {
+        "upstream_blob": "d56e82c99abce2652f52ebf03dd7b78f242a75d3",
+        "status": "modified"
+      },
+      "Orion/O6/pm_config/opp_config.h": {
+        "upstream_blob": "0d93d1811d456af30311736e0090a1465682146b",
+        "status": "same"
+      },
+      "Orion/O6/pm_config/opp_config_custom.h": {
+        "upstream_blob": "6ff39e8cec9a8a6b64e2f8c997da1b2d92059dd6",
+        "status": "same"
+      },
+      "Orion/O6/pm_config/pm_export_config.h": {
+        "upstream_blob": "1861c77704d90b49c0786e4c19971e75b86c4b26",
+        "status": "same"
+      },
+      "Orion/O6/pm_config/user_config.h": {
+        "upstream_blob": "dae7d26f2d578476a18281a148829ff2298fb38c",
+        "status": "same"
+      },
+      "Orion/O6/spi_flash_config_all.json": {
+        "upstream_blob": null,
+        "status": "added"
+      },
+      "Orion/O6/spi_flash_config_ota.json": {
+        "upstream_blob": null,
+        "status": "added"
+      },
+      "Orion/O6N/Drivers/AcpiPlatfomTables/40Pin-I2s.asl": {
+        "upstream_blob": "f8ae77d0f7d85716b7ae2cbb1b5311a349efe3ce",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/AcpiPlatfomTables/AcpiPlatfomTables.inf": {
+        "upstream_blob": "ae9263933674666f078fe113ad789f36acf200f3",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/AcpiPlatfomTables/Audio.asl": {
+        "upstream_blob": "2bbb85836b25ee63ea6b4935de83acb83358b204",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/AcpiPlatfomTables/CdnsPciePwr.asl": {
+        "upstream_blob": "0352627dce32e37b16444fbde2d771dd0ba8cdf8",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/AcpiPlatfomTables/EEPROM.asl": {
+        "upstream_blob": "f4d07b1303c23d73d96d1c18dc53eaa4b969e41b",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/AcpiPlatfomTables/EfiRtc.asl": {
+        "upstream_blob": "2b46520a1bff36f3d78b6dc036ccc81ae94a812b",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/AcpiPlatfomTables/Gpio.h": {
+        "upstream_blob": "6081f506dd581e57a0ecb7e7c84d1449d9a8c230",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/AcpiPlatfomTables/GpioBtns.asl": {
+        "upstream_blob": "b1078e0aa3863dea35f3c603b717490663d166ac",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/AcpiPlatfomTables/GpioInt.asl": {
+        "upstream_blob": "8e3675debdcc68a557587e8d2c7b69747947a973",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/AcpiPlatfomTables/GpioLeds.asl": {
+        "upstream_blob": "1d8e057c32017b530007cde706116d6e3f6dbf53",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/AcpiPlatfomTables/GpioLines.asl": {
+        "upstream_blob": "92cf5f5c3a9bae2b46c0070d89b587a3e88423eb",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/AcpiPlatfomTables/I2cPD.asl": {
+        "upstream_blob": "a6b7352b5c9f534ee0f3dc0debb15ff514b97bce",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/AcpiPlatfomTables/Iomux.asl.template": {
+        "upstream_blob": "c7485e74db0a16302e6e446f251c0989ebe76d37",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/AcpiPlatfomTables/MipiCamera.asl": {
+        "upstream_blob": "42b60334f084b04ed039315391b13c9a42c7f6bb",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/AcpiPlatfomTables/Ssdt.asl": {
+        "upstream_blob": "be480593b3c112894bde00daf07373a57ac8b08a",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/AcpiPlatfomTables/TPM.asl": {
+        "upstream_blob": "f1c4aa3b89c6043272b5a474f8af2cfbf41a7123",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/AcpiPlatfomTables/UsbPwr.asl": {
+        "upstream_blob": "763adff07e1224006f087e45bbeb5c92006436a5",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/AcpiPlatfomTables/Wireless.asl": {
+        "upstream_blob": "70be7e96486c4daf41257459b4dad38853d226f4",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/LinuxAcpiConfig.h": {
+        "upstream_blob": "793023a41a39cce1bbc996f414d262b13c62315d",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/PlatformSmbios/PlatformSmbios.c": {
+        "upstream_blob": "dc76eec7850d35acec456d274a20f2ef93987bc7",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/PlatformSmbios/PlatformSmbios.h": {
+        "upstream_blob": "88344896cb026271e99de2f6de28b7fff38ba2c4",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/PlatformSmbios/PlatformSmbios.inf": {
+        "upstream_blob": "e203bdd90911c12633e48e7918004ea00b3070e8",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/PlatformSmbios/SmbiosType0.c": {
+        "upstream_blob": "7ca979048dc216116d01bef8cbf0a600dc5e0410",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/PlatformSmbios/SmbiosType1.c": {
+        "upstream_blob": "cd9cd2309ddaca78ff212f93ec8931d0888ae93b",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/PlatformSmbios/SmbiosType2.c": {
+        "upstream_blob": "162dab3ac23675d15a8728807d890a4419332a35",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/PlatformSmbios/SmbiosType3.c": {
+        "upstream_blob": "225bb35eb08e967a13ab756b4bc154e3bda677e7",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/PlatformSmbios/SmbiosType32.c": {
+        "upstream_blob": "2b29ecfef9ce3c770df2c5143842b5ec11d3ce5c",
+        "status": "same"
+      },
+      "Orion/O6N/Drivers/PlatformSmbios/SmbiosType45.c": {
+        "upstream_blob": "e6a022bf2d283d2087b29a3e7e409162b4fde12e",
+        "status": "same"
+      },
+      "Orion/O6N/Library/PlatformConfigParamsHookLib/Hym8563.h": {
+        "upstream_blob": "15a90a80bb42f5055375d586af979608c16b2587",
+        "status": "same"
+      },
+      "Orion/O6N/Library/PlatformConfigParamsHookLib/PlatformConfigParamsHookLib.c": {
+        "upstream_blob": "e26becfa0964f925201a90fbb4c13e21d3fabc48",
+        "status": "same"
+      },
+      "Orion/O6N/Library/PlatformConfigParamsHookLib/PlatformConfigParamsHookLib.inf": {
+        "upstream_blob": "810b0578e8c4e2407120a9f3b46039972070faad",
+        "status": "same"
+      },
+      "Orion/O6N/Library/PlatformEnvHookLib/PlatformEnvHookLib.c": {
+        "upstream_blob": "54eb5049673b12158c42a1920b20608f7a926783",
+        "status": "same"
+      },
+      "Orion/O6N/Library/PlatformEnvHookLib/PlatformEnvHookLib.inf": {
+        "upstream_blob": "e1f63db9365a1a1fd98fbfd634b6592d7af1c486",
+        "status": "same"
+      },
+      "Orion/O6N/O6N.dsc": {
+        "upstream_blob": "256c492f397a7729fefac06e3e71213b932de485",
+        "status": "modified"
+      },
+      "Orion/O6N/O6N.fdf": {
+        "upstream_blob": "d52612ed3291d0bce8bc473871999c056f4d8d72",
+        "status": "same"
+      },
+      "Orion/O6N/mem_config/Makefile": {
+        "upstream_blob": "9e19c4387ed83293ee123fd9aa8e8e93805c7aae",
+        "status": "same"
+      },
+      "Orion/O6N/mem_config/MemConfigBinLayout.h": {
+        "upstream_blob": "02f9287d7bc3bcfac29aca6a0b03de7986c81402",
+        "status": "same"
+      },
+      "Orion/O6N/mem_config/MemConfigBinTool.c": {
+        "upstream_blob": "98da754b8ea31379000e6fa925335ce1bc9c0f23",
+        "status": "same"
+      },
+      "Orion/O6N/mem_config/RS600/GlobalConfig.c": {
+        "upstream_blob": "c9d61acd06e8156233eec6b92698828236c50f6d",
+        "status": "same"
+      },
+      "Orion/O6N/mem_config/default/BoardIdGetMethod.c": {
+        "upstream_blob": "1935979cf9c9820e0f15d3c8436c6ba73632ebb3",
+        "status": "same"
+      },
+      "Orion/O6N/mem_config/default/GlobalConfig.c": {
+        "upstream_blob": "ad5f25d13e6c2cca6986188a4526cf951f046e2c",
+        "status": "same"
+      },
+      "Orion/O6N/mem_config/default/MemBiosSetup.c": {
+        "upstream_blob": "0c2e9e6041bf0fffd2b1bd5b1a42a175d243ebb6",
+        "status": "same"
+      },
+      "Orion/O6N/mem_config/default/MemDqSwap.c": {
+        "upstream_blob": "dab69733e905f2e49288ca3429aaa02c32da1df5",
+        "status": "same"
+      },
+      "Orion/O6N/mem_config/default/MemFeatures.c": {
+        "upstream_blob": "863e93e7ddd08a71993273702d8609bc4c1ca89d",
+        "status": "same"
+      },
+      "Orion/O6N/mem_config/default/MemLpddr5BusCfg.c": {
+        "upstream_blob": "70a9607e691d444ecc877bb015220929723c0be2",
+        "status": "same"
+      },
+      "Orion/O6N/mem_config/default/MemPhyPadCfg.c": {
+        "upstream_blob": "d366a19ce539fa4d109c147cffea045364a22cfc",
+        "status": "same"
+      },
+      "Orion/O6N/mem_config/default/MemTraceLenDiff.c": {
+        "upstream_blob": "60b952ea6a76ba8a2a7bb7b5722464bda97d5556",
+        "status": "same"
+      },
+      "Orion/O6N/mem_config/default/MemTrainOptimize.c": {
+        "upstream_blob": "6c6a9532e67c89830dbc42a62374174404d1c971",
+        "status": "same"
+      },
+      "Orion/O6N/mem_config/default/QuickConfig.c": {
+        "upstream_blob": "f5872e8db17f97bf007a3f6e042eac017f6add4b",
+        "status": "same"
+      },
+      "Orion/O6N/mem_config/include/BoardConfig.h": {
+        "upstream_blob": "55f10f4df4462535d92be429804b3f5105201a2c",
+        "status": "same"
+      },
+      "Orion/O6N/mem_config/include/MemConfigBinTool.h": {
+        "upstream_blob": "c6aeb71e32e971d37dba0e9c2d22873c958df942",
+        "status": "same"
+      },
+      "Orion/O6N/mem_config/include/MemConfigurationTable.h": {
+        "upstream_blob": "d79483714ccc532600c32d41745548364655ea48",
+        "status": "same"
+      },
+      "Orion/O6N/pm_config/Makefile": {
+        "upstream_blob": "802193c986248e202b446c3d232f3eb48fa2a404",
+        "status": "same"
+      },
+      "Orion/O6N/pm_config/MakefileWin": {
+        "upstream_blob": "44fd7db4b2e4cfc960de8ad5d7aea7b2d1e23ddf",
+        "status": "same"
+      },
+      "Orion/O6N/pm_config/cfg_dpm_pwrrail.h": {
+        "upstream_blob": "7e2b6c2906278d286969259b16d113557a8c3827",
+        "status": "same"
+      },
+      "Orion/O6N/pm_config/csupm_bin_config.c": {
+        "upstream_blob": "ad8d9eda0ea27cf4de6fe1d6ab00119f3ad50d52",
+        "status": "modified"
+      },
+      "Orion/O6N/pm_config/opp_config.h": {
+        "upstream_blob": "0d93d1811d456af30311736e0090a1465682146b",
+        "status": "same"
+      },
+      "Orion/O6N/pm_config/opp_config_custom.h": {
+        "upstream_blob": "6ff39e8cec9a8a6b64e2f8c997da1b2d92059dd6",
+        "status": "same"
+      },
+      "Orion/O6N/pm_config/pm_export_config.h": {
+        "upstream_blob": "1861c77704d90b49c0786e4c19971e75b86c4b26",
+        "status": "same"
+      },
+      "Orion/O6N/pm_config/user_config.h": {
+        "upstream_blob": "ef80d483c381db1b6af0bcad8e4f4fc4468cc5d2",
+        "status": "same"
+      },
+      "Orion/O6N/spi_flash_config_all.json": {
+        "upstream_blob": null,
+        "status": "added"
+      },
+      "Orion/O6N/spi_flash_config_ota.json": {
+        "upstream_blob": null,
+        "status": "added"
+      },
+      "Platforms/CIX/Sky1/Drivers/FirmwareConfigUpdateDxe/FirmwareConfigUpdateDxe.c": {
+        "upstream_blob": "a7b1d127c2f53edcbccc984a69d47d4321db8133",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/FirmwareConfigUpdateDxe/FirmwareConfigUpdateDxe.h": {
+        "upstream_blob": "aeedeba741ced2dc7b9fd348b4761c052d11d0e6",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/FirmwareConfigUpdateDxe/FirmwareConfigUpdateDxe.inf": {
+        "upstream_blob": "4fad12b99579c5e3b96593143a0eb4d6a7f025d0",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/PlatformConfigDxe/ComplianceMenu/ComplianceConfig.hfr": {
+        "upstream_blob": "d0a2ff6307dad3fa969b88508573894c7517ca2a",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/PlatformConfigDxe/ComplianceMenu/ComplianceConfig.uni": {
+        "upstream_blob": "964dfe71b760cd04f4c8242cc4199e96aed82ada",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/PlatformConfigDxe/PlatformConfigDxe.c": {
+        "upstream_blob": "8594b12048af9e2f9cf89cc7ce3e722c6d39b854",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/PlatformConfigDxe/PlatformConfigDxe.dec": {
+        "upstream_blob": "35121c0eb05c0b5b802b02bf75fb7d8c47c29f11",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/PlatformConfigDxe/PlatformConfigDxe.h": {
+        "upstream_blob": "5e50ac1924b0f24789a08ea6ce994bae813c38f4",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/PlatformConfigDxe/PlatformConfigDxe.inf": {
+        "upstream_blob": "ab644651aa3611c6056dd2e5dce36eb06c3ad929",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/PlatformConfigDxe/PlatformConfigHii.h": {
+        "upstream_blob": "23681701df120d91c709a37129726b6188c7c8bc",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/PlatformConfigDxe/PlatformConfigHii.uni": {
+        "upstream_blob": "88b21e36807c40c76eed308a10f20cfc4d7070eb",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/PlatformConfigDxe/PlatformConfigHii.vfr": {
+        "upstream_blob": "6acfe6944d8fdd2701c936e91e9fc7469b68748e",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/RadxaSetupVariableInitDxe/RadxaSetupVariableInitDxe.c": {
+        "upstream_blob": "1e372aa0b96ef41f8d01472fb3fd5c7889ca1753",
+        "status": "modified"
+      },
+      "Platforms/CIX/Sky1/Drivers/RadxaSetupVariableInitDxe/RadxaSetupVariableInitDxe.inf": {
+        "upstream_blob": "962ab2e9996d918da57681baaa676f044e58fbf0",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/SeConfigUpdateDxe/SeConfigSetupVar.h": {
+        "upstream_blob": "f05c08f4c9d7732e5f82c783c73fa505ec851976",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/SeConfigUpdateDxe/SeConfigUpdateDxe.c": {
+        "upstream_blob": "1b978a8f93bfc0d0e4928b678c1bf227a84771a6",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/SeConfigUpdateDxe/SeConfigUpdateDxe.h": {
+        "upstream_blob": "e691e7a524a6462a026382c5a24689df7325cd1a",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/SeConfigUpdateDxe/SeConfigUpdateDxe.inf": {
+        "upstream_blob": "69e0e82442cb98419b47ce13b426508c6a5a7a7f",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/SeConfigUpdateDxe/SeConfigUpdateHii.uni": {
+        "upstream_blob": "91b61aaf747965a7d029696a0f5114a1d7ebae11",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/SeConfigUpdateDxe/SeConfigUpdateHii.vfr": {
+        "upstream_blob": "f81c0a7b556e2b484413fa6d8cd98ad630258daf",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/SystemInfoDxe/SystemInfoDxe.c": {
+        "upstream_blob": "93786ca16ea191b6ae0a2030411cadf70fc66692",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/SystemInfoDxe/SystemInfoDxe.h": {
+        "upstream_blob": "1f7c9cb5f0264b3dc0c7fb8de809469410795b02",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/SystemInfoDxe/SystemInfoDxe.inf": {
+        "upstream_blob": "ef928a706307200fb71df60c0063f80abeb1032b",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/SystemInfoDxe/SystemInfoHii.h": {
+        "upstream_blob": "d1ced70a757b92368a2a28979665675d0d8a9b10",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/SystemInfoDxe/SystemInfoHii.uni": {
+        "upstream_blob": "ed3106601e445a3f4e28e778a0af6ffbe732de6a",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Drivers/SystemInfoDxe/SystemInfoHii.vfr": {
+        "upstream_blob": "6bf46175f0cb552f3288ec9a042b4fd63bae585d",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Include/RadxaSetupVar.h": {
+        "upstream_blob": "73f4be016d1c04b3afd2af3307d32d1303974643",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Sky1Common.dsc.inc": {
+        "upstream_blob": "19fb191506b26535bf2eea5fc83fe7eed2b3f3ed",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Sky1Common.fdf.inc": {
+        "upstream_blob": "5fc0ede7ef1664e0453823461d7a87dbd2e276f9",
+        "status": "same"
+      },
+      "Platforms/CIX/Sky1/Sky1Define.dsc.inc": {
+        "upstream_blob": "94812c5c151c2d46eddf9f3194e159ec0a0340f7",
+        "status": "same"
+      },
+      "Radxa.dec": {
+        "upstream_blob": "59594e7f32ce00af978b22f530752d7acdc16a2b",
+        "status": "same"
+      },
+      "RadxaCommon.dsc.inc": {
+        "upstream_blob": "81b2138d8992690c6b1aa4b2a9e87268b47e1dce",
+        "status": "same"
+      },
+      "RadxaDefine.dsc.inc": {
+        "upstream_blob": "cc2f20925c28335c6b39c80e92b68b09c3e33aaf",
+        "status": "same"
+      }
+    }
+  },
+  {
+    "name": "minisforum",
+    "repo": "https://github.com/minisforum-cix-p1-repo/cix_opensource__release__edk2-platforms",
+    "branch": "a0fb5/5cf6e/cix_p1_mg_mp_dev",
+    "commit": "119ae9cc84abade22a48081ec3aa11eb8ee6e74a",
+    "upstream": "Platform/CIX/Sky1/MGP1WSB",
+    "local": "edk2-project/Platform/CIX/Sky1/MGP1WSB",
+    "summary": {
+      "same": 85,
+      "modified": 24,
+      "removed": 4,
+      "added": 1
+    },
+    "files": {
+      "ACPI/AcpiPlatfomTables/AcpiPlatfomTables.inf": {
+        "upstream_blob": "0f4bac2bd4f029a183c0eaf19766b929db4ce2b5",
+        "status": "same"
+      },
+      "ACPI/AcpiPlatfomTables/Audio.asl": {
+        "upstream_blob": "d89ce241e9ca79c0e2fd643a6e2c9ed0988f18de",
+        "status": "same"
+      },
+      "ACPI/AcpiPlatfomTables/CdnsPciePwr.asl": {
+        "upstream_blob": "6b43b72501849fe2444fcb64059c139960e903f4",
+        "status": "same"
+      },
+      "ACPI/AcpiPlatfomTables/CixWmi.asl": {
+        "upstream_blob": "12855f705e731822ebfa097ff163ed5e1bc25b15",
+        "status": "same"
+      },
+      "ACPI/AcpiPlatfomTables/CixWmi.inc": {
+        "upstream_blob": "e132deccfd7d8211541f87be6acd660cc3e40388",
+        "status": "same"
+      },
+      "ACPI/AcpiPlatfomTables/CixWmi.mof": {
+        "upstream_blob": "2859dbfa65d8742925af6ce3e9963d8a81def8f0",
+        "status": "same"
+      },
+      "ACPI/AcpiPlatfomTables/Dtpm.asl": {
+        "upstream_blob": "99e2252c32eba6e1bace11fb1ac2e7264e11fdf8",
+        "status": "same"
+      },
+      "ACPI/AcpiPlatfomTables/EC.asl": {
+        "upstream_blob": "19c4dde8c0fa255283ce87b73619d4b92a690ed4",
+        "status": "same"
+      },
+      "ACPI/AcpiPlatfomTables/HardwareMonitor.asl": {
+        "upstream_blob": "615c96bb4d2935c264f18980e18db6536a143602",
+        "status": "same"
+      },
+      "ACPI/AcpiPlatfomTables/I2cHid.asl": {
+        "upstream_blob": "8e8121dcf9b8606385980141ba5c620e973070fb",
+        "status": "same"
+      },
+      "ACPI/AcpiPlatfomTables/I2cPD.asl": {
+        "upstream_blob": "72d59d02c49526d9ec8dcd2dc7a7aab9b85ec943",
+        "status": "modified"
+      },
+      "ACPI/AcpiPlatfomTables/Iomux.asl": {
+        "upstream_blob": "56636aebbd84aa48b5d6b65518c408c3091b36b6",
+        "status": "same"
+      },
+      "ACPI/AcpiPlatfomTables/MipiCamera.asl": {
+        "upstream_blob": "82ed7dc6c113a93ec9a10e0b67b4590a48df7201",
+        "status": "same"
+      },
+      "ACPI/AcpiPlatfomTables/Platform.asl": {
+        "upstream_blob": "0c7204006d3786dc6df3681b5777aa8ab6c761ed",
+        "status": "same"
+      },
+      "ACPI/AcpiPlatfomTables/Rtc.asl": {
+        "upstream_blob": "a9f3ff0fe2878d7869fd75bce8a86fad1f3602a3",
+        "status": "same"
+      },
+      "ACPI/AcpiPlatfomTables/Sensor.asl": {
+        "upstream_blob": "766d41cdee94b5ffd44a1dc07cd638d7a36a1caf",
+        "status": "same"
+      },
+      "ACPI/AcpiPlatfomTables/Spi.asl": {
+        "upstream_blob": "e915ab2c0cd6d479b49f05661eac5c2936400c0a",
+        "status": "same"
+      },
+      "ACPI/AcpiPlatfomTables/Ssdt.asl": {
+        "upstream_blob": "60576285e8bcb2df4bdb82c3905c71fa3d4d76b5",
+        "status": "same"
+      },
+      "ACPI/AcpiPlatfomTables/Wlan.asl": {
+        "upstream_blob": "1e42dfd7bf1bcafe358fed16a9474fe0916f21fe",
+        "status": "same"
+      },
+      "ACPI/AcpiPlatfomTables/Wol.asl": {
+        "upstream_blob": "cf295f1f106a8a1174f57ffa470150b785ba1e93",
+        "status": "same"
+      },
+      "ACPI/AcpiPlatformDxe/AcpiPlatformDxe.c": {
+        "upstream_blob": "558b7e09a75855ee9c7134256ac331b8985784d4",
+        "status": "same"
+      },
+      "ACPI/AcpiPlatformDxe/AcpiPlatformDxe.inf": {
+        "upstream_blob": "794b66e6e15681ae1fa8377dd4c31525c1d23d31",
+        "status": "same"
+      },
+      "ACPI/LinuxAcpiConfig.h": {
+        "upstream_blob": "adcf3d545c9b595ea6cc96d72858ecccfc6bbdd3",
+        "status": "same"
+      },
+      "Drivers/Logo/Logo.bmp": {
+        "upstream_blob": "1d3ebef859486c8d76f2134910ff69087083732b",
+        "status": "same"
+      },
+      "Drivers/Logo/Logo.c": {
+        "upstream_blob": "24dd73131fad54b48714832d633ed38775dad9e9",
+        "status": "same"
+      },
+      "Drivers/Logo/Logo.idf": {
+        "upstream_blob": "1f79332020d532fb82671c881f46577e9453306a",
+        "status": "same"
+      },
+      "Drivers/Logo/Logo.inf": {
+        "upstream_blob": "099aa6741577c41434c73eaa90cac2592edd5859",
+        "status": "same"
+      },
+      "Drivers/Logo/Logo.uni": {
+        "upstream_blob": "5d65cfc01e4f1bbfd46794c4c4da2748c51cf7ee",
+        "status": "same"
+      },
+      "Drivers/Logo/LogoDxe.inf": {
+        "upstream_blob": "2d1a3baec80d172d53d0c33199b2692acf9d61f8",
+        "status": "same"
+      },
+      "Drivers/Logo/LogoDxe.uni": {
+        "upstream_blob": "2d63874c5adb0b2914cb66d133878176bbaa0e0f",
+        "status": "same"
+      },
+      "Drivers/Logo/LogoDxeExtra.uni": {
+        "upstream_blob": "67487abe92fe1d72db3d215bf2bd47b98b233bec",
+        "status": "same"
+      },
+      "Drivers/Logo/LogoExtra.uni": {
+        "upstream_blob": "fe48aff904e22ad1451927a587ae3677ea835db7",
+        "status": "same"
+      },
+      "Drivers/PlatformSetupVariableInitDxe/PlatformSetupVariableInitDxe.c": {
+        "upstream_blob": "93418ce3a2e94a3ae1ba2b3463e615b310a10c77",
+        "status": "removed"
+      },
+      "Drivers/PlatformSetupVariableInitDxe/PlatformSetupVariableInitDxe.inf": {
+        "upstream_blob": "3ca1c18ad40189c01441809dbcf5d9fd1f48c4c2",
+        "status": "removed"
+      },
+      "Drivers/SetupManagerDxe/CpuMenu/CpuConfig.hfr": {
+        "upstream_blob": "66f95351c6b41a1715ea281e7529cbf17b82daa0",
+        "status": "modified"
+      },
+      "Drivers/SetupManagerDxe/CpuMenu/CpuConfig.uni": {
+        "upstream_blob": "af0fe41dda0035bcf94901add6348ba8b42104d2",
+        "status": "modified"
+      },
+      "Drivers/SetupManagerDxe/GmacMenu/GmacConfig.hfr": {
+        "upstream_blob": "c6e6c8c32f24dc0757a69bbee2ca82647c75aa82",
+        "status": "same"
+      },
+      "Drivers/SetupManagerDxe/GmacMenu/GmacConfig.uni": {
+        "upstream_blob": "5f46c4adc8c24249331a2fc401286b39b0691b57",
+        "status": "same"
+      },
+      "Drivers/SetupManagerDxe/I2cMenu/I2cConfig.hfr": {
+        "upstream_blob": "bd520ba325fdf2e1d3c10469cff25729df3c853f",
+        "status": "same"
+      },
+      "Drivers/SetupManagerDxe/I2cMenu/I2cConfig.uni": {
+        "upstream_blob": "e5b585413718f590347f9ab268b28f444c404bfe",
+        "status": "same"
+      },
+      "Drivers/SetupManagerDxe/MemMenu/MemoryConfig.hfr": {
+        "upstream_blob": "e04078bdf4dc1f4f26393364ee10ae4b2cab4fc8",
+        "status": "modified"
+      },
+      "Drivers/SetupManagerDxe/MemMenu/MemoryConfig.uni": {
+        "upstream_blob": "36db336cec5d7f85291e8d7d187a1ec39fb7be00",
+        "status": "modified"
+      },
+      "Drivers/SetupManagerDxe/PcieMenu/PcieConfig.hfr": {
+        "upstream_blob": "b5b14acdfd3e6157e8c8c4d0f1b36758f880a35b",
+        "status": "modified"
+      },
+      "Drivers/SetupManagerDxe/PcieMenu/PcieConfig.uni": {
+        "upstream_blob": "c5dec22b7ce3bf56402311ec2bfada21acfd1c54",
+        "status": "modified"
+      },
+      "Drivers/SetupManagerDxe/PlatformMenu/Platform.hfr": {
+        "upstream_blob": "ca4dade125896cd08df0ccfa2e06bac8a9cb660f",
+        "status": "modified"
+      },
+      "Drivers/SetupManagerDxe/PlatformMenu/Platform.uni": {
+        "upstream_blob": "87bd754807bb2fac4fc5e49289a717de4f0502fd",
+        "status": "modified"
+      },
+      "Drivers/SetupManagerDxe/SetupManager.c": {
+        "upstream_blob": "54fe6cae6d2314ec06640272b623bd0fd815a7f0",
+        "status": "modified"
+      },
+      "Drivers/SetupManagerDxe/SetupManager.h": {
+        "upstream_blob": "b591d15063d9640f16b7027bbdf09eef270e8e40",
+        "status": "modified"
+      },
+      "Drivers/SetupManagerDxe/SetupManagerDxe.inf": {
+        "upstream_blob": "8f52cded3b051040c3b00208ecd24dd90a0a7c34",
+        "status": "modified"
+      },
+      "Drivers/SetupManagerDxe/SetupManagerFormId.h": {
+        "upstream_blob": "bdf88ae887d7e095fbae33899d431f002f7b7d07",
+        "status": "same"
+      },
+      "Drivers/SetupManagerDxe/SetupManagerStrings.uni": {
+        "upstream_blob": "d85c5ec17f55bc2d63f2a8a95a0c14f52ab61dc4",
+        "status": "modified"
+      },
+      "Drivers/SetupManagerDxe/SetupManagerUiLib.uni": {
+        "upstream_blob": "5217c30f56e280957dfd15de85af72bbd70cf951",
+        "status": "same"
+      },
+      "Drivers/SetupManagerDxe/SetupManagerVfr.Vfr": {
+        "upstream_blob": "8edceef7712eac2bcb33a497cc6977d7df5498ac",
+        "status": "modified"
+      },
+      "Drivers/SetupManagerDxe/UsbMenu/UsbConfig.hfr": {
+        "upstream_blob": "f20097c950870aa0c3c75c1eb74b226412f8a107",
+        "status": "modified"
+      },
+      "Drivers/SetupManagerDxe/UsbMenu/UsbConfig.uni": {
+        "upstream_blob": "3fdf6cb1be21771e36683a4bfad78159da24a056",
+        "status": "modified"
+      },
+      "Firmwares/pm_fw_mg_debug.bin": {
+        "upstream_blob": "c4716edd0ed776dc21e3b0104da5ecb8a17210c4",
+        "status": "removed"
+      },
+      "Firmwares/se_fw_mg_debug.bin": {
+        "upstream_blob": "8ce3e2568c2d23babc8ce5bf1853f14b4fff2684",
+        "status": "removed"
+      },
+      "Library/ArmPsciResetSystemLib/ArmPsciResetSystemLib.c": {
+        "upstream_blob": "cfe475146c31d42c74e062fbf57c5e865763ff50",
+        "status": "same"
+      },
+      "Library/ArmPsciResetSystemLib/ArmPsciResetSystemLib.inf": {
+        "upstream_blob": "5ce1ccd0ed48d1de7951c537eb61eb26c4dd1d75",
+        "status": "same"
+      },
+      "Library/ConfigParamsHookLib/ConfigParamsHookLib.c": {
+        "upstream_blob": "082429d24b4cf26afa3105958e2ea33358777894",
+        "status": "same"
+      },
+      "Library/ConfigParamsHookLib/ConfigParamsHookLib.inf": {
+        "upstream_blob": "8759202c185b8186b0d7e1c27b407216d39f6954",
+        "status": "same"
+      },
+      "Library/GpioTableLib/GpioTableInternal.h": {
+        "upstream_blob": "1cc5b01760dfedd0a5bdc3c1e30a993200493805",
+        "status": "same"
+      },
+      "Library/GpioTableLib/GpioTableLib.c": {
+        "upstream_blob": "2e300b9b45a12d759f2424e7cba6107b201d153d",
+        "status": "same"
+      },
+      "Library/GpioTableLib/GpioTableLib.inf": {
+        "upstream_blob": "e4cf9451ae68f44236e15d6c2bf7aec4b926c94e",
+        "status": "same"
+      },
+      "Library/PinMuxTableLib/PinMuxTableInternal.h": {
+        "upstream_blob": "462ace09973493030b1fc91c3241c98518a34283",
+        "status": "same"
+      },
+      "Library/PinMuxTableLib/PinMuxTableLib.c": {
+        "upstream_blob": "c67659d778f810136350efeae79fd837077945ff",
+        "status": "same"
+      },
+      "Library/PinMuxTableLib/PinMuxTableLib.inf": {
+        "upstream_blob": "029a1b3ad171419c5985401a8337dd85f14aad3b",
+        "status": "same"
+      },
+      "Library/PlatformBootHookLib/PlatformBootHookLib.c": {
+        "upstream_blob": "94083a92972d61f698303c9fe38326c4be966158",
+        "status": "same"
+      },
+      "Library/PlatformBootHookLib/PlatformBootHookLib.inf": {
+        "upstream_blob": "3d0cbffd23d6bc47b5389833df333f2ac0699356",
+        "status": "same"
+      },
+      "Library/PlatformBootManagerLib/PlatformBm.c": {
+        "upstream_blob": "25d808d6e061cf42b6a6c083e34f3a4912685a12",
+        "status": "modified"
+      },
+      "Library/PlatformBootManagerLib/PlatformBm.h": {
+        "upstream_blob": "13ddc73218039e038fbac03a34755f32f81a70d1",
+        "status": "modified"
+      },
+      "Library/PlatformBootManagerLib/PlatformBootManagerLib.inf": {
+        "upstream_blob": "3a596aaf84f3d5add5dd07f7c1f2ac422c542ebe",
+        "status": "modified"
+      },
+      "Library/PlatformBootManagerLib/PstoreSweeper.c": {
+        "upstream_blob": null,
+        "status": "added"
+      },
+      "Library/PlatformEnvHookLib/PlatformEnvHookLib.c": {
+        "upstream_blob": "3ef87de50b6e6c9e279a165bda2df59271708d8c",
+        "status": "modified"
+      },
+      "Library/PlatformEnvHookLib/PlatformEnvHookLib.inf": {
+        "upstream_blob": "fe572eb2385fed4cb057360c1883f3d44321a948",
+        "status": "modified"
+      },
+      "MGP1WSB.dsc": {
+        "upstream_blob": "ebfee5106dfa57ccae8f3ba02ecf5bc0ccfb574e",
+        "status": "modified"
+      },
+      "MGP1WSB.fdf": {
+        "upstream_blob": "fb0062445bcfb68df041b8a64b797531126860be",
+        "status": "modified"
+      },
+      "PlatformSmbios/PlatformSmbios.c": {
+        "upstream_blob": "6f6ee330c64b46a7ccda536b585074589bbd417d",
+        "status": "same"
+      },
+      "PlatformSmbios/PlatformSmbios.h": {
+        "upstream_blob": "04d21eee6c59a3fbd3dc9628159cc001766be875",
+        "status": "same"
+      },
+      "PlatformSmbios/PlatformSmbios.inf": {
+        "upstream_blob": "cc9496c30a7eb96c2f28d08b9c50e31bbe1a17ce",
+        "status": "same"
+      },
+      "PlatformSmbios/SmbiosType0.c": {
+        "upstream_blob": "37794ebf80b825366c0606c3bbf582af505b9b25",
+        "status": "same"
+      },
+      "PlatformSmbios/SmbiosType1.c": {
+        "upstream_blob": "0bbcc06da054504c79c62d31e866582a133909ef",
+        "status": "same"
+      },
+      "PlatformSmbios/SmbiosType2.c": {
+        "upstream_blob": "21055c17fae33e77dc8b1231b47e37f1867a470d",
+        "status": "same"
+      },
+      "PlatformSmbios/SmbiosType3.c": {
+        "upstream_blob": "e449be56f61985914d9c4d70d42e7107304b8990",
+        "status": "same"
+      },
+      "PlatformSmbios/SmbiosType32.c": {
+        "upstream_blob": "3c9a1de82de48b5f7d809223afc1ea4e716308f2",
+        "status": "same"
+      },
+      "mem_config/Makefile": {
+        "upstream_blob": "29fdcca85bdc5a5c47230ae4b966f173eb67b33d",
+        "status": "same"
+      },
+      "mem_config/MemConfigBinLayout.h": {
+        "upstream_blob": "38137e82aa88c589725b5f9adb36ba4ccf6cd606",
+        "status": "same"
+      },
+      "mem_config/MemConfigBinTool.c": {
+        "upstream_blob": "08ec565c4d09fda306d159b14d1445de21b231ba",
+        "status": "same"
+      },
+      "mem_config/default/BoardIdGetMethod.c": {
+        "upstream_blob": "39ee36e4b7760b15530591e195d8ba8d8afacaef",
+        "status": "same"
+      },
+      "mem_config/default/GlobalConfig.c": {
+        "upstream_blob": "ec33e393557e19118c5ef396f2acd8cba087f547",
+        "status": "same"
+      },
+      "mem_config/default/MemBiosSetup.c": {
+        "upstream_blob": "bc9d2a0fda96be5e5a28d62df1d610016045c64a",
+        "status": "same"
+      },
+      "mem_config/default/MemDqSwap.c": {
+        "upstream_blob": "00a0925c0fcd8490eb36d65fb3962a42b07b3858",
+        "status": "same"
+      },
+      "mem_config/default/MemFeatures.c": {
+        "upstream_blob": "d6734bcd5e4b8e849a125eec0d5985088ef970d7",
+        "status": "same"
+      },
+      "mem_config/default/MemLpddr5BusCfg.c": {
+        "upstream_blob": "46221b58ca59e32ec0f90e1fd97e74ec45e2c6ac",
+        "status": "same"
+      },
+      "mem_config/default/MemLpddr5BusCfg_x8.c": {
+        "upstream_blob": "b761885d6fe25c49e182909627b53c9d5f745e29",
+        "status": "same"
+      },
+      "mem_config/default/MemPhyPadCfg.c": {
+        "upstream_blob": "78d5c05e4d57de776e0e1ca78c558012dea60ad7",
+        "status": "same"
+      },
+      "mem_config/default/MemPhyPadCfg_x8.c": {
+        "upstream_blob": "b912f6d8841d5273d4c39bb82c0127e7d3f35d69",
+        "status": "same"
+      },
+      "mem_config/default/MemTraceLenDiff.c": {
+        "upstream_blob": "02e9e59ae0ba0e3b13b6bb4356545e64f774dbce",
+        "status": "same"
+      },
+      "mem_config/default/MemTrainOptimize.c": {
+        "upstream_blob": "3790dfff9d136567719bce6e7bdb40fc8063bdf2",
+        "status": "same"
+      },
+      "mem_config/default/QuickConfig.c": {
+        "upstream_blob": "829501bd1e6db56e683e4ee39c0f8301097c3cf4",
+        "status": "same"
+      },
+      "mem_config/include/BoardConfig.h": {
+        "upstream_blob": "fbc8d4ac28c318e1ba8b2687ac4019f1f96ec65d",
+        "status": "same"
+      },
+      "mem_config/include/MemConfigBinTool.h": {
+        "upstream_blob": "17afbacff17d1216cd461d44e9b3b764a6772cf4",
+        "status": "same"
+      },
+      "mem_config/include/MemConfigurationTable.h": {
+        "upstream_blob": "2d523ce47bd8d324bc1887ebf34a3acb7906d326",
+        "status": "same"
+      },
+      "mem_config/memory_config.bin": {
+        "upstream_blob": "6cb0d2e8d1749c71f82f4db18fecc286565147fc",
+        "status": "same"
+      },
+      "pm_config/Makefile": {
+        "upstream_blob": "4bd043445ac1e39127f38a930d6ec476c5c436d2",
+        "status": "same"
+      },
+      "pm_config/MakefileWin": {
+        "upstream_blob": "44fd7db4b2e4cfc960de8ad5d7aea7b2d1e23ddf",
+        "status": "same"
+      },
+      "pm_config/cfg_dpm_pwrrail.h": {
+        "upstream_blob": "7e2b6c2906278d286969259b16d113557a8c3827",
+        "status": "same"
+      },
+      "pm_config/csupm_bin_config.c": {
+        "upstream_blob": "78dedbc56542e1899c4a785befceaed3bde8bcc1",
+        "status": "modified"
+      },
+      "pm_config/opp_config.h": {
+        "upstream_blob": "0d93d1811d456af30311736e0090a1465682146b",
+        "status": "same"
+      },
+      "pm_config/opp_config_custom.h": {
+        "upstream_blob": "6ff39e8cec9a8a6b64e2f8c997da1b2d92059dd6",
+        "status": "same"
+      },
+      "pm_config/pm_export_config.h": {
+        "upstream_blob": "c7106b4dc2c938460c43b5d44c429ead090df128",
+        "status": "same"
+      },
+      "pm_config/user_config.h": {
+        "upstream_blob": "eba9e95dee63bef485957d2c18792baf3b5b87c4",
+        "status": "same"
+      },
+      "spi_flash_config_all.json": {
+        "upstream_blob": "10d4bd620993f1c4af87c40d6b4212ee7d3e6a3a",
+        "status": "same"
+      },
+      "spi_flash_config_ota.json": {
+        "upstream_blob": "259148adf28424d518ce089deaa9f8463e4e4429",
+        "status": "same"
+      }
+    }
+  }
+]

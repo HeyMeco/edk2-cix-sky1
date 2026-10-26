@@ -1,0 +1,9 @@
+/Build/
+/Conf/
+/output/
+/dist/
+/out/
+/.scratch/
+/blobs-cache/
+__pycache__/
+*.pyc

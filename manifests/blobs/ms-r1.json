@@ -1,0 +1,41 @@
+{
+  "board": "ms-r1",
+  "blobs": [
+    {
+      "dest": "Firmwares/bootloader1.img",
+      "size": 876544,
+      "sha256": "e6de7d0fe5f71ff91f44b1091159b09b0d73669434f7394de75770a2fd804952",
+      "license": "Minisforum edk2-non-osi (vendor binary)",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/minisforum-cix-p1-repo/cix_opensource__release__edk2-non-osi",
+        "commit": "c22fb43e6b8385c4b43f51ca1de3111fd2990db1",
+        "path": "Platform/CIX/Sky1/PackageTool/Firmwares/bootloader1.img"
+      }
+    },
+    {
+      "dest": "Firmwares/bootloader2.img",
+      "size": 999476,
+      "sha256": "6738aceeed03d91c7748434c9bb56dfe2a596821fc4b053db336f08b5a5fd607",
+      "license": "Minisforum edk2-non-osi (vendor binary)",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/minisforum-cix-p1-repo/cix_opensource__release__edk2-non-osi",
+        "commit": "c22fb43e6b8385c4b43f51ca1de3111fd2990db1",
+        "path": "Platform/CIX/Sky1/PackageTool/Firmwares/bootloader2.img"
+      }
+    },
+    {
+      "dest": "Firmwares/se_config.bin",
+      "size": 144,
+      "sha256": "30b25c64266f66ba2d72ebfb54795c3971f2d3b2457ef4d7061d2f166ec815a2",
+      "license": "Minisforum edk2-non-osi (vendor binary)",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/minisforum-cix-p1-repo/cix_opensource__release__edk2-non-osi",
+        "commit": "c22fb43e6b8385c4b43f51ca1de3111fd2990db1",
+        "path": "Platform/CIX/Sky1/PackageTool/Firmwares/se_config.bin"
+      }
+    }
+  ]
+}

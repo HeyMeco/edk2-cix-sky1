@@ -1,0 +1,585 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: edk2-cix <edk2-cix@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 23:48:05 +0100
+Subject: [PATCH] Platform/CIX/Sky1: AcpiSocTables: add board configuration
+ guards
+
+Let boards that use LINUX_ACPI_CONFIG_OVERRIDE adjust SoC DSDT devices
+from their LinuxAcpiConfig.h without carrying a copy of the DSDT:
+
+- ACPI_UART01_NO_PINCTRL, ACPI_UART3_DMA, ACPI_UART3_PINCTRL
+- ACPI_I2C_FORCE_DISABLE_MASK and ACPI_I2Cn_EXT_CRS
+- ACPI_PWM0_STA, ACPI_PWM1_BASE, ACPI_PWM3_PWM5_ENABLE
+- ACPI_SPI0_STA, ACPI_SPI1_STA, ACPI_SPI0_NUM_CS
+- ACPI_GCRU_STA, ACPI_DCT_ENABLE, ACPI_CGFX_ENABLE
+- ACPI_HUBn_EXT_CRS, DP04_EXT_CRS, DP04_EXT_DSD_PROPERTY
+
+Every guard defaults to the existing behaviour, so boards that do not
+define them build the same DSDT as before.
+---
+ .../Sky1/Drivers/AcpiSocTables/Dsdt-Dpu.asl   | 24 +++++++
+ .../Drivers/AcpiSocTables/Dsdt-Fch-Uart.asl   | 23 +++++++
+ .../Sky1/Drivers/AcpiSocTables/Dsdt-Gmac.asl  |  6 +-
+ .../Sky1/Drivers/AcpiSocTables/Dsdt-I2c.asl   | 65 +++++++++++++++++++
+ .../Sky1/Drivers/AcpiSocTables/Dsdt-Pwm.asl   | 60 ++++++++++++++++-
+ .../Sky1/Drivers/AcpiSocTables/Dsdt-SUSB.asl  | 12 ++++
+ .../Sky1/Drivers/AcpiSocTables/Dsdt-Spi.asl   | 14 +++-
+ .../Sky1/Drivers/AcpiSocTables/Dsdt-dst.asl   |  5 ++
+ 8 files changed, 204 insertions(+), 5 deletions(-)
+
+diff --git a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Dpu.asl b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Dpu.asl
+index 7dc54004..bc5413ee 100644
+--- a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Dpu.asl
++++ b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Dpu.asl
+@@ -36,6 +36,17 @@
+ #define DP_PORT_INIT(RemoteDeviceReference0, RemotePipeline0, RemotePort0, RemoteEndPoint0, \
+                       RemoteDeviceReference1, RemotePipeline1, RemotePort1, RemoteEndPoint1, \
+                       DpLaneNumber, DpMaxRate, AuxClockDivider, DpPhyRef, EdpPanelRef, DpPortId) \
++  DP_PORT_INIT_EXT(RemoteDeviceReference0, RemotePipeline0, RemotePort0, RemoteEndPoint0, \
++                      RemoteDeviceReference1, RemotePipeline1, RemotePort1, RemoteEndPoint1, \
++                      DpLaneNumber, DpMaxRate, AuxClockDivider, DpPhyRef, EdpPanelRef, DpPortId, )
++
++//
++// DP_PORT_INIT with extra _DSD device properties (e.g. an on-board DP to
++// HDMI bridge).  ExtProps is a macro expanding to "Package () {...}, ...".
++//
++#define DP_PORT_INIT_EXT(RemoteDeviceReference0, RemotePipeline0, RemotePort0, RemoteEndPoint0, \
++                      RemoteDeviceReference1, RemotePipeline1, RemotePort1, RemoteEndPoint1, \
++                      DpLaneNumber, DpMaxRate, AuxClockDivider, DpPhyRef, EdpPanelRef, DpPortId, ExtProps) \
+  Name (_DSD, Package () { \
+             ToUUID("daffd814-6eba-4d8c-8a91-bc9bbf4aa301"),\
+             Package () { \
+@@ -46,6 +57,7 @@
+                 Package () { "edp-panel", EdpPanelRef }, \
+                 Package () { "enabled_by_gop", 0 }, \
+                 Package () { "cfg_adapter_port", DpPortId }, \
++                ExtProps \
+             /*    Package () { "support_d3_cmd", D3Cmd }, */ \
+             },\
+             ToUUID("dbb8e3e6-5886-4ba6-8795-1319f52a966b"),\
+@@ -402,10 +414,17 @@ Device (DP04) {
+     Memory32Fixed (ReadWrite, DP4_DP_PHY_CONTROLLER_BASE, DP4_PHY_CONTROLLER_SIZE, DPHY)
+     Memory32Fixed (ReadWrite, DP4_DP_RCSU_CONTROLLER_BASE, DP4_RCSU_CONTROLLER_SIZE)
+     Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive) { DP_DP4_APB_INT_INTERRUPT_ID }
++#ifdef DP04_EXT_CRS
++    DP04_EXT_CRS
++#endif
+   })
+ 
+   //DP_PORT_INIT(\_SB.DPU4, "pipeline@0", "port@0", "endpoint@0", 1, 162000, 200, \_SB.UCP3.UDPP, EMPTY_STR)
++#ifdef DP04_EXT_DSD_PROPERTY
++  DP_PORT_INIT_EXT(\_SB.DPU4, "pipeline@0", "port@0", "endpoint@0", \_SB.DPU4, "pipeline@1", "port@1", "endpoint@1", 1, 540000, 200, \_SB.UCP3.UDPP, EMPTY_STR, 4, DP04_EXT_DSD_PROPERTY)
++#else
+   DP_PORT_INIT(\_SB.DPU4, "pipeline@0", "port@0", "endpoint@0", \_SB.DPU4, "pipeline@1", "port@1", "endpoint@1", 1, 540000, 200, \_SB.UCP3.UDPP, EMPTY_STR, 4)
++#endif
+ 
+   Name (CLKT, Package() {
+     Package() {CLK_TREE_DPC4_VIDCLK0, "vid_clk0", \_SB.DP04},
+@@ -994,6 +1013,10 @@ Device (EDP0) {
+   })
+ }
+ 
++#ifndef ACPI_CGFX_ENABLE
++#define ACPI_CGFX_ENABLE  1
++#endif
++#if ACPI_CGFX_ENABLE
+ Device (CGFX) {
+   Name (_HID, "CIXH5050")
+   Name (_UID, 0x0)
+@@ -1023,3 +1046,4 @@ Device (CGFX) {
+     Interrupt (ResourceConsumer, Level, ActiveHigh, Shared) { DPU_EXT_U_DPU4_IRQ0_INTERRUPT_ID }
+   })
+ }
++#endif
+diff --git a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Fch-Uart.asl b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Fch-Uart.asl
+index 75b48392..d52f1109 100644
+--- a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Fch-Uart.asl
++++ b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Fch-Uart.asl
+@@ -39,7 +39,9 @@ Device (COM0) {
+     Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive) { FCH_INTR_UART0_INTERRUPT_ID }
+     FixedDMA (0x0, 0x2, Width32Bit, )
+     FixedDMA (0x1, 0x3, Width32Bit, )
++#ifndef ACPI_UART01_NO_PINCTRL
+     PinGroupFunction(Exclusive, 0x0, "\\_SB.MUX0", 0, "pinctrl_fch_uart0", ResourceConsumer,)
++#endif
+   })
+ 
+   Name (_DSD, Package () {
+@@ -75,7 +77,9 @@ Device (COM1) {
+     Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive) { FCH_INTR_UART1_INTERRUPT_ID }
+     FixedDMA (0x2, 0x4, Width32Bit, )
+     FixedDMA (0x3, 0x5, Width32Bit, )
++#ifndef ACPI_UART01_NO_PINCTRL
+     PinGroupFunction(Exclusive, 0x0, "\\_SB.MUX0", 0, "pinctrl_fch_uart1", ResourceConsumer,)
++#endif
+   })
+ 
+   Name (_DSD, Package () {
+@@ -140,7 +144,26 @@ Device (COM3) {
+   Name (_CRS, ResourceTemplate () {
+     Memory32Fixed (ReadWrite, UART3_BASE, UART3_SIZE)
+     Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive) { FCH_INTR_UART3_INTERRUPT_ID }
++#ifdef ACPI_UART3_DMA
++    FixedDMA (0x6, 0x0, Width32Bit, )
++    FixedDMA (0x7, 0x1, Width32Bit, )
++#endif
++#ifdef ACPI_UART3_PINCTRL
++    PinGroupFunction(Exclusive, 0x0, "\\_SB.MUX0", 0, "pinctrl_fch_uart3", ResourceConsumer,)
++#endif
+   })
++#ifdef ACPI_UART3_DMA
++
++  Name (_DSD, Package () {
++    ToUUID("daffd814-6eba-4d8c-8a91-bc9bbf4aa301"),
++    Package () {
++          Package () { "uartclk", UCLK },
++          Package () { "timeout-value", 10000 },
++          Package () { "dma-names", Package () { "tx", "rx"} },
++          Package () { "sky1,fch_cru", UCRU },
++        }
++  })
++#endif
+   Name (CLKT, Package() {
+     Package() {CLK_TREE_FCH_UART3_APB, "apb_pclk", \_SB.COM3},
+     Package() {CLK_TREE_FCH_UART3_FUNC, "uartclk", \_SB.COM3},
+diff --git a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Gmac.asl b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Gmac.asl
+index afc151db..0f9b0b73 100644
+--- a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Gmac.asl
++++ b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Gmac.asl
+@@ -6,10 +6,14 @@
+ 
+ **/
+ 
++#ifndef ACPI_GCRU_STA
++#define ACPI_GCRU_STA  0xf
++#endif
++
+ Device(GCRU) {
+   Name (_HID, "CIXHA018")
+   Name (_UID, 0x3)
+-  Name (_STA, 0xf)
++  Name (_STA, ACPI_GCRU_STA)
+   Name (_CRS, ResourceTemplate () {
+     Memory32Fixed (ReadWrite, 0x09310000, 0x1000)
+   })
+diff --git a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-I2c.asl b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-I2c.asl
+index 03273326..586aa6e6 100644
+--- a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-I2c.asl
++++ b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-I2c.asl
+@@ -6,17 +6,30 @@
+   SPDX-License-Identifier: BSD-2-Clause-Patent
+ 
+ **/
++
++//
++// Boards may hide FCH I2C controllers from the OS regardless of the setup
++// option by setting bit n of ACPI_I2C_FORCE_DISABLE_MASK, and append pin
++// configuration to a controller's _CRS with ACPI_I2Cn_EXT_CRS.
++//
++#ifndef ACPI_I2C_FORCE_DISABLE_MASK
++#define ACPI_I2C_FORCE_DISABLE_MASK  0
++#endif
+ #include <sky1-iomux.h>
+ 
+ Device (I2C0) {
+   Name (_HID, "CIXH200B")
+   Name (_UID, 0x0)
+   Method (_STA, 0x0, Serialized) {
++#if (ACPI_I2C_FORCE_DISABLE_MASK & (1 << 0))
++    Return (0x0)
++#else
+     If(\_SB.GETV(ARV_FCH_I2C_0_ENABLE_OFFSET)){
+         Return (0xF)
+     } else {
+         Return (0x0)
+     }
++#endif
+   }
+   Method(_INI, 0) {
+     Local0 = GETV(ARV_FCH_I2C_0_FREQ_OFFSET)
+@@ -30,6 +43,9 @@ Device (I2C0) {
+   Name (_CRS, ResourceTemplate () {
+     Memory32Fixed (ReadWrite, I2C0_BASE, I2C0_SIZE)
+     Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive) { FCH_INTR_I2C0_INTERRUPT_ID }
++#ifdef ACPI_I2C0_EXT_CRS
++    ACPI_I2C0_EXT_CRS
++#endif
+     // Pinctrl
+     PinGroupFunction(Exclusive, 0x0, "\\_SB.MUX0", 0, "pinctrl_fch_i2c0", ResourceConsumer,)
+   })
+@@ -86,11 +102,15 @@ Device (I2C1) {
+   Name (_HID, "CIXH200B")
+   Name (_UID, 0x1)
+   Method (_STA, 0x0, Serialized) {
++#if (ACPI_I2C_FORCE_DISABLE_MASK & (1 << 1))
++    Return (0x0)
++#else
+     If(\_SB.GETV(ARV_FCH_I2C_1_ENABLE_OFFSET)){
+         Return (0xF)
+     } else {
+         Return (0x0)
+     }
++#endif
+   }
+   Method(_INI, 0) {
+     Local0 = GETV(ARV_FCH_I2C_1_FREQ_OFFSET)
+@@ -104,6 +124,9 @@ Device (I2C1) {
+   Name (_CRS, ResourceTemplate () {
+     Memory32Fixed (ReadWrite, I2C1_BASE, I2C1_SIZE)
+     Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive) { FCH_INTR_I2C1_INTERRUPT_ID }
++#ifdef ACPI_I2C1_EXT_CRS
++    ACPI_I2C1_EXT_CRS
++#endif
+   })
+ 
+   Name (_DSD, Package () {
+@@ -123,11 +146,15 @@ Device (I2C2) {
+   Name (_HID, "CIXH200B")
+   Name (_UID, 0x2)
+   Method (_STA, 0x0, Serialized) {
++#if (ACPI_I2C_FORCE_DISABLE_MASK & (1 << 2))
++    Return (0x0)
++#else
+     If(\_SB.GETV(ARV_FCH_I2C_2_ENABLE_OFFSET)){
+         Return (0xF)
+     } else {
+         Return (0x0)
+     }
++#endif
+   }
+   Method(_INI, 0) {
+     Local0 = GETV(ARV_FCH_I2C_2_FREQ_OFFSET)
+@@ -141,6 +168,9 @@ Device (I2C2) {
+   Name (_CRS, ResourceTemplate () {
+     Memory32Fixed (ReadWrite, I2C2_BASE, I2C2_SIZE)
+     Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive) { FCH_INTR_I2C2_INTERRUPT_ID }
++#ifdef ACPI_I2C2_EXT_CRS
++    ACPI_I2C2_EXT_CRS
++#endif
+     GpioIo (Exclusive, PullNone, 0, 0, IoRestrictionOutputOnly,
+                 "\\_SB.GPI0", 0, ResourceConsumer) { 12, 13 }
+     // Pinctrl
+@@ -169,11 +199,15 @@ Device (I2C3) {
+   Name (_HID, "CIXH200B")
+   Name (_UID, 0x3)
+   Method (_STA, 0x0, Serialized) {
++#if (ACPI_I2C_FORCE_DISABLE_MASK & (1 << 3))
++    Return (0x0)
++#else
+     If(\_SB.GETV(ARV_FCH_I2C_3_ENABLE_OFFSET)){
+         Return (0xF)
+     } else {
+         Return (0x0)
+     }
++#endif
+   }
+   Method(_INI, 0) {
+     Local0 = GETV(ARV_FCH_I2C_3_FREQ_OFFSET)
+@@ -187,6 +221,9 @@ Device (I2C3) {
+   Name (_CRS, ResourceTemplate () {
+     Memory32Fixed (ReadWrite, I2C3_BASE, I2C3_SIZE)
+     Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive) { FCH_INTR_I2C3_INTERRUPT_ID }
++#ifdef ACPI_I2C3_EXT_CRS
++    ACPI_I2C3_EXT_CRS
++#endif
+   })
+ 
+   Name (_DSD, Package () {
+@@ -206,11 +243,15 @@ Device (I2C4) {
+   Name (_HID, "CIXH200B")
+   Name (_UID, 0x4)
+   Method (_STA, 0x0, Serialized) {
++#if (ACPI_I2C_FORCE_DISABLE_MASK & (1 << 4))
++    Return (0x0)
++#else
+     If(\_SB.GETV(ARV_FCH_I2C_4_ENABLE_OFFSET)){
+         Return (0xF)
+     } else {
+         Return (0x0)
+     }
++#endif
+   }
+   Method(_INI, 0) {
+     Local0 = GETV(ARV_FCH_I2C_4_FREQ_OFFSET)
+@@ -224,6 +265,9 @@ Device (I2C4) {
+   Name (_CRS, ResourceTemplate () {
+     Memory32Fixed (ReadWrite, I2C4_BASE, I2C4_SIZE)
+     Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive) { FCH_INTR_I2C4_INTERRUPT_ID }
++#ifdef ACPI_I2C4_EXT_CRS
++    ACPI_I2C4_EXT_CRS
++#endif
+   })
+ 
+   Name (_DSD, Package () {
+@@ -243,11 +287,15 @@ Device (I2C5) {
+   Name (_HID, "CIXH200B")
+   Name (_UID, 0x5)
+   Method (_STA, 0x0, Serialized) {
++#if (ACPI_I2C_FORCE_DISABLE_MASK & (1 << 5))
++    Return (0x0)
++#else
+     If(\_SB.GETV(ARV_FCH_I2C_5_ENABLE_OFFSET)){
+         Return (0xF)
+     } else {
+         Return (0x0)
+     }
++#endif
+   }
+   Method(_INI, 0) {
+     Local0 = GETV(ARV_FCH_I2C_5_FREQ_OFFSET)
+@@ -261,6 +309,9 @@ Device (I2C5) {
+   Name (_CRS, ResourceTemplate () {
+     Memory32Fixed (ReadWrite, I2C5_BASE, I2C5_SIZE)
+     Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive) { FCH_INTR_I2C5_INTERRUPT_ID }
++#ifdef ACPI_I2C5_EXT_CRS
++    ACPI_I2C5_EXT_CRS
++#endif
+   })
+ 
+   Name (_DSD, Package () {
+@@ -280,11 +331,15 @@ Device (I2C6) {
+   Name (_HID, "CIXH200B")
+   Name (_UID, 0x6)
+   Method (_STA, 0x0, Serialized) {
++#if (ACPI_I2C_FORCE_DISABLE_MASK & (1 << 6))
++    Return (0x0)
++#else
+     If(\_SB.GETV(ARV_FCH_I2C_6_ENABLE_OFFSET)){
+         Return (0xF)
+     } else {
+         Return (0x0)
+     }
++#endif
+   }
+   Method(_INI, 0) {
+     Local0 = GETV(ARV_FCH_I2C_6_FREQ_OFFSET)
+@@ -298,6 +353,9 @@ Device (I2C6) {
+   Name (_CRS, ResourceTemplate () {
+     Memory32Fixed (ReadWrite, I2C6_BASE, I2C6_SIZE)
+     Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive) { FCH_INTR_I2C6_INTERRUPT_ID }
++#ifdef ACPI_I2C6_EXT_CRS
++    ACPI_I2C6_EXT_CRS
++#endif
+   })
+ 
+   Name (_DSD, Package () {
+@@ -317,11 +375,15 @@ Device (I2C7) {
+   Name (_HID, "CIXH200B")
+   Name (_UID, 0x7)
+   Method (_STA, 0x0, Serialized) {
++#if (ACPI_I2C_FORCE_DISABLE_MASK & (1 << 7))
++    Return (0x0)
++#else
+     If(\_SB.GETV(ARV_FCH_I2C_7_ENABLE_OFFSET)){
+         Return (0xF)
+     } else {
+         Return (0x0)
+     }
++#endif
+   }
+   Method(_INI, 0) {
+     Local0 = GETV(ARV_FCH_I2C_7_FREQ_OFFSET)
+@@ -335,6 +397,9 @@ Device (I2C7) {
+   Name (_CRS, ResourceTemplate () {
+     Memory32Fixed (ReadWrite, I2C7_BASE, I2C7_SIZE)
+     Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive) { FCH_INTR_I2C7_INTERRUPT_ID }
++#ifdef ACPI_I2C7_EXT_CRS
++    ACPI_I2C7_EXT_CRS
++#endif
+   })
+ 
+   Name (_DSD, Package () {
+diff --git a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Pwm.asl b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Pwm.asl
+index cb80d446..251f65b4 100644
+--- a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Pwm.asl
++++ b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Pwm.asl
+@@ -6,10 +6,17 @@
+ 
+ **/
+ 
++#ifndef ACPI_PWM0_STA
++#define ACPI_PWM0_STA  0xF
++#endif
++#ifndef ACPI_PWM1_BASE
++#define ACPI_PWM1_BASE  0x04111000
++#endif
++
+ Device (PWM0) {
+   Name (_HID, "CIXH2011")
+   Name (_UID, 0x0)
+-  Name (_STA, 0xF)
++  Name (_STA, ACPI_PWM0_STA)
+   Name (_CRS, ResourceTemplate () {
+     Memory32Fixed (
+       ReadWrite,
+@@ -35,7 +42,7 @@ Device (PWM1) {
+   Name (_CRS, ResourceTemplate () {
+     Memory32Fixed (
+       ReadWrite,
+-      0x04111000,
++      ACPI_PWM1_BASE,
+       0x1000
+       )
+     PinGroupFunction(Exclusive, 0x0, "\\_SB.MUX0", 0, "pinctrl_fch_pwm1", ResourceConsumer,)
+@@ -49,3 +56,52 @@ Device (PWM1) {
+     Package() {\_SB.RST1, SW_TIMER_RST_FUNC_N, \_SB.PWM1, "func_reset"},
+   })
+ }
++
++#ifdef ACPI_PWM3_PWM5_ENABLE
++//
++// Additional FCH timer/PWM instances routed to the board header.
++//
++Device (PWM3) {
++  Name (_HID, "CIXH2011")
++  Name (_UID, 0x3)
++  Name (_STA, 0x0)
++  Name (_CRS, ResourceTemplate () {
++    Memory32Fixed (
++      ReadWrite,
++      0x04113000,
++      0x1000
++      )
++    PinGroupFunction(Exclusive, 0x0, "\\_SB.MUX0", 0, "pinctrl_fch_pwm3", ResourceConsumer,)
++  })
++
++  Name (CLKT, Package() {
++    Package() {CLK_TREE_FCH_TIMER_APB, "fch_pwm_apb_clk", \_SB.PWM3},
++    Package() {CLK_TREE_FCH_TIMER_FUN, "fch_pwm_func_clk", \_SB.PWM3},
++  })
++  Name (RSTL, Package() {
++    Package() {\_SB.RST1, SW_TIMER_RST_FUNC_N, \_SB.PWM3, "func_reset"},
++  })
++}
++
++Device (PWM5) {
++  Name (_HID, "CIXH2011")
++  Name (_UID, 0x5)
++  Name (_STA, 0x0)
++  Name (_CRS, ResourceTemplate () {
++    Memory32Fixed (
++      ReadWrite,
++      0x04115000,
++      0x1000
++      )
++    PinGroupFunction(Exclusive, 0x0, "\\_SB.MUX0", 0, "pinctrl_fch_pwm5", ResourceConsumer,)
++  })
++
++  Name (CLKT, Package() {
++    Package() {CLK_TREE_FCH_TIMER_APB, "fch_pwm_apb_clk", \_SB.PWM5},
++    Package() {CLK_TREE_FCH_TIMER_FUN, "fch_pwm_func_clk", \_SB.PWM5},
++  })
++  Name (RSTL, Package() {
++    Package() {\_SB.RST1, SW_TIMER_RST_FUNC_N, \_SB.PWM5, "func_reset"},
++  })
++}
++#endif
+diff --git a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-SUSB.asl b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-SUSB.asl
+index b6a36e6e..f76e8f7a 100644
+--- a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-SUSB.asl
++++ b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-SUSB.asl
+@@ -1061,6 +1061,9 @@ Device (HUB0) //High Speed USB 0, USB2.0
+   Name (_CRS, ResourceTemplate () {
+     Memory32Fixed (ReadWrite, 0x09250310, 0x4)
+     Memory32Fixed (ReadWrite, 0x09250400, 0x4)
++#ifdef ACPI_HUB0_EXT_CRS
++    ACPI_HUB0_EXT_CRS
++#endif
+   })
+ 
+   Name (_DSD, Package () {
+@@ -1150,6 +1153,9 @@ Device (HUB1) //High Speed USB 1, USB2.0
+     Memory32Fixed (ReadWrite, 0x09280310, 0x4)
+     Memory32Fixed (ReadWrite, 0x09280400, 0x4)
+     PinGroupFunction(Exclusive, 0x0, "\\_SB.MUX1", 0, "pinctrl_usb7", ResourceConsumer,)
++#ifdef ACPI_HUB1_EXT_CRS
++    ACPI_HUB1_EXT_CRS
++#endif
+   })
+ 
+   Name (_DSD, Package () {
+@@ -1263,6 +1269,9 @@ Device (HUB2) //High Speed USB 2, USB2.0
+     Memory32Fixed (ReadWrite, 0x092b0310, 0x4)
+     Memory32Fixed (ReadWrite, 0x092b0400, 0x4)
+     PinGroupFunction(Exclusive, 0x0, "\\_SB.MUX1", 0, "pinctrl_usb8", ResourceConsumer,)
++#ifdef ACPI_HUB2_EXT_CRS
++    ACPI_HUB2_EXT_CRS
++#endif
+   })
+ 
+   Name (_DSD, Package () {
+@@ -1364,6 +1373,9 @@ Device (HUB3) //High Speed USB 3, USB2.0
+   Name (_CRS, ResourceTemplate () {
+     Memory32Fixed (ReadWrite, 0x092e0310, 0x4)
+     Memory32Fixed (ReadWrite, 0x092e0400, 0x4)
++#ifdef ACPI_HUB3_EXT_CRS
++    ACPI_HUB3_EXT_CRS
++#endif
+   })
+ 
+   Name (_DSD, Package () {
+diff --git a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Spi.asl b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Spi.asl
+index 3ca1248f..f1fb7dba 100644
+--- a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Spi.asl
++++ b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-Spi.asl
+@@ -6,10 +6,17 @@
+ 
+ **/
+ 
++#ifndef ACPI_SPI0_STA
++#define ACPI_SPI0_STA  0xF
++#endif
++#ifndef ACPI_SPI1_STA
++#define ACPI_SPI1_STA  0xF
++#endif
++
+ Device (SPI0) {
+   Name (_HID, "CIXH2001")
+   Name (_UID, 0x0)
+-  Name (_STA, 0xF)
++  Name (_STA, ACPI_SPI0_STA)
+   Name (_CRS, ResourceTemplate () {
+     Memory32Fixed (ReadWrite, SPI0_BASE, SPI0_SIZE)
+     Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive) { FCH_INTR_SPI0_INTERRUPT_ID }
+@@ -19,6 +26,9 @@ Device (SPI0) {
+     ToUUID("daffd814-6eba-4d8c-8a91-bc9bbf4aa301"),
+     Package () {
+       Package () {"fifo-width", 32},
++#ifdef ACPI_SPI0_NUM_CS
++      Package () {"num-cs", ACPI_SPI0_NUM_CS},
++#endif
+       //Package () {"num-cs", 1},
+     }
+   })
+@@ -35,7 +45,7 @@ Device (SPI0) {
+ Device (SPI1) {
+   Name (_HID, "CIXH2001")
+   Name (_UID, 0x1)
+-  Name (_STA, 0xF)
++  Name (_STA, ACPI_SPI1_STA)
+   Name (_CRS, ResourceTemplate () {
+     Memory32Fixed (ReadWrite, SPI1_BASE, SPI1_SIZE)
+     Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive) { FCH_INTR_SPI1_INTERRUPT_ID }
+diff --git a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-dst.asl b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-dst.asl
+index 32233ff0..89854e51 100644
+--- a/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-dst.asl
++++ b/Platform/CIX/Sky1/Drivers/AcpiSocTables/Dsdt-dst.asl
+@@ -96,6 +96,10 @@ Device (RAOP) {
+     }
+   })
+ }
++#ifndef ACPI_DCT_ENABLE
++#define ACPI_DCT_ENABLE  1
++#endif
++#if ACPI_DCT_ENABLE
+ Device (DCT0) {
+   Name (_HID, "PRP0001")
+   Name (_UID, 0x84)
+@@ -164,6 +168,7 @@ Device (DCT3) {
+     }
+   })
+ }
++#endif
+ // For se_pm_crash driver
+ Device (SEPM) {
+   Name (_HID, "PRP0001")

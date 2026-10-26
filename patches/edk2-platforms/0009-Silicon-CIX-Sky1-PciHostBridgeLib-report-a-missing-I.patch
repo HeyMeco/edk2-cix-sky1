@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: edk2-cix <edk2-cix@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 23:51:15 +0100
+Subject: [PATCH] Silicon/CIX/Sky1: PciHostBridgeLib: report a missing I/O
+ window as absent
+
+Root bridges without an I/O aperture advertised a valid 0..0xFFFF I/O
+window.  Nothing routes port I/O to PCIe (PcdPciIoTranslation is 0), so
+a device's legacy I/O BAR could be placed at CPU physical address 0 with
+I/O decode enabled.  Use Base > Limit as for the memory windows.
+
+From Neol00/edk2-cix-unlocked V2.4.
+---
+ .../CIX/Sky1/Library/PciHostBridgeLib/PciHostBridgeLib.c | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/Silicon/CIX/Sky1/Library/PciHostBridgeLib/PciHostBridgeLib.c b/Silicon/CIX/Sky1/Library/PciHostBridgeLib/PciHostBridgeLib.c
+index 4ddf7586..569510d5 100644
+--- a/Silicon/CIX/Sky1/Library/PciHostBridgeLib/PciHostBridgeLib.c
++++ b/Silicon/CIX/Sky1/Library/PciHostBridgeLib/PciHostBridgeLib.c
+@@ -119,8 +119,13 @@ ConstructRootBridge (
+     Bridge->Io.Base  = Appeture->IoBase;
+     Bridge->Io.Limit = Appeture->IoBase + Appeture->IoSize - 1;
+   } else {
+-    Bridge->Io.Base  = 0;
+-    Bridge->Io.Limit = 0xFFFF;
++    //
++    // No I/O aperture: use the "absent" convention (Base > Limit) like the
++    // memory windows.  A valid 0..0xFFFF window let PciBusDxe assign legacy
++    // I/O BARs (e.g. on discrete GPUs) at CPU physical address 0.
++    //
++    Bridge->Io.Base  = MAX_UINT64;
++    Bridge->Io.Limit = 0;
+   }
+ 
+   if (Appeture->Mem) {

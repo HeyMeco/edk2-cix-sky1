@@ -1,0 +1,54 @@
+#/** @file
+#
+#  Copyright 2024 Cix Technology Group Co., Ltd. All Rights Reserved.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = PlatformSmbios
+  FILE_GUID                      = 68a86ef3-92cf-5cc6-a2f6-1a5c823575b7
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = PlatformSmbiosEntryPoint
+
+[Sources.common]
+  PlatformSmbios.c
+  PlatformSmbios.h
+  SmbiosType0.c
+  SmbiosType1.c
+  SmbiosType2.c
+  SmbiosType3.c
+  SmbiosType32.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  Platform/CIX/Sky1/Sky1.dec
+  Silicon/CIX/Sky1/CixPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  DebugLib
+  UefiLib
+  UefiDriverEntryPoint
+  UefiBootServicesTableLib
+  BaseMemoryLib
+  MemoryAllocationLib
+  PrintLib
+
+[Guids]
+  gCixGPNVGuid
+
+[Protocols]
+  gEfiSmbiosProtocolGuid
+  gCixFwVersionProtocolGuid
+  gCixSocInfoProtocolGuid
+
+[FixedPcd]
+  gEfiMdeModulePkgTokenSpaceGuid.PcdFirmwareRevision
+
+[Depex]
+  gEfiSmbiosProtocolGuid AND gCixFwVersionProtocolGuid

@@ -1,0 +1,55 @@
+{
+  "board": "orion-o6n",
+  "blobs": [
+    {
+      "dest": "Firmwares/bootloader1.img",
+      "size": 868352,
+      "sha256": "fcddd093649e243b16e0b9f92ec3bec7e68e03fe78fed2c594952f0eefd72f15",
+      "license": "Radxa edk2-non-osi (vendor binary)",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/radxa/edk2-non-osi",
+        "commit": "4e99786e4caaf531bb9b04f097a018917463ae81",
+        "path": "Platform/CIX/Sky1/PackageTool/Firmwares/bootloader1.img"
+      }
+    },
+    {
+      "dest": "Firmwares/bootloader2.img",
+      "size": 998692,
+      "sha256": "7ff0c68c436ca1a02bc109aeb330ace2698761bdb3b8750bd3c3fd62885dface",
+      "license": "Radxa edk2-non-osi (vendor binary)",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/radxa/edk2-non-osi",
+        "commit": "4e99786e4caaf531bb9b04f097a018917463ae81",
+        "path": "Platform/CIX/Sky1/PackageTool/Firmwares/bootloader2.img"
+      }
+    },
+    {
+      "dest": "Firmwares/trustzone_config.bin",
+      "size": 4096,
+      "sha256": "818bd96d7c8ad4dd6682bdff7130b42235e206e013fe90ead695cc951776cd45",
+      "license": "Radxa edk2-non-osi (vendor binary)",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/radxa/edk2-non-osi",
+        "commit": "4e99786e4caaf531bb9b04f097a018917463ae81",
+        "path": "Platform/CIX/Sky1/PackageTool/Firmwares/trustzone_config.bin"
+      }
+    },
+    {
+      "dest": "Firmwares/ec_fw.bin",
+      "size": 131072,
+      "sha256": "03a5a116051fe2ec78d7082d574319fc8a0e0fa0df51a8479d7087216484cbfb",
+      "license": "Radxa release binary (EC firmware not published in git)",
+      "note": "Radxa ships this EC image for the O6N in its released cix_flash_all.bin; it is not in any public tree.",
+      "source": {
+        "type": "deb-image",
+        "url": "https://github.com/radxa-pkg/edk2-cix/releases/download/1.3.1/edk2-cix_1.3.1_all.deb",
+        "sha256": "f6f250cedf8a91cc935633f822ace2b987be1c674814d7c3c00b540b3812f282",
+        "member": "usr/share/edk2/radxa/orion-o6n/cix_flash_all.bin",
+        "offset": "0x10000"
+      }
+    }
+  ]
+}

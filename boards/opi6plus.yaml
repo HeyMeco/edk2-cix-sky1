@@ -1,0 +1,22 @@
+# Orange Pi 6 Plus
+board: opi6plus
+name: Orange Pi 6 Plus
+vendor: Orange Pi
+dsc: Platform/CIX/Sky1/OPI6Plus/OPI6Plus.dsc
+build_dir: OPI6Plus
+package: edk2-project/Platform/CIX/Sky1/OPI6Plus
+fastboot: disable
+flash:
+  size: 0x800000
+  config_all: edk2-project/Platform/CIX/Sky1/OPI6Plus/spi_flash_config_all.json
+  config_ota: edk2-project/Platform/CIX/Sky1/OPI6Plus/spi_flash_config_ota.json
+blobs: manifests/blobs/opi6plus.json
+# The board BL1/BL2, EC, memory and PM configuration and the board SSDT
+# come from the Orange Pi firmware image (see manifests/vendor-images.json).
+vendor_image: opi6plus
+acpi_parity:
+  # The vendor image is built from an older CIX release than 2026Q3, so a
+  # textual comparison is dominated by version drift; compare against the
+  # OPI6 build instead (docs/provenance/orangepi.md).
+  allow: []
+capsule: true                        # CIX signed capsule (.cap) for in-OS / ESRT updates

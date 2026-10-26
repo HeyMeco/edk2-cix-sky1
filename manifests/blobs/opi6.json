@@ -1,0 +1,102 @@
+{
+  "board": "opi6",
+  "blobs": [
+    {
+      "dest": "Firmwares/bootloader1.img",
+      "size": 884736,
+      "sha256": "ed15fa1ec411437812af1830816d624138824a1c6bafd64d5400a9da4f969676",
+      "license": "Orange Pi firmware (no redistribution grant identified)",
+      "kind": "bl1",
+      "source": {
+        "type": "local",
+        "path": "vendor/orangepi/opi6/bootloader1.img"
+      },
+      "origin": {
+        "type": "vendor-image",
+        "image": "opi6",
+        "offset": "0x188000"
+      }
+    },
+    {
+      "dest": "Firmwares/bootloader2.img",
+      "size": 1010164,
+      "sha256": "a5041da90055c7df5bad2886cb02b570053d43c029327458a2c04163bed318ca",
+      "license": "Orange Pi firmware (no redistribution grant identified)",
+      "kind": "bl2",
+      "source": {
+        "type": "local",
+        "path": "vendor/orangepi/opi6/bootloader2.img"
+      },
+      "origin": {
+        "type": "vendor-image",
+        "image": "opi6",
+        "offset": "0x288000"
+      }
+    },
+    {
+      "dest": "Firmwares/memory_config.bin",
+      "size": 944,
+      "sha256": "1b70cc78040865a4c7a61ac8a596bd0f4a2fecc59c17c84f07a671cc2b48baa9",
+      "license": "Orange Pi firmware (no redistribution grant identified)",
+      "kind": "mem_config",
+      "source": {
+        "type": "local",
+        "path": "vendor/orangepi/opi6/memory_config.bin"
+      },
+      "origin": {
+        "type": "vendor-image",
+        "image": "opi6",
+        "offset": "0x3f8000"
+      }
+    },
+    {
+      "dest": "Firmwares/csu_pm_config.bin",
+      "size": 4096,
+      "sha256": "e7f0b9c8169c148879994f750d8b085472a745027a4ff346f813c0c7888789de",
+      "license": "Orange Pi firmware (no redistribution grant identified)",
+      "kind": "pm_config",
+      "source": {
+        "type": "local",
+        "path": "vendor/orangepi/opi6/csu_pm_config.bin"
+      },
+      "origin": {
+        "type": "vendor-image",
+        "image": "opi6",
+        "offset": "0x3fc000"
+      }
+    },
+    {
+      "dest": "Firmwares/ec_fw.bin",
+      "size": 131072,
+      "sha256": "12c3f1c3693e6bf1b4b77efd716f5694ba6ab5c65a6b911ca34370511d4501e4",
+      "license": "Orange Pi firmware (no redistribution grant identified)",
+      "kind": "ec",
+      "source": {
+        "type": "local",
+        "path": "vendor/orangepi/opi6/ec_fw.bin"
+      },
+      "origin": {
+        "type": "vendor-image",
+        "image": "opi6",
+        "offset": "0x10000"
+      }
+    },
+    {
+      "dest": "ACPI/AcpiPlatformTables/Ssdt.aml",
+      "size": 12356,
+      "sha256": "ecc47f6e952fb17219887d2d5467073da0196c2ad5ca798a22ca9c85e693501b",
+      "license": "Orange Pi firmware (no redistribution grant identified)",
+      "kind": "ssdt",
+      "source": {
+        "type": "local",
+        "path": "vendor/orangepi/opi6/Ssdt.aml"
+      },
+      "origin": {
+        "type": "vendor-acpi",
+        "image": "opi6",
+        "ffs": "C1BB2EAD-C76A-45DD-90B5-D40255170A9C",
+        "signature": "SSDT"
+      }
+    }
+  ]
+}

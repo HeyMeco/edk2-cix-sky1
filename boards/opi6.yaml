@@ -1,0 +1,29 @@
+# Orange Pi 6
+board: opi6
+name: Orange Pi 6
+vendor: Orange Pi
+dsc: Platform/CIX/Sky1/OPI6/OPI6.dsc
+build_dir: OPI6
+package: edk2-project/Platform/CIX/Sky1/OPI6
+fastboot: disable
+flash:
+  size: 0x800000
+  config_all: edk2-project/Platform/CIX/Sky1/OPI6/spi_flash_config_all.json
+  config_ota: edk2-project/Platform/CIX/Sky1/OPI6/spi_flash_config_ota.json
+blobs: manifests/blobs/opi6.json
+# The board BL1/BL2, EC, memory and PM configuration and the board SSDT
+# come from the Orange Pi firmware image (see manifests/vendor-images.json).
+vendor_image: opi6
+acpi_parity:
+  # Board deltas that differ from the vendor's on purpose (scripts/acpi/compare.py):
+  #   I2C2-5, MAC0, MAC1  enabled/disabled at runtime from setup defaults in
+  #                       CIX 2026Q3 (GETV) instead of hard-coded _STA
+  #   DP04                same bridge properties plus the Q3 cfg_adapter_port
+  #   PRC3                vendor references a PVC3 regulator its SSDT lacks
+  #   PRC1, SHM0, SHM1    bus-range and SCMI shared memory fixes (patches 0005/0006)
+  #   PCI0-4, PRC0-4      64-bit window taken from PcieWindowLib (patch 0010)
+  allow: [\_SB.I2C2, \_SB.I2C3, \_SB.I2C4, \_SB.I2C5, \_SB.MAC0, \_SB.MAC1,
+          \_SB.DP04, \_SB.PRC3, \_SB.PRC1, \_SB.SHM0, \_SB.SHM1,
+          \_SB.PCI0, \_SB.PCI1, \_SB.PCI2, \_SB.PCI3, \_SB.PCI4,
+          \_SB.PRC0, \_SB.PRC2, \_SB.PRC4]
+capsule: true                        # CIX signed capsule (.cap) for in-OS / ESRT updates

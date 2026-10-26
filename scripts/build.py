@@ -1,0 +1,388 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+"""Build and package UEFI firmware for one or more boards.
+
+Runs inside the build container (see build.sh / docker/Dockerfile).  For each
+board it prepares the tree, stages the vendor binaries, builds the BL33 UEFI
+FD with the board DSC, generates the CIX flash configuration blobs, signs the
+FD into bootloader3.img and packages the full and OTA SPI images.
+
+Outputs go to output/<board>/<TARGET>/ and, with --dist, a release archive
+per board to dist/.
+
+Usage: build.py BOARD... | --all  [--target RELEASE|DEBUG] [--version V] [--dist]
+"""
+
+import argparse
+import datetime
+import json
+import os
+import shutil
+import struct
+import subprocess
+import sys
+import zipfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from common import ROOT, board, boards, die, git, host_arch, load_json, log, run, sha256  # noqa: E402
+
+PACKAGE_TOOL = ROOT / "edk2-non-osi/Platform/CIX/Sky1/PackageTool"
+PACKAGES_PATH = ["edk2-project", "edk2", "edk2-platforms", "edk2-non-osi", "edk2-platforms/Silicon/Intel"]
+IMAGE_TYPES = {1: "bootloader1", 2: "bootloader2", 3: "memory_config", 4: "pm_config", 6: "se_config",
+               7: "bootloader3", 8: "sfh_fw", 9: "trustzone_config", 100: "reserved"}
+
+
+def flash_size(cfg):
+    v = cfg["flash"]["size"]
+    return v if isinstance(v, int) else int(v, 0)
+
+
+def source_date():
+    """Build timestamp: SOURCE_DATE_EPOCH, else the superproject commit time."""
+    epoch = os.environ.get("SOURCE_DATE_EPOCH") or git("log", "-1", "--format=%ct", check=False) or "0"
+    return datetime.datetime.fromtimestamp(int(epoch), tz=datetime.timezone.utc)
+
+
+def default_version():
+    v = git("describe", "--tags", "--always", "--dirty", check=False)
+    return v or "dev"
+
+
+def build_env():
+    env = dict(os.environ)
+    env["WORKSPACE"] = str(ROOT)
+    env["PACKAGES_PATH"] = ":".join(str(ROOT / p) for p in PACKAGES_PATH)
+    env["EDK_TOOLS_PATH"] = str(ROOT / "edk2/BaseTools")
+    env["CONF_PATH"] = str(ROOT / "Conf")
+    env.setdefault("PYTHON_COMMAND", "python3")
+    if "GCC5_AARCH64_PREFIX" not in env:
+        die("GCC5_AARCH64_PREFIX is not set; run builds through ./build.sh (the container)")
+    return env
+
+
+def ensure_basetools(env):
+    bindir = ROOT / "edk2/BaseTools/Source/C/bin"
+    stamp = bindir / ".edk2-cix-host"
+    if (bindir / "GenFw").exists() and stamp.exists() and stamp.read_text() == host_arch():
+        return
+    if (bindir / "GenFw").exists():
+        log("BaseTools were built for another host architecture; rebuilding")
+        run(["make", "-C", "edk2/BaseTools", "clean"], cwd=ROOT, env=env, capture=True)
+        run(["git", "submodule", "foreach", "--recursive", "-q", "git clean -fdxq"], cwd=ROOT / "edk2", capture=True)
+    log("building EDK2 BaseTools")
+    run(["make", "-C", "edk2/BaseTools", f"-j{os.cpu_count()}"], cwd=ROOT, env=env)
+    stamp.write_text(host_arch())
+
+
+def edk2_build(cfg, target, version, date, commit, jobs, log_path):
+    env = build_env()
+    ensure_basetools(env)
+    (ROOT / "Conf").mkdir(exist_ok=True)
+    defines = {
+        "BOARD_NAME": "evb",          # CIX DSCs distinguish evb/fpga/emu here
+        "BUILD_DATE": date.strftime("%Y%m%d"),
+        "COMMIT_HASH": commit,
+        "SMP_ENABLE": "1",
+        "ACPI_BOOT_ENABLE": "1",
+        "FASTBOOT_LOAD": cfg.get("fastboot", "disable"),
+        "VARIABLE_TYPE": "SPI",
+        "STANDARD_MM": "TRUE",
+        "SYSTEM_LOADER": "common",
+        # Version strings: CIX boards use UEFI_FW_STAGE, Radxa boards DEB_VERSION.
+        "UEFI_FW_STAGE": version,
+        "DEB_VERSION": version,
+        "EDK2_COMMIT_HASH": git("rev-parse", "--short=12", "HEAD", cwd=ROOT / "edk2"),
+        "EDK2_PLATFORMS_COMMIT_HASH": git("rev-parse", "--short=12", "HEAD", cwd=ROOT / "edk2-platforms"),
+        "EDK2_NON_OSI_COMMIT_HASH": git("rev-parse", "--short=12", "HEAD", cwd=ROOT / "edk2-non-osi"),
+    }
+    defines.update({k: str(v) for k, v in (cfg.get("defines") or {}).items()})
+    args = ["build", "-a", "AARCH64", "-t", "GCC5", "-b", target, "-p", cfg["dsc"], "-n", str(jobs)]
+    for k, v in defines.items():
+        args += ["-D", f"{k}={v}"]
+    script = f'source edk2/edksetup.sh --reconfig >/dev/null && exec {" ".join(map(shell_quote, args))}'
+    log(f"{cfg['board']}: building {cfg['dsc']} ({target})")
+    with open(log_path, "w") as lf:
+        rc = subprocess.run(["bash", "-c", script], cwd=ROOT, env=env, stdout=lf, stderr=subprocess.STDOUT).returncode
+    if rc != 0:
+        tail = Path(log_path).read_text(errors="replace").splitlines()[-40:]
+        sys.stderr.write("\n".join(tail) + "\n")
+        die(f"{cfg['board']}: EDK2 build failed, see {log_path}")
+    fd = ROOT / "Build" / cfg["build_dir"] / f"{target}_GCC5/FV/SKY1_BL33_UEFI.fd"
+    if not fd.exists():
+        die(f"{fd} was not produced")
+    return fd
+
+
+def shell_quote(s):
+    s = str(s)
+    return s if s and all(c.isalnum() or c in "-_./=:,+" for c in s) else "'" + s.replace("'", "'\\''") + "'"
+
+
+def make_config(pkg, name, out_name, dest, env):
+    """Build mem_config/pm_config/trustzone_config from a copy of the board source."""
+    src = pkg / name
+    if not src.is_dir():
+        return False
+    work = dest.parent.parent / "work" / name
+    shutil.rmtree(work, ignore_errors=True)
+    shutil.copytree(src, work)
+    run(["make"], cwd=work, env=env, capture=True)
+    shutil.copyfile(work / out_name, dest)
+    log(f"  built {name}/{out_name}")
+    return True
+
+
+def package(cfg, fd, outdir):
+    pkg = ROOT / cfg["package"]
+    pr = outdir / "pr"
+    shutil.rmtree(pr, ignore_errors=True)
+    fw = pr / "Firmwares"
+    for d in (fw, pr / "Keys", pr / "certs"):
+        d.mkdir(parents=True)
+
+    # 1. CIX base firmware, as in build_and_package.sh
+    for f in ["bootloader1.img", "bootloader2.img"] + sorted(p.name for p in (PACKAGE_TOOL / "Firmwares").glob("*.bin")):
+        shutil.copyfile(PACKAGE_TOOL / "Firmwares" / f, fw / f)
+    (fw / "dummy.bin").write_bytes(b"\xff" * 8192)
+
+    # 2. board configuration blobs built from source
+    host_env = {k: v for k, v in os.environ.items() if not k.startswith("GCC5")}
+    host_env["SOURCE_DATE_EPOCH"] = str(int(source_date().timestamp()))
+    host_env["TZ"] = "UTC"
+    make_config(pkg, "mem_config", "memory_config.bin", fw / "memory_config.bin", host_env)
+    make_config(pkg, "pm_config", "csu_pm_config.bin", fw / "csu_pm_config.bin", host_env)
+    make_config(pkg, "trustzone_config", "trustzone_config.bin", fw / "trustzone_config.bin", host_env)
+
+    # 3. board firmware overrides (vendor blobs staged by fetch-blobs.py)
+    for f in sorted((pkg / "Firmwares").glob("*")):
+        if f.is_file() and not f.name.startswith("."):
+            shutil.copyfile(f, fw / f.name)
+
+    # 4. tools, keys and flash layouts
+    for tool in ("cert_uefi_create_rsa", "cix_package_tool", "fiptool", "cix_regen_trusted_key_cert"):
+        shutil.copyfile(PACKAGE_TOOL / host_arch() / tool, pr / tool)
+        (pr / tool).chmod(0o755)
+    for k in (PACKAGE_TOOL / "Keys").glob("*.pem"):
+        shutil.copyfile(k, pr / "Keys" / k.name)
+    for k in ("oem_privatekey.pem", "oem_publickey.pem"):
+        if (pkg / "Keys" / k).exists():
+            shutil.copyfile(pkg / "Keys" / k, pr / "Keys" / k)
+    shutil.copyfile(ROOT / cfg["flash"]["config_all"], pr / "spi_flash_config_all.json")
+    shutil.copyfile(ROOT / cfg["flash"]["config_ota"], pr / "spi_flash_config_ota.json")
+    shutil.copyfile(fd, outdir / "SKY1_BL33_UEFI.fd")
+
+    # 5. sign the FD and wrap it in a FIP (bootloader3.img)
+    nt_fw = str(outdir / "SKY1_BL33_UEFI.fd")
+    run(["./cix_regen_trusted_key_cert", "-p", "Keys/oem_publickey.pem", "-s", "Keys/oem_privatekey.pem",
+         "-o", "certs/trusted_key_no.crt"], cwd=pr, capture=True)
+    run(["./cert_uefi_create_rsa", "--key-alg", "rsa", "--key-size", "3072", "--hash-alg", "sha256", "-p",
+         "--ntfw-nvctr", "223", "--nt-fw-cert", "certs/nt_fw_cert.crt", "--nt-fw-key-cert", "certs/nt_fw_key.crt",
+         "--nt-fw-key", "Keys/oem_privatekey.pem", "--non-trusted-world-key", "Keys/oem_privatekey.pem",
+         "--nt-fw", nt_fw], cwd=pr, capture=True)
+    run(["./fiptool", "create", "--trusted-key-cert", "certs/trusted_key_no.crt",
+         "--nt-fw-key-cert", "certs/nt_fw_key.crt", "--nt-fw-cert", "certs/nt_fw_cert.crt",
+         "--nt-fw", nt_fw, "Firmwares/bootloader3.img"], cwd=pr, capture=True)
+
+    # 6. SPI images
+    run(["./cix_package_tool", "-c", "spi_flash_config_all.json", "-o", "cix_flash_all.bin"], cwd=pr, capture=True)
+    run(["./cix_package_tool", "-c", "spi_flash_config_ota.json", "-O", "cix_flash_ota.bin"], cwd=pr, capture=True)
+    for f in ("cix_flash_all.bin", "cix_flash_ota.bin"):
+        shutil.copyfile(pr / f, outdir / f)
+
+
+CAPSULE_GUID = "351c9808-4b53-4363-9314-d339386e5685"   # CIX system firmware FMP
+CAPSULE_FW_VERSION = 5                                  # as CIX build_and_package.sh
+
+
+def make_capsules(cfg, outdir):
+    """Wrap the SPI images in signed UEFI capsules, as CIX GenBiosCap.sh does.
+
+    Only for boards whose firmware carries the CIX capsule update driver; the
+    capsule is signed with the CIX test certificates the firmware trusts.
+    """
+    if not cfg.get("capsule"):
+        return []
+    keys = ROOT / "edk2-platforms/Platform/CIX/Sky1/Bin"
+    out = []
+    for f in ("cix_flash_all.bin", "cix_flash_ota.bin"):
+        cap = outdir / f"{f}.cap"
+        run([sys.executable, "-m", "Capsule.GenerateCapsule", "-e", "-o", str(cap),
+             "--guid", CAPSULE_GUID, "--hardware-instance", "0", "--monotonic-count", "1",
+             "--fw-version", str(CAPSULE_FW_VERSION), "--lsv", "0",
+             "--signer-private-cert", str(keys / "NewCert003.pem"),
+             "--other-public-cert", str(keys / "NewSub.pub.pem"),
+             "--trusted-public-cert", str(keys / "ntroot.pub.pem"),
+             "--update-image-index", "1", str(outdir / f)],
+            cwd=ROOT / "edk2/BaseTools/Source/Python", capture=True)
+        out.append(cap.name)
+    log(f"  capsules: {', '.join(out)}")
+    return out
+
+
+def check_layout(cfg, outdir):
+    """Validate the packaged image against its flash configuration."""
+    layout = json.loads((outdir / "pr/spi_flash_config_all.json").read_text())
+    img = (outdir / "cix_flash_all.bin").read_bytes()
+    size = flash_size(cfg)
+    # cix_package_tool stops after the last region it writes, so the image
+    # may be shorter than the flash part.
+    if len(img) > size or int(layout["flash_size"], 0) != size:
+        die(f"{cfg['board']}: image is {len(img):#x} bytes, flash is {size:#x}")
+    hdr_off = int(layout["firmware_header_addr"], 0)
+    magic, _ver, count = struct.unpack_from("<III", img, hdr_off)
+    if magic != 0x55AA55AA:
+        die(f"{cfg['board']}: no CIX firmware header at {hdr_off:#x}")
+    groups = {}
+    for g in layout["image_header_groups"]:
+        groups[(g["image_type"], int(g["address"], 0))] = (int(g["size"], 0), g["file"])
+    regions = []
+    for i in range(count):
+        t, addr, length, _ = struct.unpack_from("<IIII", img, hdr_off + 16 + 16 * i)
+        if (t, addr) not in groups:
+            die(f"{cfg['board']}: header entry type {t} at {addr:#x} is not in the layout")
+        gsize, gfile = groups[(t, addr)]
+        if length > gsize:
+            die(f"{cfg['board']}: {gfile} is {length:#x} bytes, region is {gsize:#x}")
+        staged = outdir / "pr" / gfile
+        # cix_package_tool rewrites a field in the first 16 bytes of each image.
+        if staged.exists() and img[addr + 16: addr + length] != staged.read_bytes()[16:length]:
+            die(f"{cfg['board']}: {gfile} content mismatch at {addr:#x}")
+        regions.append((addr, addr + gsize, IMAGE_TYPES.get(t, str(t)), length))
+    regions.sort()
+    for a, b in zip(regions, regions[1:]):
+        if a[1] > b[0]:
+            die(f"{cfg['board']}: regions {a[2]} and {b[2]} overlap")
+    return [{"type": r[2], "address": f"{r[0]:#x}", "region_size": f"{r[1] - r[0]:#x}", "used": f"{r[3]:#x}"}
+            for r in regions]
+
+
+def write_manifest(cfg, outdir, target, version, date, layout, capsules=()):
+    files = {}
+    for f in ("cix_flash_all.bin", "cix_flash_ota.bin", "SKY1_BL33_UEFI.fd", *capsules):
+        p = outdir / f
+        files[f] = {"size": p.stat().st_size, "sha256": sha256(p)}
+    staged = {p.name: sha256(p) for p in sorted((outdir / "pr/Firmwares").iterdir()) if p.is_file()}
+    pins = load_json("manifests/pins.json")
+    iasl = run([os.environ.get("IASL_PREFIX", "") + "iasl", "-v"], capture=True, check=False)
+    gcc = run([os.environ["GCC5_AARCH64_PREFIX"] + "gcc", "--version"], capture=True, check=False)
+    m = {
+        "board": cfg["board"],
+        "name": cfg["name"],
+        "target": target,
+        "version": version,
+        "build_date": date.isoformat(),
+        "commit": git("rev-parse", "HEAD"),
+        "dirty": bool(git("status", "--porcelain", "--untracked-files=no", check=False)),
+        "submodules": {s: git("rev-parse", "HEAD", cwd=ROOT / s) for s in pins["submodules"]},
+        "patches": sorted(p.name for p in (ROOT / "patches").rglob("*.patch")),
+        "tools": {"gcc": gcc.splitlines()[0] if gcc else "", "iasl": next((l for l in iasl.splitlines() if "version" in l), "")},
+        "outputs": files,
+        "staged_firmware": staged,
+        "flash_layout": layout,
+    }
+    (outdir / "manifest.json").write_text(json.dumps(m, indent=2) + "\n")
+    return m
+
+
+FLASH_README = """{name} - edk2-cix {version}
+{underline}
+
+UEFI firmware built from https://github.com/{repo} (commit {commit}).
+Boot mode: ACPI. Build target: {target}.
+
+Files
+  cix_flash_all.bin   complete {flash_mb} MiB SPI NOR image (wipes UEFI settings)
+  cix_flash_ota.bin   BL33/UEFI-only update image
+  SKY1_BL33_UEFI.fd   raw UEFI firmware device (for debugging)
+  *.cap               signed UEFI capsules (boards with capsule update only)
+  manifest.json       versions, hashes and flash layout of this build
+  SHA256SUMS
+
+Flashing
+  From the UEFI shell of the running firmware:
+      FS0:\\> FlashUpdate.efi -f cix_flash_all.bin
+  or write cix_flash_all.bin with an external SPI programmer (1.8 V flash).
+  Keep a known-good image and a way to recover (programmer) at hand.
+
+See README.md in the repository for board specific notes and validation
+status.
+"""
+
+
+def make_dist(cfg, outdir, manifest, repo):
+    dist = ROOT / "dist"
+    dist.mkdir(exist_ok=True)
+    stem = f"edk2-cix-{cfg['board']}-{manifest['version']}"
+    if manifest["target"] != "RELEASE":
+        stem += f"-{manifest['target'].lower()}"
+    readme = FLASH_README.format(name=cfg["name"], version=manifest["version"],
+                                 underline="=" * (len(cfg["name"]) + len(manifest["version"]) + 13),
+                                 repo=repo, commit=manifest["commit"][:12], target=manifest["target"],
+                                 flash_mb=flash_size(cfg) >> 20)
+    sums = "".join(f"{v['sha256']}  {k}\n" for k, v in manifest["outputs"].items())
+    zpath = dist / f"{stem}.zip"
+    with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in ("cix_flash_all.bin", "cix_flash_ota.bin", "SKY1_BL33_UEFI.fd", "manifest.json"):
+            z.write(outdir / f, f"{stem}/{f}")
+        for f in sorted(outdir.glob("*.cap")):
+            z.write(f, f"{stem}/{f.name}")
+        z.writestr(f"{stem}/SHA256SUMS", sums)
+        z.writestr(f"{stem}/README.txt", readme)
+    log(f"{cfg['board']}: {zpath.relative_to(ROOT)}")
+    return zpath
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("boards", nargs="*")
+    ap.add_argument("--all", action="store_true", help="build every board in boards/")
+    ap.add_argument("--list", action="store_true", help="list boards and exit")
+    ap.add_argument("--target", default="RELEASE", choices=["RELEASE", "DEBUG"])
+    ap.add_argument("--version", default=None, help="version string (default: git describe)")
+    ap.add_argument("--jobs", type=int, default=os.cpu_count())
+    ap.add_argument("--image", action="append", default=[], metavar="KEY=PATH|URL",
+                    help="vendor firmware image, passed to fetch-blobs.py")
+    ap.add_argument("--skip-prepare", action="store_true")
+    ap.add_argument("--dist", action="store_true", help="also write release archives to dist/")
+    a = ap.parse_args()
+
+    all_boards = boards()
+    if a.list:
+        for k, v in all_boards.items():
+            print(f"{k:12} {v['name']}")
+        return
+    names = list(all_boards) if a.all else a.boards
+    if not names:
+        ap.error("name at least one board, or use --all / --list")
+    for n in names:
+        board(n)
+
+    if not a.skip_prepare:
+        run([sys.executable, str(ROOT / "scripts/prepare.py")])
+    fetch = [sys.executable, str(ROOT / "scripts/fetch-blobs.py"), *names]
+    for i in a.image:
+        fetch += ["--image", i]
+    run(fetch)
+
+    version = a.version or default_version()
+    date = source_date()
+    commit = git("rev-parse", "--short=12", "HEAD")
+    repo = os.environ.get("GITHUB_REPOSITORY", "edk2-cix/edk2-cix")
+    for n in names:
+        cfg = board(n)
+        outdir = ROOT / "output" / n / a.target
+        shutil.rmtree(outdir, ignore_errors=True)
+        outdir.mkdir(parents=True)
+        fd = edk2_build(cfg, a.target, version, date, commit, a.jobs, outdir / "build.log")
+        package(cfg, fd, outdir)
+        layout = check_layout(cfg, outdir)
+        capsules = make_capsules(cfg, outdir)
+        manifest = write_manifest(cfg, outdir, a.target, version, date, layout, capsules)
+        log(f"{n}: cix_flash_all.bin {manifest['outputs']['cix_flash_all.bin']['sha256']}")
+        if a.dist:
+            make_dist(cfg, outdir, manifest, repo)
+
+
+if __name__ == "__main__":
+    main()

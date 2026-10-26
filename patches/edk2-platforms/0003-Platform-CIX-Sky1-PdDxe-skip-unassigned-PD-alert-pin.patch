@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: edk2-cix <edk2-cix@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 23:48:22 +0100
+Subject: [PATCH] Platform/CIX/Sky1: PdDxe: skip unassigned PD alert pins
+
+Boards with fewer than four PD controllers mark the unused slots with
+0xFF.  Do not register GPIO 255 as an alert interrupt for such slots.
+
+From Neol00/edk2-cix-unlocked V2.4.
+---
+ Platform/CIX/Sky1/Drivers/PdDxe/PdDxe.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/Platform/CIX/Sky1/Drivers/PdDxe/PdDxe.c b/Platform/CIX/Sky1/Drivers/PdDxe/PdDxe.c
+index 8e97b8e7..400cb37a 100644
+--- a/Platform/CIX/Sky1/Drivers/PdDxe/PdDxe.c
++++ b/Platform/CIX/Sky1/Drivers/PdDxe/PdDxe.c
+@@ -319,6 +319,13 @@ SortEnabledAlertPin (
+       continue;
+     }
+ 
++    //
++    // 0xFF marks an unassigned alert pin (no PD controller in that slot).
++    //
++    if (PdDevList[i].AlertPin == 0xFF) {
++      continue;
++    }
++
+     for (j = 0; j < SortedCnt; j++) {
+       if (PdDevList[i].AlertPin == AlertPins[j]) {
+         break;

@@ -1,0 +1,3 @@
+*.patch -text
+*.bin binary
+*.aml binary
