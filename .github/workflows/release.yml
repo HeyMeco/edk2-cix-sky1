@@ -92,7 +92,8 @@ jobs:
             done
             echo
             echo "Each archive contains \`cix_flash_all.bin\` (full SPI image), \`cix_flash_ota.bin\`"
-            echo "(UEFI-only update), the raw FD, \`manifest.json\` and flashing notes."
+            echo "(UEFI-only update), the raw FD, \`manifest.json\` and flashing notes; the MS-R1 and"
+            echo "Orange Pi archives also carry signed UEFI capsules (\`*.cap\`)."
             echo "None of these images has been boot-tested by CI; see README.md for the validation status."
           } > ../notes.md
       - name: Publish

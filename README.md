@@ -1,6 +1,6 @@
 <img src="assets/icon.svg" width="64" height="64" alt="">
 
-# edk2-cix
+# edk2-cix-sky1
 
 UEFI firmware (EDK2) for CIX P1 / Sky1 (CD8180) boards, built from one tree
 on top of the CIX 2026Q3 BSP and booting operating systems through **ACPI**.
@@ -62,8 +62,8 @@ arm64 or x86_64 host. The build runs inside a Debian 12 container with the Arm
 GNU toolchain 10.2-2020.11 and ACPICA R2024_12_12 ([docker/Dockerfile](docker/Dockerfile)).
 
 ```sh
-git clone --recurse-submodules https://github.com/<you>/edk2-cix.git
-cd edk2-cix
+git clone --recurse-submodules https://github.com/HeyMeco/edk2-cix-sky1.git
+cd edk2-cix-sky1
 
 ./build.sh --list                    # boards
 ./build.sh orion-o6 ms-r1            # one or more boards
