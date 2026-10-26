@@ -78,6 +78,32 @@ recovered from the vendor images ([provenance](provenance/orangepi.md)):
 | BL1, BL2, EC, memory and PM configuration | the vendor image regions (`vendor/orangepi/<board>/`), verified by hash |
 | SMBIOS | Merak's, with Orange Pi names |
 
+### Boot firmware and `pm_config` per board
+
+| Board | BL1 / BL2 | BL1 SHA-256 | `pm_config` | Format |
+|---|---|---|---|---|
+| Orion O6 | `radxa/edk2-non-osi` `4e99786e` | `fcddd093…` | built from `O6/pm_config` | v3.0 |
+| Orion O6N | `radxa/edk2-non-osi` `4e99786e` | `fcddd093…` (same as O6) | built from `O6N/pm_config` | v3.0 |
+| MS-R1 | Minisforum `edk2-non-osi` `c22fb43e` | `e6de7d0f…` | built from `MGP1WSB/pm_config` | v3.1 |
+| Orange Pi 6 | vendor image (`vendor/orangepi/opi6/`) | `ed15fa1e…` | vendor binary | v3.2 |
+| Orange Pi 6 Plus | vendor image (`vendor/orangepi/opi6plus/`) | `e8162901…` | vendor binary | v3.0 |
+
+The format is `PM_CONFIG_VERSION_MAJOR/MINOR` in the board's
+`pm_export_config.h`, or the first four bytes of `csu_pm_config.bin`
+(`0300 MMMM`). For comparison, the CIX `edk2-non-osi` default binary is v3.1
+and the CIX source in `edk2-platforms/.../Alcor/pm_config` is v3.4; no board
+uses either.
+
+The source-built boards carry no OPP table (`PM_OPP_TABLE_CONFIG 0`), and
+the Orange Pi binaries have not been decoded that far, so CPU, GPU and NPU
+frequency levels are whatever the SCP firmware reports over SCMI; `AcpiSocDxe` copies the highest and lowest level of each
+domain into `_CPC` at boot. The per-domain `opp_max` caps and per-rail EDP
+limits are only present in the Orange Pi 6 binary (`opp_max` all
+`OPP_NO_LIMIT`); the source-built boards set `PM_PMIC_CONFIG 0`, and the
+Orange Pi 6 Plus section is left erased. All of these are the v3.x
+firmware generation, not the pm_config v2.1 + older BL1 pairing that
+Neol00/edk2-cix-unlocked relies on for its OPP menu.
+
 ## PCIe 64-bit window (patch 0010)
 
 The CIX layout gives each root bridge a fixed 16 GB above-4G window
