@@ -68,6 +68,32 @@ same trusted-key certificate and default CIX OEM key that already sign BL33
 (see [architecture](architecture.md#build-flow-scriptsbuildpy)), and TF-A's
 `cert_create` produces the certificates.
 
+### Firmware TPM (fTPM): not available
+
+The 2026Q3 UEFI tree carries CIX's fTPM trusted application
+(`Platform/CIX/Sky1/Bin/fTPM.bin`: the Microsoft reference fTPM, UUID
+`bc50d971-d4c9-42c4-82cb-343fb7f37896`, signed with a 3072-bit RSA key, NV
+state in OP-TEE secure storage), the `FTPM_SUPPORT` switch and a TPM2 table
+for Windows' TrEE interface (`Ftpm.aslc`, start method 9, device
+`CIXHA023`). It cannot be used:
+
+* `FTpmDeviceLib`, `OpteeClientApiLib` and `FTPMDxe`, which load the TA
+  into OP-TEE and talk to it, are not in the public tree.
+* The OP-TEE in `bootloader2` has no built-in fTPM. It loads TAs from the
+  normal world and keeps secure storage on the normal-world file system
+  (REE FS; RPMB is off in the public `plat-cix` config), so the fTPM only
+  works while a normal-world client answers its RPCs. Under Windows that
+  is CIX's OP-TEE TrEE driver, which is not public and, like any
+  third-party kernel driver, would need Microsoft's signature to load with
+  Secure Boot on.
+* Making it work without an OS driver would take a rebuilt BL32 (public
+  OP-TEE plus the CIX-only pieces listed above and our own StMM), the
+  fTPM as an early TA, a doorbell an ACPI `_DSM` can ring, and secure
+  storage the secure world writes by itself.
+
+Boards that need a TPM use a discrete one instead; on Linux, the vendor
+OP-TEE with `tee-supplicant` and `ftpm_tee` would be the remaining option.
+
 ## bootloader1
 
 A signed `CIXBTFF!` container:
