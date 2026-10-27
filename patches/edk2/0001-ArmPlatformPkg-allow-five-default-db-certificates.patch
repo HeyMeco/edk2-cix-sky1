@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: edk2-cix <edk2-cix@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 21:00:00 +0100
+Subject: [PATCH] ArmPlatformPkg: allow five default db certificates
+
+Windows and current shim releases need five Microsoft db certificates
+(Windows Production PCA 2011, Windows UEFI CA 2023, Microsoft UEFI CA
+2011 and 2023, Microsoft Option ROM UEFI CA 2023); the include stopped
+at three.
+---
+ ArmPlatformPkg/SecureBootDefaultKeys.fdf.inc | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/ArmPlatformPkg/SecureBootDefaultKeys.fdf.inc b/ArmPlatformPkg/SecureBootDefaultKeys.fdf.inc
+index bf4f2d42de..8fd639f7f5 100644
+--- a/ArmPlatformPkg/SecureBootDefaultKeys.fdf.inc
++++ b/ArmPlatformPkg/SecureBootDefaultKeys.fdf.inc
+@@ -37,6 +37,12 @@
+   !endif
+   !ifdef $(DB_DEFAULT_FILE3)
+     SECTION RAW = $(DB_DEFAULT_FILE3)
++  !endif
++  !ifdef $(DB_DEFAULT_FILE4)
++    SECTION RAW = $(DB_DEFAULT_FILE4)
++  !endif
++  !ifdef $(DB_DEFAULT_FILE5)
++    SECTION RAW = $(DB_DEFAULT_FILE5)
+   !endif
+     SECTION UI = "DB Default"
+   }

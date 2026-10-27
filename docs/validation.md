@@ -74,6 +74,46 @@ Checked during development:
   ([provenance](provenance/orangepi.md));
 * UEFI FD and configuration blobs are bit-identical across rebuilds.
 
+## MS-R1 Secure Boot and SPI TPM (not yet tested on hardware)
+
+Secure Boot defaults are Microsoft's certificates (Windows OEM Devices PK;
+KEK CA 2011 and 2K CA 2023; Windows Production PCA 2011, Windows UEFI CA 2023,
+UEFI CA 2011/2023 and Option ROM UEFI CA 2023 in db). Nothing is enrolled
+automatically: Device Manager → Secure Boot Configuration → Reset Secure Boot
+Keys enrolls them and turns Secure Boot on.
+
+The TPM stack is `Tcg2Dxe` over `Tpm2DeviceLibCdnsSpi` (SPI0, chip select 0,
+6.25 MHz, mode 0) in firmware, with `DxeTpm2MeasureBootLib` measuring loaded
+images into PCR 4 (`SPI_TPM_ENABLE`, patch 0012). For the OS, `SpiTpmAcpiDxe`
+publishes the TPM as a CRB TPM with the ACPI start method (TPM2 start method
+2): it allocates the CRB page (ACPI NVS, below 4 GB) and patches its address
+into the TPM2 table and the SSDT, whose `_DSM` start function moves each
+command over SPI0 by driving the controller registers in AML. Windows' inbox
+`tpm.sys` and Linux's `tpm_crb` therefore need no SPI controller driver.
+`\_SB.SPI0` is reported absent at ReadyToBoot so that no OS SPI driver
+competes for the controller; CIX's Windows SPI driver (`CixSpiDriver`) is in
+any case only test-signed, which Windows does not load with Secure Boot on.
+The `_DSM` also answers the Physical Presence Interface (1.3) with every
+operation reported as not implemented, and the driver randomizes and
+disables the platform hierarchy at EndOfDxe.
+
+Expected boot log lines, from first to last failure point:
+
+* `SpiTpm: SPI0 sends N bits per FIFO entry (need 8)`: the controller packs
+  32-bit FIFO words (as CIX's SpiLib assumes); the driver needs a 32-bit mode.
+* `SpiTpm: no TPM on SPI0 (...)`: nothing answered on SPI0/CS0; check the
+  module and which SPI bus and chip select the header uses.
+* `SpiTpm: SPI0: vendor 0x1050 device 0x...`: NPCT750 found (Nuvoton is
+  vendor 0x1050); Tcg2Dxe then runs TPM2_Startup.
+* `SpiTpmAcpiDxe: TPM published, CRB at 0x...`: the tables are installed. In
+  the OS: `tpm.msc` (Windows), `/dev/tpm0` and `tpm2_pcrread` (Linux).
+
+Not covered: no PEI phase, so PCR 0 lacks the firmware volumes; no physical
+presence operations (TPM clear from the OS). Whether Windows accepts a
+start-method-2 CRB whose control area is plain memory is untested: nothing
+acknowledges `CTRL_REQ` cmdReady/goIdle (Linux skips them for this start
+method).
+
 ## Reporting results
 
 When you boot one of these images, please open an issue with the board, the

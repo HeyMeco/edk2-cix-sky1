@@ -139,8 +139,27 @@
 
   DEFINE DTPM_SUPPORT               = FALSE
   DEFINE FTPM_SUPPORT               = FALSE
+  # Discrete TPM 2.0 on the SPI header (ASUS TPM-SPI / NPCT750), driven by
+  # Tpm2DeviceLibCdnsSpi; independent of CIX's DTPM_SUPPORT/FTPM_SUPPORT,
+  # whose drivers are not in the public tree.
+  DEFINE SPI_TPM_ENABLE             = TRUE
   DEFINE I2S_MC_SUPPORT             = TRUE
   DEFINE CAPSULE_ENABLE             = TRUE
+
+  #
+  # Secure Boot defaults: Microsoft's keys (see SecureBootKeys/README.md), so
+  # "Reset Secure Boot Keys" enables Windows and shim-signed Linux.  DBX stays
+  # on the Sky1 default; Windows Update maintains it.
+  #
+  DEFINE MS_KEYS                    = Platform/CIX/Sky1/SecureBootKeys/Microsoft
+  DEFINE PK_DEFAULT_FILE            = $(MS_KEYS)/WindowsOEMDevicesPK.der
+  DEFINE KEK_DEFAULT_FILE1          = $(MS_KEYS)/MicCorKEKCA2011_2011-06-24.der
+  DEFINE KEK_DEFAULT_FILE2          = $(MS_KEYS)/MicCorKEK2kCA2023.der
+  DEFINE DB_DEFAULT_FILE1           = $(MS_KEYS)/MicWinProPCA2011_2011-10-19.der
+  DEFINE DB_DEFAULT_FILE2           = $(MS_KEYS)/WindowsUEFICA2023.der
+  DEFINE DB_DEFAULT_FILE3           = $(MS_KEYS)/MicCorUEFCA2011_2011-06-27.der
+  DEFINE DB_DEFAULT_FILE4           = $(MS_KEYS)/MicUEFICA2023.der
+  DEFINE DB_DEFAULT_FILE5           = $(MS_KEYS)/MicOptionROMUEFICA2023.der
 
 !include Platform/CIX/Sky1/Sky1Common.dsc.inc
 !include NetworkPkg/NetworkDefines.dsc.inc
@@ -226,6 +245,23 @@
   Platform/CIX/Sky1/Drivers/PlatformSetupVariableInitDxe/PlatformSetupVariableInitDxe.inf
   Platform/CIX/Sky1/MGP1WSB/Drivers/SetupManagerDxe/SetupManagerDxe.inf
   Silicon/CIX/Sky1/Drivers/GenericWatchdogDxe/GlobalWatchdogDxe.inf
+!if $(SPI_TPM_ENABLE) == TRUE
+  SecurityPkg/Tcg/Tcg2Dxe/Tcg2Dxe.inf {
+    <LibraryClasses>
+      Tpm2DeviceLib|Platform/CIX/Sky1/Library/Tpm2DeviceLibCdnsSpi/Tpm2DeviceLibCdnsSpi.inf
+      Tpm2CommandLib|SecurityPkg/Library/Tpm2CommandLib/Tpm2CommandLib.inf
+      HashLib|SecurityPkg/Library/HashLibBaseCryptoRouter/HashLibBaseCryptoRouterDxe.inf
+      NULL|SecurityPkg/Library/HashInstanceLibSha1/HashInstanceLibSha1.inf
+      NULL|SecurityPkg/Library/HashInstanceLibSha256/HashInstanceLibSha256.inf
+      NULL|SecurityPkg/Library/HashInstanceLibSha384/HashInstanceLibSha384.inf
+  }
+  Platform/CIX/Sky1/Drivers/SpiTpmAcpiDxe/SpiTpmAcpiDxe.inf {
+    <LibraryClasses>
+      Tpm2DeviceLib|SecurityPkg/Library/Tpm2DeviceLibTcg2/Tpm2DeviceLibTcg2.inf
+      Tpm2CommandLib|SecurityPkg/Library/Tpm2CommandLib/Tpm2CommandLib.inf
+      TpmPlatformHierarchyLib|SecurityPkg/Library/PeiDxeTpmPlatformHierarchyLib/PeiDxeTpmPlatformHierarchyLib.inf
+  }
+!endif
 ###################################################################################################
 # BuildOptions Section - Define the module specific tool chain flags that should be used as
 #                        the default flags for a module. These flags are appended to any

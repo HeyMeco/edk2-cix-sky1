@@ -1,0 +1,40 @@
+## @file
+#  TPM 2.0 device library for a discrete TPM on a Sky1 FCH SPI controller
+#  (Cadence SPI), using the TCG PC Client PTP SPI protocol and the FIFO
+#  interface.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = Tpm2DeviceLibCdnsSpi
+  FILE_GUID                      = 6C0B8E2A-4E71-4C1B-9E3D-2B7A51F0C4D8
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = Tpm2DeviceLib|DXE_DRIVER
+
+[Sources]
+  Tpm2DeviceLibCdnsSpi.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  SecurityPkg/SecurityPkg.dec
+  Silicon/CIX/Sky1/CixPkg.dec
+  Platform/CIX/Sky1/Sky1.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  IoLib
+  PcdLib
+  TimerLib
+
+[FixedPcd]
+  gCixPlatformTokenSpaceGuid.PcdDTPMSpiBus
+  gCixPlatformTokenSpaceGuid.PcdDTPMSpiChipSelect
+
+[Depex]
+  # SpiDxe enables the controller clocks.
+  gCixSpiHostProtocolGuid
