@@ -140,6 +140,10 @@ READ_LOCK_STATUS   = TRUE
   }
 
   INF Silicon/CIX/Sky1/Drivers/GenericWatchdogDxe/GlobalWatchdogDxe.inf
+  # Sky1Common.fdf.inc only adds this with TOKEN_SETUP_SUPPORT, which this
+  # board turns off for its own SetupManagerDxe; listing it under APRIORI
+  # alone leaves it out of the FV.
+  INF Platform/CIX/Sky1/Drivers/PlatformSetupVariableInitDxe/PlatformSetupVariableInitDxe.inf
 # inf file list has be move to Sky1Common.fdf.inc
 # please put xxx.inf to Sky1Common.fdf.inc
 !include Platform/CIX/Sky1/Sky1Common.fdf.inc

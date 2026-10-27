@@ -7,7 +7,7 @@ checks pass), **boot** (boots an OS on hardware).
 |---|---|---|---|---|
 | Radxa Orion O6 | ✓ | ✓ | – | BL1/BL2/TZ/EC/SFH/se_config identical to Radxa release 1.3.1 |
 | Radxa Orion O6N | ✓ | ✓ | – | BL1/BL2/TZ/EC/SFH/se_config identical to Radxa release 1.3.1 |
-| Minisforum MS-R1 | ✓ | ✓ | – | rebased onto CIX 2026Q3; layout identical to Minisforum's |
+| Minisforum MS-R1 | ✓ | ✓ | – | rebased onto CIX 2026Q3; all regions except BL33 and the pm_config timestamp identical to the vendor 2026-04-29 image |
 | Orange Pi 6 Plus | ✓ | ✓ | ✓ | all regions except BL33 identical to vendor 1.4 image |
 | Orange Pi 6 | ✓ | ✓ | ✓ | all regions except BL33 identical to vendor v1.0 image; DSDT board deltas match |
 
@@ -21,6 +21,29 @@ with the OEM key instead of the CIX-root-signed one the vendor uses, and the
 AArch64 CIX tools had signed with a non-standard PSS salt. Since then the FIP
 certificates match each vendor's (the Plus trusted-key certificate is
 byte-identical to the vendor's).
+
+Earlier MS-R1 builds produced no UART output at all: BL1/BL2 came from
+Minisforum's public `edk2-non-osi` tree, which is signed with the CIX default
+root key, while retail boards boot only the `fb3f60e4…` chain in Minisforum's
+own firmware (the same as Orange Pi's). The BL33 trusted-key certificate was
+also Minisforum's git copy rather than the one the retail BL2 verifies. Both
+now follow the vendor image.
+
+The first MS-R1 boot after the vendor firmware then showed "question value
+mismatch with option value" on the CPU and SoC setup pages: the vendor's
+223-byte `PlatformSetupVar` (Minisforum layout) was kept and read as the
+240-byte 2026Q3 structure, which also fed shifted PCIe, I2C, USB, voltage
+and clock-gating settings to the platform. Patch 0011 restores the defaults
+when the stored size does not match. The vendor Orange Pi 6 image stores 234
+bytes, so the same applies after flashing over it.
+
+That alone did not fix the MS-R1: its DSC turns `TOKEN_SETUP_SUPPORT` off for
+its own SetupManagerDxe, so `PlatformSetupVariableInitDxe` was listed only
+under `APRIORI DXE` and never placed in the FV. Nothing created
+`PlatformSetupVar`, `SystemTableVar` or `NetworkStackVar`, F10 inside a setup
+page failed with "Submit Fail For Form: System Manager" (HII routing finds no
+stored variable to update), and setup choices never reached the config
+parameters. `MGP1WSB.fdf` now lists the driver in the FV as well.
 
 Builds before the variable-store fix booted the Orange Pi 6 Plus only once
 after each flash: the store was placed at `0x388000` (Merak) instead of the

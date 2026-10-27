@@ -58,8 +58,14 @@ CIX 2026Q3 rather than copied:
   memory frequency and PMIC version from Q3 and the MS-R1 memory-chip table.
 * ACPI and SMBIOS: Minisforum's own files, plus shared PD interrupts.
 
-BL1, BL2 and `se_config.bin` come from
+`se_config.bin` comes from
 `minisforum-cix-p1-repo/cix_opensource__release__edk2-non-osi` `c22fb43e`.
+BL1 and BL2 come from Minisforum's retail SPI image
+`cix_flash_all2_MGP1WSB_20260429.bin` (`vendor/minisforum/ms-r1/`, see
+`manifests/vendor-images.json`). The BL1/BL2 in Minisforum's public tree are
+signed with the CIX default root key (`c6d0e93f…`); retail boards only start
+the `fb3f60e4…` chain the Orange Pi boards also use, and with the public BL1
+the board stays silent (not even SE firmware output on the UART).
 
 ### Orange Pi 6 Plus / Orange Pi 6
 
@@ -84,7 +90,7 @@ recovered from the vendor images ([provenance](provenance/orangepi.md)):
 |---|---|---|---|---|
 | Orion O6 | `radxa/edk2-non-osi` `4e99786e` | `fcddd093…` | built from `O6/pm_config` | v3.0 |
 | Orion O6N | `radxa/edk2-non-osi` `4e99786e` | `fcddd093…` (same as O6) | built from `O6N/pm_config` | v3.0 |
-| MS-R1 | Minisforum `edk2-non-osi` `c22fb43e` | `e6de7d0f…` | built from `MGP1WSB/pm_config` | v3.1 |
+| MS-R1 | vendor image (`vendor/minisforum/ms-r1/`) | `7b1e83ad…` | built from `MGP1WSB/pm_config` | v3.1 |
 | Orange Pi 6 | vendor image (`vendor/orangepi/opi6/`) | `ed15fa1e…` | vendor binary | v3.2 |
 | Orange Pi 6 Plus | vendor image (`vendor/orangepi/opi6plus/`) | `e8162901…` | vendor binary | v3.0 |
 
@@ -155,8 +161,7 @@ git checkout --detach <pinned-commit>
 
    | Board | `trusted_key_no.crt` |
    |---|---|
-   | O6, O6N, OPI6 Plus | pregenerated, CIX root key `1e0b4d…` (`radxa/edk2-non-osi` `certs/`), as in Radxa's releases and the Plus vendor image |
-   | MS-R1 | pregenerated, root key `898ddc…` (Minisforum `edk2-non-osi` `certs/`), as Minisforum's packaging script uses |
+   | O6, O6N, OPI6 Plus, MS-R1 | pregenerated, CIX root key `1e0b4d…` (`radxa/edk2-non-osi` `certs/`), as in Radxa's releases and the Plus and MS-R1 vendor images (Minisforum's own `certs/` copy, root key `898ddc…`, pairs with the BL2 in its public tree, not with retail boards) |
    | OPI6 | regenerated from the OEM key pair (`cix_regen_trusted_key_cert`), as in the vendor image |
 
    All of them certify the default CIX OEM key, which signs the UEFI

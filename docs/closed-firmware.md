@@ -93,7 +93,7 @@ A signed `CIXBTFF!` container:
 | Image | Key 1 | Key 2 |
 |---|---|---|
 | CIX default, Radxa `4e99786e`, Minisforum `c22fb43e` | `c6d0e93f…` | `5672dfd9…` |
-| Orange Pi 6, Orange Pi 6 Plus | `fb3f60e4…` | `fb3f60e4…` (same key) |
+| Orange Pi 6, Orange Pi 6 Plus, Minisforum MS-R1 retail image | `fb3f60e4…` | `fb3f60e4…` (same key) |
 
 (prefixes of SHA-256 over the 384-byte modulus)
 

@@ -16,11 +16,11 @@ Vendor images (manifests/vendor-images.json) are looked up, in order, from
 --image KEY=PATH|URL, the environment variable named in the manifest (a path
 or an http(s) URL) and blobs-cache/vendor/<file>.
 
-The Orange Pi blobs are kept under vendor/orangepi/; each records in
-"origin" where it was cut from the vendor image.  --from-vendor re-extracts
+The Orange Pi blobs and the MS-R1 BL1/BL2 are kept under vendor/; each
+records in "origin" where it was cut from the vendor image.  --from-vendor re-extracts
 them from the images (see manifests/vendor-images.json) and rewrites vendor/.
 
-Usage: fetch-blobs.py BOARD... | --all  [--from-vendor --image opi6plus=FILE]
+Usage: fetch-blobs.py BOARD... | --all  [--from-vendor --image KEY=FILE]
 """
 
 import argparse

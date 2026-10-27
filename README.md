@@ -29,6 +29,8 @@ on top of the CIX 2026Q3 BSP and booting operating systems through **ACPI**.
   that apply to every board, most of them from
   [Neol00/edk2-cix-unlocked](https://github.com/Neol00/edk2-cix-unlocked):
   * setup-variable stack overrun after a firmware downgrade
+  * setup variable left by the vendor firmware (different layout) reset to
+    the defaults instead of being read at the wrong offsets
   * unassigned USB-PD alert pins (0xFF) registered as GPIO interrupts
   * boot watchdog raised from 20 s to 90 s (no false resets on slow boots)
   * SCMI shared memory `reg-io-width` (SCMI/DVFS/GPU on Linux ≥ 6.13)
@@ -47,12 +49,16 @@ on top of the CIX 2026Q3 BSP and booting operating systems through **ACPI**.
 Vendor binaries come from three places, all verified against the SHA-256
 hashes in [manifests/blobs](manifests/blobs):
 
-* Radxa and Minisforum BL1/BL2, TrustZone/se_config and EC firmware are
+* Radxa BL1/BL2, Radxa and Minisforum TrustZone/se_config and EC firmware are
   downloaded at build time from the vendors' public git trees and releases.
 * The Orange Pi BL1/BL2, EC firmware, memory/PM configuration and board SSDT
   are not published anywhere except inside Orange Pi's firmware images; the
   pieces needed for the build were extracted once and are stored in
   [vendor/orangepi](vendor/orangepi) (see [provenance](docs/provenance/orangepi.md)).
+* The MS-R1 BL1/BL2 are taken the same way from Minisforum's retail firmware
+  and stored in [vendor/minisforum](vendor/minisforum): the ones in
+  Minisforum's public `edk2-non-osi` tree are signed with a different root key
+  and do not boot retail boards.
 
 ## Building locally
 
@@ -168,7 +174,7 @@ First-party code and the board packages are BSD-2-Clause-Patent (see
 [LICENSE](LICENSE) and the SPDX headers). The submodules keep their own
 licenses. Vendor binaries remain under their vendors' terms: Radxa,
 Minisforum and CIX binaries are fetched from the vendors' public repositories
-at build time; the Orange Pi binaries in `vendor/orangepi/` were extracted from
-Orange Pi's publicly distributed firmware, for which no explicit
-redistribution license was found. Release archives contain these binaries as
+at build time; the Orange Pi binaries in `vendor/orangepi/` and the MS-R1
+BL1/BL2 in `vendor/minisforum/` were extracted from the vendors' firmware
+images, for which no explicit redistribution license was found. Release archives contain these binaries as
 part of the flash images, as the vendor firmware does.

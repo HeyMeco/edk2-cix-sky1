@@ -1,0 +1,133 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: edk2-cix <edk2-cix@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 01:30:00 +0100
+Subject: [PATCH] Platform/CIX/Sky1: PlatformSetupVariableInitDxe: reset a
+ setup variable left by another firmware
+
+A PlatformSetupVar written by another firmware was kept as long as it
+fitted in PLATFORM_SETUP_DATA.  The Minisforum MS-R1 firmware stores 223
+bytes in its own layout (no PcieLinkTimeout, PrimaryDisplay/BiosReset/
+OneKeyEcc instead of the 2026Q3 fields), so after switching to this
+firmware every field after the PCIe block was read at the wrong offset
+or past the end of the data: the CPU and SoC setup pages reported
+"question value mismatch with option value", and UpdateConfigParams()
+handed shifted PCIe, I2C, USB, voltage and clock-gating values to the
+platform.
+
+Rebuild the defaults unless the stored variable has the current size and
+the NV+BS attributes, and delete it before writing the new one, since a
+variable cannot be rewritten with different attributes.  A variable that
+ends exactly where PcieBarWindow starts comes from a build of this tree
+before the PCIe window option; it keeps its settings with the option set
+to Auto.  The reset and any failure are reported with DebugPrint() so
+they also show in RELEASE builds.
+---
+ .../PlatformSetupVariableInitDxe.c                 | 74 ++++++++++++++++++----
+ 1 file changed, 59 insertions(+), 15 deletions(-)
+
+diff --git a/Platform/CIX/Sky1/Drivers/PlatformSetupVariableInitDxe/PlatformSetupVariableInitDxe.c b/Platform/CIX/Sky1/Drivers/PlatformSetupVariableInitDxe/PlatformSetupVariableInitDxe.c
+--- a/Platform/CIX/Sky1/Drivers/PlatformSetupVariableInitDxe/PlatformSetupVariableInitDxe.c
++++ b/Platform/CIX/Sky1/Drivers/PlatformSetupVariableInitDxe/PlatformSetupVariableInitDxe.c
+@@ -531,43 +531,87 @@ ConstructSetupVariable (
+   PlatformSetupVar->SPEEnable               = FixedPcdGet8 (PcdSPEEn);
+ }
+ 
++#define PLATFORM_SETUP_VAR_ATTRIBUTES  (EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS)
++
+ EFI_STATUS
+ PlatformSetupVariableInit (
+   VOID
+   )
+ {
+   EFI_STATUS           Status = EFI_SUCCESS;
++  EFI_STATUS           DeleteStatus;
+   UINTN                VarSize;
++  UINT32               Attributes;
+   PLATFORM_SETUP_DATA  PlatformSetupVar;
+ 
+-  VarSize = sizeof (PLATFORM_SETUP_DATA);
++  VarSize    = sizeof (PLATFORM_SETUP_DATA);
++  Attributes = 0;
+ 
+   Status = gRT->GetVariable (
+                   PLATFORM_SETUP_VAR,
+                   &gPlatformSetupVariableGuid,
+-                  NULL,
++                  &Attributes,
+                   &VarSize,
+                   &PlatformSetupVar
+                   );
+-  if (EFI_ERROR (Status)) {
++  if (!EFI_ERROR (Status) &&
++      (VarSize == sizeof (PLATFORM_SETUP_DATA)) &&
++      (Attributes == PLATFORM_SETUP_VAR_ATTRIBUTES))
++  {
++    DEBUG ((DEBUG_INFO, "%a: EfiGetVariable Success - %r\n", __FUNCTION__, Status));
++    return Status;
++  }
++
++  if (!EFI_ERROR (Status) && (VarSize == OFFSET_OF (PLATFORM_SETUP_DATA, PcieBarWindow))) {
+     //
+-    // Variable does not exist yet - create it
++    // Written by a build that predates the PCIe window option: same layout,
++    // without the appended field.  Keep the settings, the option is Auto.
+     //
++    ZeroMem ((UINT8 *)&PlatformSetupVar + VarSize, sizeof (PlatformSetupVar) - VarSize);
++  } else {
++    if (Status != EFI_NOT_FOUND) {
++      //
++      // Written by another firmware (e.g. the board vendor's): a different
++      // PLATFORM_SETUP_DATA layout or different attributes.  Its fields cannot
++      // be mapped onto this layout, and neither this driver nor the setup
++      // browser could update it in place.
++      //
++      DebugPrint (
++        DEBUG_ERROR,
++        "%a: stored %s: %r, %u bytes, attributes 0x%x; expected %u bytes, 0x%x. Restoring defaults.\n",
++        __FUNCTION__,
++        PLATFORM_SETUP_VAR,
++        Status,
++        (UINT32)VarSize,
++        Attributes,
++        (UINT32)sizeof (PLATFORM_SETUP_DATA),
++        PLATFORM_SETUP_VAR_ATTRIBUTES
++        );
++    }
++
+     ZeroMem (&PlatformSetupVar, sizeof (PlatformSetupVar));
+     ConstructSetupVariable (&PlatformSetupVar);
++  }
+ 
+-    Status = gRT->SetVariable (
+-                    PLATFORM_SETUP_VAR,
+-                    &gPlatformSetupVariableGuid,
+-                    EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS,
+-                    sizeof (PLATFORM_SETUP_DATA),
+-                    &PlatformSetupVar
+-                    );
+-    if (EFI_ERROR (Status)) {
+-      DEBUG ((DEBUG_INFO, "%a: EfiSetVariable failed - %r\n", __FUNCTION__, Status));
++  if (Status != EFI_NOT_FOUND) {
++    //
++    // An existing variable cannot change its attributes; delete it first.
++    //
++    DeleteStatus = gRT->SetVariable (PLATFORM_SETUP_VAR, &gPlatformSetupVariableGuid, 0, 0, NULL);
++    if (EFI_ERROR (DeleteStatus) && (DeleteStatus != EFI_NOT_FOUND)) {
++      DebugPrint (DEBUG_ERROR, "%a: deleting %s failed - %r\n", __FUNCTION__, PLATFORM_SETUP_VAR, DeleteStatus);
+     }
+-  } else {
+-    DEBUG ((DEBUG_INFO, "%a: EfiGetVariable Success - %r\n", __FUNCTION__, Status));
++  }
++
++  Status = gRT->SetVariable (
++                  PLATFORM_SETUP_VAR,
++                  &gPlatformSetupVariableGuid,
++                  PLATFORM_SETUP_VAR_ATTRIBUTES,
++                  sizeof (PLATFORM_SETUP_DATA),
++                  &PlatformSetupVar
++                  );
++  if (EFI_ERROR (Status)) {
++    DebugPrint (DEBUG_ERROR, "%a: EfiSetVariable failed - %r\n", __FUNCTION__, Status);
+   }
+ 
+   return Status;

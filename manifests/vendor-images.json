@@ -19,5 +19,12 @@
       "size": 6288062,
       "sha256": "bdc47cf96eacbef4ebfa764175f7dc902d584917959f9b1b05dd59042775de2a"
     }
+  },
+  "ms-r1": {
+    "description": "Minisforum MS-R1 SPI image 2026-04-29 (UEFI Beta2-W18M260429130207N-e1d27961372f)",
+    "file": "cix_flash_all2_MGP1WSB_20260429.bin",
+    "size": 8388608,
+    "sha256": "f3222d63419ee195bedd9d5201b44bd5130c3e5f57e15e5a046cc4f834b0aca5",
+    "env": "EDK2CIX_MSR1_IMAGE"
   }
 }

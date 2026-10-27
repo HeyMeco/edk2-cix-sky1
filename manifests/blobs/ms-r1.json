@@ -4,25 +4,33 @@
     {
       "dest": "Firmwares/bootloader1.img",
       "size": 876544,
-      "sha256": "e6de7d0fe5f71ff91f44b1091159b09b0d73669434f7394de75770a2fd804952",
-      "license": "Minisforum edk2-non-osi (vendor binary)",
+      "sha256": "7b1e83adddabf774bbab475cc60cc0e5afb6d19c255b19848230717e0a209412",
+      "license": "Minisforum firmware (no redistribution grant identified)",
+      "kind": "bl1",
       "source": {
-        "type": "git",
-        "url": "https://github.com/minisforum-cix-p1-repo/cix_opensource__release__edk2-non-osi",
-        "commit": "c22fb43e6b8385c4b43f51ca1de3111fd2990db1",
-        "path": "Platform/CIX/Sky1/PackageTool/Firmwares/bootloader1.img"
+        "type": "local",
+        "path": "vendor/minisforum/ms-r1/bootloader1.img"
+      },
+      "origin": {
+        "type": "vendor-image",
+        "image": "ms-r1",
+        "offset": "0x188000"
       }
     },
     {
       "dest": "Firmwares/bootloader2.img",
       "size": 999476,
-      "sha256": "6738aceeed03d91c7748434c9bb56dfe2a596821fc4b053db336f08b5a5fd607",
-      "license": "Minisforum edk2-non-osi (vendor binary)",
+      "sha256": "2b8308290a3bb8606dc26ede3a2a92effe3c766a3128d7d853db57e04b17917f",
+      "license": "Minisforum firmware (no redistribution grant identified)",
+      "kind": "bl2",
       "source": {
-        "type": "git",
-        "url": "https://github.com/minisforum-cix-p1-repo/cix_opensource__release__edk2-non-osi",
-        "commit": "c22fb43e6b8385c4b43f51ca1de3111fd2990db1",
-        "path": "Platform/CIX/Sky1/PackageTool/Firmwares/bootloader2.img"
+        "type": "local",
+        "path": "vendor/minisforum/ms-r1/bootloader2.img"
+      },
+      "origin": {
+        "type": "vendor-image",
+        "image": "ms-r1",
+        "offset": "0x288000"
       }
     },
     {
@@ -40,13 +48,13 @@
     {
       "dest": "Certs/trusted_key_no.crt",
       "size": 1594,
-      "sha256": "6a940e725afbee75543a9c6d9012429b5bcb2692426760e3eb8370bf49c178c8",
+      "sha256": "2a25ee2b9dfc8d44eacc904dcf8bad07ebc40e73d026e9974c321282d80cd5c1",
       "license": "CIX pregenerated trusted key certificate (from the vendor edk2-non-osi tree)",
-      "note": "Signed by the CIX root key the board's BL2 trusts; certifies the default CIX OEM key.",
+      "note": "Signed by the CIX root key the board's BL2 trusts; certifies the default CIX OEM key. The retail MS-R1 image uses this certificate, not the one in Minisforum's edk2-non-osi tree.",
       "source": {
         "type": "git",
-        "url": "https://github.com/minisforum-cix-p1-repo/cix_opensource__release__edk2-non-osi",
-        "commit": "c22fb43e6b8385c4b43f51ca1de3111fd2990db1",
+        "url": "https://github.com/radxa/edk2-non-osi",
+        "commit": "4e99786e4caaf531bb9b04f097a018917463ae81",
         "path": "Platform/CIX/Sky1/PackageTool/certs/trusted_key_no.crt"
       }
     }
