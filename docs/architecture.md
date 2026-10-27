@@ -152,12 +152,19 @@ git checkout --detach <pinned-commit>
    package has them, board `Firmwares/` overrides, PackageTool binaries for the
    host architecture, keys, board flash layouts.
 5. Signing: `cert_uefi_create_rsa` and `fiptool create` → `bootloader3.img`;
-   `cix_package_tool` → `cix_flash_all.bin` and `cix_flash_ota.bin`. The
-   **x86_64** CIX tools are used on every host (through `qemu-user` inside the
-   container on arm64): the AArch64 builds in `edk2-non-osi` sign with an
-   RSA-PSS salt length of 0x15E instead of 0x20, which vendor BL2 images
-   reject. The trusted-key certificate follows each vendor (`trusted_key_cert`
-   in `boards/*.yaml`):
+   `cix_package_tool` → `cix_flash_all.bin` and `cix_flash_ota.bin`, with the
+   CIX tools for the host architecture. The AArch64 certificate tools in
+   `edk2-non-osi` were compiled against OpenSSL 1.1 headers but link
+   `libcrypto.so.3`: their `EVP_PKEY_CTX_set_rsa_pss_saltlen()` call carries
+   the 1.1 operation bits, OpenSSL 3 rejects it for a `DigestSign` context,
+   the tools ignore the error, and the certificates get the maximum RSA-PSS
+   salt (0x15E) instead of 0x20, which BL2 rejects. The build stages them with
+   that one instruction fixed (optype -1, see `CIX_TOOL_FIXES` in
+   `scripts/build.py`, checked against the binaries' SHA-256); apart from the
+   random serial numbers they then produce the same certificates as the x86_64
+   builds, and `fiptool`/`cix_package_tool` output is byte-identical. The
+   trusted-key certificate follows each vendor (`trusted_key_cert` in
+   `boards/*.yaml`):
 
    | Board | `trusted_key_no.crt` |
    |---|---|

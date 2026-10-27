@@ -136,18 +136,44 @@ def make_config(pkg, name, out_name, dest, env):
     return True
 
 
-def cix_tool(tool, *args):
-    """Command line for a CIX PackageTool binary staged in the pr/ directory.
+# The AArch64 CIX certificate tools were built against OpenSSL 1.1 headers
+# but link libcrypto.so.3.  EVP_PKEY_CTX_set_rsa_pss_saltlen() expanded to
+# RSA_pkey_ctx_ctrl(ctx, EVP_PKEY_OP_SIGN|EVP_PKEY_OP_VERIFY, ...) with the
+# 1.1 operation bits (0x18); OpenSSL 3 renumbered them, so a DigestSign
+# context (EVP_PKEY_OP_SIGNCTX, 0x80) rejects the call, the tools only treat
+# 0 as failure, and OpenSSL 3.0 signs with the maximum salt (0x15E) instead of
+# 32 bytes, which BL2 rejects.  Passing optype -1 (as the tools already do for
+# the padding mode) skips the operation check: "mov w1, #0x18" becomes
+# "mov w1, #-1".  The x86_64 builds link OpenSSL statically and are correct.
+CIX_TOOL_FIXES = {
+    "cert_uefi_create_rsa": (
+        "4daec7e0de6f3109752294f976155ad040e5ee319546016141dc01b269ee1e2e", [(0x4B44, "01038052", "01008012")]),
+    "cix_regen_trusted_key_cert": (
+        "315c334360a4585afb69078a76d9771e99173bfae91018fdd77cfb861fbb3458", [(0x2FC0, "01038052", "01008012")]),
+}
 
-    The AArch64 builds of the CIX certificate tools sign with an RSA-PSS salt
-    length of 0x15E; the x86_64 builds, which CIX and the board vendors use,
-    sign with 0x20, and older vendor BL2 images reject anything else.  So the
-    x86_64 tools are used everywhere, through qemu-user on arm64 hosts.
-    """
-    cmd = [f"./{tool}", *args]
-    if host_arch() != "X86_64":
-        cmd = ["qemu-x86_64", "-L", "/"] + cmd
-    return cmd
+
+def stage_cix_tool(tool, dest):
+    """Copy a CIX PackageTool binary for the host architecture, fixed up."""
+    arch = host_arch()
+    src = PACKAGE_TOOL / arch / tool
+    data = bytearray(src.read_bytes())
+    if arch == "AARCH64" and tool in CIX_TOOL_FIXES:
+        digest, fixes = CIX_TOOL_FIXES[tool]
+        if sha256(src) != digest:
+            die(f"{src} changed (sha256 {sha256(src)}); re-check the OpenSSL salt length fix in CIX_TOOL_FIXES")
+        for off, old, new in fixes:
+            old, new = bytes.fromhex(old), bytes.fromhex(new)
+            if data[off:off + len(old)] != old:
+                die(f"{src}: unexpected bytes at {off:#x}")
+            data[off:off + len(new)] = new
+    dest.write_bytes(data)
+    dest.chmod(0o755)
+
+
+def cix_tool(tool, *args):
+    """Command line for a CIX PackageTool binary staged in the pr/ directory."""
+    return [f"./{tool}", *args]
 
 
 def check_certificates(cfg, pr):
@@ -186,11 +212,9 @@ def package(cfg, fd, outdir):
         if f.is_file() and not f.name.startswith("."):
             shutil.copyfile(f, fw / f.name)
 
-    # 4. tools, keys and flash layouts.  Always the x86_64 tools (see
-    #    cix_tool()); they are what CIX and the board vendors sign with.
+    # 4. tools (host architecture, see CIX_TOOL_FIXES), keys and flash layouts
     for tool in ("cert_uefi_create_rsa", "cix_package_tool", "fiptool", "cix_regen_trusted_key_cert"):
-        shutil.copyfile(PACKAGE_TOOL / "X86_64" / tool, pr / tool)
-        (pr / tool).chmod(0o755)
+        stage_cix_tool(tool, pr / tool)
     for k in (PACKAGE_TOOL / "Keys").glob("*.pem"):
         shutil.copyfile(k, pr / "Keys" / k.name)
     for k in ("oem_privatekey.pem", "oem_publickey.pem"):

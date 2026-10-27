@@ -26,18 +26,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libssl3 openssl zlib1g rsync zip mtools \
     && rm -rf /var/lib/apt/lists/*
 
-# The CIX signing/packaging tools are always run as their x86_64 builds: the
-# AArch64 builds in edk2-non-osi sign with a different RSA-PSS salt length
-# (0x15E instead of 0x20) that older vendor BL2 images reject.  On arm64
-# hosts they run under qemu-user with an amd64 C library.
-RUN set -eux; \
-    if [ "$(dpkg --print-architecture)" != amd64 ]; then \
-      dpkg --add-architecture amd64; \
-      apt-get update; \
-      apt-get install -y --no-install-recommends qemu-user libc6:amd64; \
-      rm -rf /var/lib/apt/lists/*; \
-    fi
-
 # Arm GNU toolchain (aarch64-none-elf)
 RUN set -eux; \
     case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
