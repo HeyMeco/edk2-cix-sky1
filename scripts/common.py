@@ -50,6 +50,11 @@ def load_json(path):
         return json.load(f)
 
 
+def patch_dir(sub):
+    """Patch queue for a submodule, kept per CIX BSP release (bios_version)."""
+    return ROOT / "patches" / load_json("manifests/pins.json")["bios_version"] / sub
+
+
 def _load_yaml(path):
     try:
         import yaml

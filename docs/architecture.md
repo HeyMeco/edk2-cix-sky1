@@ -5,7 +5,7 @@
 | Layer | Location | Notes |
 |---|---|---|
 | EDK2 core | `edk2/` | CIX fork, 2026Q2 RC4 (`9212cf39`) |
-| SoC and CIX boards | `edk2-platforms/` | CIX 2026Q3 RC2.3 (`e5cb70f6`) + `patches/edk2-platforms/` |
+| SoC and CIX boards | `edk2-platforms/` | CIX 2026Q3 RC2.3 (`e5cb70f6`) + `patches/2026Q3/edk2-platforms/` |
 | Binary modules, packaging tools, keys | `edk2-non-osi/` | CIX 2026Q3 RC2.3 (`e725a1d3`) |
 | Board packages | `edk2-project/` | this repository |
 
@@ -79,7 +79,7 @@ recovered from the vendor images ([provenance](provenance/orangepi.md)):
 | DSC / FDF | Q3 `Merak.dsc`/`.fdf`, board PCDs from the vendor setup forms and PD driver |
 | Pin multiplexing, GPIO init | `Library/PinMuxTableLib`, `GpioTableLib`, generated from the tables in the vendor `PlatformDxe` (`scripts/extract/gen_iolibs.py`) |
 | Platform hooks | Plus: Merak's; OPI6: Merak's without the EC-driven hooks, as in the vendor image |
-| DSDT | CIX 2026Q3 source; board differences through `ACPI/LinuxAcpiConfig.h` and the guards added by `patches/edk2-platforms/0001-*` |
+| DSDT | CIX 2026Q3 source; board differences through `ACPI/LinuxAcpiConfig.h` and the guards added by `patches/2026Q3/edk2-platforms/0001-*` |
 | SSDT | the vendor table, extracted from the vendor image (`vendor/orangepi/<board>/Ssdt.aml`) |
 | BL1, BL2, EC, memory and PM configuration | the vendor image regions (`vendor/orangepi/<board>/`), verified by hash |
 | SMBIOS | Merak's, with Orange Pi names |
@@ -126,17 +126,22 @@ each root port and takes the smallest layout that fits with 512 MB to spare
 
 ## Patch queue
 
-`patches/edk2-platforms/*.patch` are `git format-patch` files applied in order
-to the pinned `edk2-platforms` by `scripts/prepare.py` (it records a hash of
-the queue in the submodule's git directory and re-applies when the queue
-changes). To work on them:
+Patches are kept per CIX BSP release in `patches/<release>/<submodule>/`,
+where `<release>` is `bios_version` in `manifests/pins.json` (currently
+`2026Q3`). Only the queue for the pinned release is applied; queues for
+earlier releases stay in the tree as history.
+
+`patches/2026Q3/edk2-platforms/*.patch` are `git format-patch` files applied
+in order to the pinned `edk2-platforms` by `scripts/prepare.py` (it records a
+hash of the queue in the submodule's git directory and re-applies when the
+queue changes). To work on them:
 
 ```sh
 cd edk2-platforms
 git checkout -b work                  # on top of the pinned commit
-git am --keep-cr ../patches/edk2-platforms/*.patch
+git am --keep-cr ../patches/2026Q3/edk2-platforms/*.patch
 # edit, commit
-git format-patch --no-signature --zero-commit -N -o ../patches/edk2-platforms <pinned-commit>
+git format-patch --no-signature --zero-commit -N -o ../patches/2026Q3/edk2-platforms <pinned-commit>
 git checkout --detach <pinned-commit>
 ```
 

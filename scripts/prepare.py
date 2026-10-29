@@ -5,7 +5,7 @@
 - checks out the pinned submodule commits (manifests/pins.json)
 - hides the CIX copy of Platform/Radxa so the imported one in edk2-project
   is used (sparse checkout; the submodule commit stays unchanged)
-- applies the patch queue in patches/<submodule>/
+- applies the patch queue in patches/<bios_version>/<submodule>/
 
 Usage: prepare.py [--check] [--force]
 """
@@ -16,13 +16,13 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import ROOT, die, git, load_json, log  # noqa: E402
+from common import ROOT, die, git, load_json, log, patch_dir  # noqa: E402
 
 SPARSE = {"edk2-platforms": ["/*", "!Platform/Radxa"]}
 
 
 def patch_files(sub):
-    return sorted((ROOT / "patches" / sub).glob("*.patch"))
+    return sorted(patch_dir(sub).glob("*.patch"))
 
 
 def patch_stamp(sub):

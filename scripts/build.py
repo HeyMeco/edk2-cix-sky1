@@ -29,7 +29,7 @@ import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import ROOT, board, boards, die, git, host_arch, load_json, log, run, sha256  # noqa: E402
+from common import ROOT, board, boards, die, git, host_arch, load_json, log, patch_dir, run, sha256  # noqa: E402
 
 PACKAGE_TOOL = ROOT / "edk2-non-osi/Platform/CIX/Sky1/PackageTool"
 PACKAGES_PATH = ["edk2-project", "edk2", "edk2-platforms", "edk2-non-osi", "edk2-platforms/Silicon/Intel"]
@@ -355,7 +355,7 @@ def write_manifest(cfg, outdir, target, version, date, layout, capsules=()):
         "commit": git("rev-parse", "HEAD"),
         "dirty": bool(git("status", "--porcelain", "--untracked-files=no", check=False)),
         "submodules": {s: git("rev-parse", "HEAD", cwd=ROOT / s) for s in pins["submodules"]},
-        "patches": sorted(p.name for p in (ROOT / "patches").rglob("*.patch")),
+        "patches": [str(p.relative_to(ROOT / "patches")) for s in pins["submodules"] for p in sorted(patch_dir(s).glob("*.patch"))],
         "tools": {"gcc": gcc.splitlines()[0] if gcc else "", "iasl": next((l for l in iasl.splitlines() if "version" in l), "")},
         "outputs": files,
         "staged_firmware": staged,

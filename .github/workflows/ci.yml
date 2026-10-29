@@ -26,7 +26,8 @@ jobs:
         run: python3 scripts/imports.py --check
       - name: Patch queue applies
         run: |
-          for p in patches/edk2-platforms/*.patch; do
+          release=$(python3 -c 'import json; print(json.load(open("manifests/pins.json"))["bios_version"])')
+          for p in patches/$release/edk2-platforms/*.patch; do
             git -C edk2-platforms apply --check --whitespace=nowarn "../$p" || exit 1
             git -C edk2-platforms apply --whitespace=nowarn "../$p"
           done

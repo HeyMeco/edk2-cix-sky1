@@ -24,7 +24,7 @@ on top of the CIX 2026Q3 BSP and booting operating systems through **ACPI**.
   submodules ([manifests/pins.json](manifests/pins.json)).
 * **Board packages** in `edk2-project/`, which takes precedence over
   `edk2-platforms` in `PACKAGES_PATH`.
-* **A patch queue** for CIX code in [patches/edk2-platforms](patches/edk2-platforms):
+* **A patch queue** for CIX code in [patches/2026Q3/edk2-platforms](patches/2026Q3/edk2-platforms):
   DSDT board-configuration guards used by the Orange Pi boards, plus fixes
   that apply to every board, most of them from
   [Neol00/edk2-cix-unlocked](https://github.com/Neol00/edk2-cix-unlocked):
@@ -153,7 +153,7 @@ edk2-non-osi
 edk2-project/Platform/       board packages
 manifests/                   pins, vendor image and blob hashes, import provenance
 vendor/orangepi/             Orange Pi blobs extracted from the vendor images
-patches/edk2-platforms/      patch queue applied by scripts/prepare.py
+patches/<release>/            patch queues per CIX release, applied by scripts/prepare.py
 scripts/build.py             build + sign + package + check
 scripts/prepare.py           submodule pins, sparse checkout, patches
 scripts/fetch-blobs.py       vendor binaries

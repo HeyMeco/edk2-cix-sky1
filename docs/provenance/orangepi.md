@@ -84,7 +84,7 @@ disables the SoC GMACs, so `PcdGmac0Enable` is `FALSE`.
   by `fetch-blobs.py` and included through a binary INF.
 * **DSDT**: built from CIX 2026Q3 source. `ACPI/LinuxAcpiConfig.h` describes
   the board (USB-C PD/PHY modes, PCIe PERST and VCC regulators, HDA model)
-  and sets the guards from `patches/edk2-platforms/0001-*`:
+  and sets the guards from `patches/2026Q3/edk2-platforms/0001-*`:
 
 | Device | Change | Board |
 |---|---|---|
