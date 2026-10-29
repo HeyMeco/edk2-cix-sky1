@@ -224,6 +224,8 @@
 ###################################################################################################
 [BuildOptions]
   GCC:DEBUG_*_*_CC_FLAGS          = -DDEBUG_MODE
+  # Port0 (the x8 root port) is wired x4 on this board: no X8 width in setup
+  GCC:*_*_*_VFRPP_FLAGS           = -DPCIE_RP0_X4_SLOT
 !if $(DEBUG_MODE_SUPPORT) == TRUE
   GCC:RELEASE_*_*_CC_FLAGS        = -DDEBUG_MODE
   GCC:*_*_*_CC_FLAGS              = -DDEBUG_MODE_SUPPORT

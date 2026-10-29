@@ -38,9 +38,13 @@ on top of the CIX 2026Q3 BSP and booting operating systems through **ACPI**.
   * SMMU HTTU (hardware access/dirty) advertised in IORT
   * root bridges without I/O space no longer advertise a fake I/O window
   * Linux efi-pstore crash dumps swept before they fill the variable store
-  * **PCIe 64-bit window** setup option (Auto / 16 / 32 / 64 / 128 GB) for the
-    x8 slot, so GPUs with 16 GB or 24 GB of VRAM can use Resizable BAR; Auto
-    sizes it from the installed card
+  * **PCIe 64-bit window** setup option (Auto / 16 / 32 / 64 / 128 GB) for
+    Port0 (the x8 slot on the O6 and MS-R1), so GPUs with 16 GB or 24 GB of
+    VRAM can use Resizable BAR; Auto sizes it from the installed card
+  * **manual ASPM selection** per root port, as in Minisforum's firmware
+    (ASPM Max Support: Disable / L0s / L1 / L0sL1)
+  * Port0 shown as x4 (no X8 width option) on the O6N and the Orange Pi
+    boards, where the x8 root port drives an x4 M.2 slot
 * **Signed UEFI capsules** (`.cap`) for the boards whose firmware supports
   capsule updates (MS-R1, Orange Pi 6, Orange Pi 6 Plus).
 * **Scripts** that fetch and verify vendor binaries, build, sign, package and

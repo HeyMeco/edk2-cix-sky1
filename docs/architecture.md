@@ -35,6 +35,7 @@ against the CIX 2026Q3 shared code unchanged. Local changes (all listed in
 * flash layouts copied from `radxa/edk2-non-osi` `4e99786e` into the packages
 * `RadxaSetupVariableInitDxe` stack overrun fix
 * `pm_config` honours `SOURCE_DATE_EPOCH`
+* PCIe setup defaults: O6N Port0 width x4, O6/O6N per-port ASPM L1 ([PCIe setup menu](#pcie-setup-menu-patch-0012))
 
 BL1, BL2 and the TrustZone configuration come from `radxa/edk2-non-osi`
 `4e99786e`; the O6 EC firmware from `radxa/edk2-platforms` `14cf7bdc`. The O6N
@@ -54,8 +55,9 @@ CIX 2026Q3 rather than copied:
 * `PlatformSetupVariableInitDxe` (identical to Minisforum's shared copy) is
   replaced by the CIX 2026Q3 driver.
 * `SetupManagerDxe`, `PlatformBootManagerLib`, `PlatformEnvHookLib`: three-way
-  merged; the PCIe menu follows Q3's per-port layout; hardware info shows the
-  memory frequency and PMIC version from Q3 and the MS-R1 memory-chip table.
+  merged; the PCIe menu follows Q3's per-port layout, with Minisforum's ASPM
+  selection; hardware info shows the memory frequency and PMIC version from
+  Q3 and the MS-R1 memory-chip table.
 * ACPI and SMBIOS: Minisforum's own files, plus shared PD interrupts.
 
 `se_config.bin` comes from
@@ -123,6 +125,27 @@ each root port and takes the smallest layout that fits with 512 MB to spare
 (never 128 GB, which is experimental). The result feeds the host bridge
 (MemAbove4G/PMemAbove4G), the ACPI RAM variables `0x4D`–`0x56` read by the
 `PCI0-4._CRS` and `PRC0-4._INI` methods, and the device-tree `ranges`.
+
+## PCIe setup menu (patch 0012)
+
+*ASPM Max Support* (per root port: Disable, L0s, L1, L0sL1; default L1) is
+the setting that takes effect. `AcpiSocDxe` publishes it as the root port's
+`max-aspm-support` `_DSD` property, and the CIX `pci-sky1` driver (CIX,
+Radxa and Minisforum kernels) clears L0s (bit 0) and L1 (bit 1) from the
+root port's Link Capabilities when they are not set; the kernel's ASPM policy
+then enables at most what is left. The per-port *ASPM* question, limited to
+the states the maximum allows, goes into the `aspm` property, which none of
+those kernels read. CIX 2026Q3 shows only Disable/Enable (0 or 2) and hides
+the per-port question; the layout here is the one in Minisforum's
+`Platform/CIX/Sky1/Drivers/SetupManagerDxe` (`cix_p1_mg_mp_dev`). The MS-R1
+copy of the menu carries the same change.
+
+Boards whose DSC adds `-DPCIE_RP0_X4_SLOT` to `VFRPP_FLAGS` (O6N, Orange Pi
+6, Orange Pi 6 Plus) show Port0 as "PCI Express X4(Port0)" without the X8
+width option; on these boards Port0 drives an x4 M.2 M-key slot. The O6N
+DSC sets `PcdPcieRootPort0LaneNum` to x4 for the same reason (Radxa's value
+was x8), and the O6/O6N `PcdPcieRootPort*AspmSupport` defaults go from 3
+(L0sL1) to 2 (L1), so that they are within the default maximum (L1).
 
 ## Patch queue
 

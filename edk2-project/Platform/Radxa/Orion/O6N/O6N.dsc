@@ -233,6 +233,8 @@
 ###################################################################################################
 [BuildOptions]
   GCC:DEBUG_*_*_CC_FLAGS          = -DDEBUG_MODE
+  # Port0 (the x8 root port) is wired x4 on this board: no X8 width in setup
+  GCC:*_*_*_VFRPP_FLAGS           = -DPCIE_RP0_X4_SLOT
   GCC:RELEASE_*_*_CC_FLAGS        = -DMDEPKG_NDEBUG -DNDEBUG
 
 !if $(COMPILE_FASTBOOT_LOAD) == nvme
@@ -322,16 +324,16 @@
   gCixTokenSpaceGuid.PcdPcieRootPort2MaxSpeed|0x03
   gCixTokenSpaceGuid.PcdPcieRootPort3MaxSpeed|0x03
   gCixTokenSpaceGuid.PcdPcieRootPort4MaxSpeed|0x03
-  gCixTokenSpaceGuid.PcdPcieRootPort0LaneNum|0x03
+  gCixTokenSpaceGuid.PcdPcieRootPort0LaneNum|0x02     # M.2 M-key, x4
   gCixTokenSpaceGuid.PcdPcieRootPort1LaneNum|0x02
   gCixTokenSpaceGuid.PcdPcieRootPort2LaneNum|0x01
   gCixTokenSpaceGuid.PcdPcieRootPort3LaneNum|0x00
   gCixTokenSpaceGuid.PcdPcieRootPort4LaneNum|0x00
-  gCixTokenSpaceGuid.PcdPcieRootPort0AspmSupport|3
-  gCixTokenSpaceGuid.PcdPcieRootPort1AspmSupport|3
-  gCixTokenSpaceGuid.PcdPcieRootPort2AspmSupport|3
-  gCixTokenSpaceGuid.PcdPcieRootPort3AspmSupport|3
-  gCixTokenSpaceGuid.PcdPcieRootPort4AspmSupport|3
+  gCixTokenSpaceGuid.PcdPcieRootPort0AspmSupport|2
+  gCixTokenSpaceGuid.PcdPcieRootPort1AspmSupport|2
+  gCixTokenSpaceGuid.PcdPcieRootPort2AspmSupport|2
+  gCixTokenSpaceGuid.PcdPcieRootPort3AspmSupport|2
+  gCixTokenSpaceGuid.PcdPcieRootPort4AspmSupport|2
   gCixTokenSpaceGuid.PcdPcieRootPort0PeResetPin|2
   gCixTokenSpaceGuid.PcdPcieRootPort1PeResetPin|4
   gCixTokenSpaceGuid.PcdPcieRootPort2PeResetPin|5
