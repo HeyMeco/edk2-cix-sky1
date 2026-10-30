@@ -196,32 +196,62 @@ images contain: the SE weekly tag (where present), the CSU_PM build
 
 ## EC firmware
 
-| Board | `ec_fw.bin` | Version | Flashed |
-|---|---|---|---|
-| Orion O6 | `84cbdc21…` (`radxa/edk2-platforms`) | `EC V1.07` | yes, `0x10000` |
-| Orion O6N | `03a5a116…` (Radxa 1.3.1 release) | none: 8 KiB of `0xFF`, then 120 KiB of `0x00`, no code | yes, `0x10000` |
-| MS-R1 | `c228c902…` (CIX default, staged by the generic flow) | `EC V1.13` | no: `ec_file` is `dummy.bin` |
-| Orange Pi 6 | `12c3f1c3…` (vendor image) | `EC V1.15` | yes, `0x10000` |
-| Orange Pi 6 Plus | `07a81289…` (vendor image) | `EC V1.13` | yes, `0x10000` |
+| Board | `ec_fw.bin` | Version | Flashed | Used |
+|---|---|---|---|---|
+| Orion O6 | `84cbdc21…` (`radxa/edk2-platforms`) | `EC V1.07` | yes, `0x10000` | yes, runs the fan |
+| Orion O6N | `03a5a116…` (Radxa 1.3.1 release) | none: 8 KiB of `0xFF`, then 120 KiB of `0x00`, no code | yes, `0x10000` | no EC |
+| MS-R1 | `c228c902…` (CIX default, staged by the generic flow) | `EC V1.13` | no: `ec_file` is `dummy.bin` | no EC |
+| Orange Pi 6 | `12c3f1c3…` (vendor image) | `EC V1.15` | yes, `0x10000` | no: UEFI never talks to it |
+| Orange Pi 6 Plus | `07a81289…` (vendor image) | `EC V1.13` | yes, `0x10000` | yes: power rails through EC GPIOs, fan mode |
 
 All the real images are ITE (`ITE EC-V00.1`) builds of the same CIX EC code
-base. The O6N and MS-R1 have no EC: the O6N writes a blank region and lets
-CSU_PM run its fans, and the MS-R1 writes the dummy image. On the O6 the EC
-controls the fan, which is why its `pm_config` has no fan tables.
+base. Where no EC is used, CSU_PM runs the fans from `pm_config` (O6N, MS-R1,
+Orange Pi 6); where the EC runs them, `pm_config` has no fan tables (O6,
+Orange Pi 6 Plus).
+
+The Orange Pi 6 vendor UEFI removed every EC call (power rails, AC-loss
+policy, RTC wake, EC defaults; see `OPI6/Library/PlatformEnvHookLib`), but its
+SPI image still carries a real EC image, which we flash unchanged. Whether the
+board has the EC chip at all is not visible from the firmware; the region may
+be left over from the Merak layout. `OPI6.dsc` still links Merak's
+`Ite5570EcRuntimeLib`, unused.
 
 ## Memory configuration
 
-`memory_config.bin` is a list of `CDCB` blocks (the count is the 16-bit value
-at `0x2e`). Each board carries the DRAM variants it supports:
+`memory_config.bin` starts with a 32-byte quick configuration, followed by a
+`CDCB` header at `0x20` (version, 8-bit block count at `0x2e`) and a table of
+(GUID, offset) block entries. Each `CONF` block describes one DRAM variant:
+maximum data rate, type, die density, width and ranks, selected by a board ID
+bit mask. A variant with no specific block uses the default (`mask all`)
+`CONF`. The board ID comes from GPIO straps (`BDGM`) or from a PCB ID map
+(`BDMP`). The rate is `MaxFreq` × 2; the setup option (`BSET MemFreq`) is
+Auto on every board, so the maximum is what training targets. All boards are
+LPDDR5 on four channels.
 
-| Board | Blocks | Source | DRAM variants |
+| Board | Format | Board ID | Data rate (MT/s) |
 |---|---|---|---|
-| Orion O6 | 24 | built from `O6/mem_config` | `GlobalConfigBlock` 8/12/16/32/64 GB, 32 GB Lo, 64 GB Rayson, 16/24/48 GB and 32 GB x8 HS, 32 GB Hynix; Hive Semi and Hynix PHY pad and Hynix training blocks; `BoardIdMapBlock` |
-| Orion O6N | 21 | built from `O6N/mem_config` | 64 GB Rayson, 16/24/48 GB and 32 GB x8 HS, 16/32/48 GB Hynix; Hive Semi 48 GB bus, pad and trace blocks; `BoardIdGetMethod` instead of a board ID map |
-| MS-R1 | 16 | built from `MGP1WSB/mem_config` | 4/8/16/32 GB, x8 bus and pad blocks, Meigao 32 GB; `BoardIdGetMethod` |
-| Orange Pi 6 | 14 | vendor image | not decoded |
-| Orange Pi 6 Plus | 14 | vendor image | not decoded |
-| CIX 2026Q3 default | 27 | `edk2-non-osi` | (no board uses it) |
+| Orion O6 | v2.0, 24 blocks | PCB ID map | 5500 default; 4800 for 16 GB HS and 32 GB Lo; 6000 for 32 GB Hynix |
+| Orion O6N | v2.0, 21 blocks | GPIO 49, 50, 57, 60 | 5500 default; 6000 for Hynix 16/32/48 GB; 5000 for HS 16/24/48 GB and 32 GB x8; 4800 for 64 GB Rayson |
+| MS-R1 | v1.6, 16 blocks | GPIO 82, 83 | 5500 for all four variants |
+| Orange Pi 6 | v2.0, 14 blocks | GPIO 86–89 | 6000 for board IDs 0, 1, 2; 5500 for ID 15 and the default |
+| Orange Pi 6 Plus | v2.0, 14 blocks | PCB ID map | 6400 for every variant |
+| CIX 2026Q3 default | v2.0, 27 blocks | (unused) | 3200–6000 |
+
+Variants per board (board ID: name from the source, or what the block
+describes for the vendor binaries):
+
+| Board | Variants |
+|---|---|
+| Orion O6 | 0: 8 GB (8 Gb x16 1R); 1: 12 GB (12 Gb x16 1R); 2: 16 GB (16 Gb x16 1R); 4: 32 GB (16 Gb x16 2R); 5: 48 GB HS (12 Gb x8 2R); 6: 64 GB (16 Gb x8 2R); 7: 32 GB Lo (16 Gb x16 2R, 4800); 8: 64 GB Rayson (16 Gb x8 2R); 9: 32 GB x8 HS (8 Gb x8 2R); 10: 24 GB HS (12 Gb x16 2R); 11: 16 GB HS (8 Gb x16 2R, 4800); 12: 32 GB Hynix (16 Gb x16 2R, 6000) |
+| Orion O6N | 1: 16 GB Hynix (8 Gb x16 2R, 6000); 3: 48 GB Hynix (12 Gb x8 2R, 6000); 6: 32 GB x8 HS (8 Gb x8 2R, 5000); 7: 24 GB HS (12 Gb x16 2R, 5000); 9: 48 GB HS (12 Gb x8 2R, 5000); 12: 64 GB Rayson (16 Gb x8 2R, 4800); 13: 16 GB HS (8 Gb x16 2R, 5000); 14: 32 GB Hynix (16 Gb x16 2R, 6000) |
+| MS-R1 | 0: `4g` (16 Gb x16 1R); 1: `8g` (16 Gb x16 2R); 2: `16g` (16 Gb x8 2R); 3: `32g` (16 Gb x8 2R) |
+| Orange Pi 6 | 0, 1, 2: 6000, geometry auto-detected; 15: 5500, auto |
+| Orange Pi 6 Plus | Micron DRAM (known from the board; the firmware does not name a vendor). 0: 16 Gb x16 1R; 1: 16 Gb x16 2R; 2: 16 Gb x16 1R; 3: 16 Gb x16 2R; 4: auto |
+
+The Orange Pi 6 Plus PCB ID map gives IDs 0–3 a mask of 0, which as decoded
+would match any PCB ID; how the SE firmware treats a zero mask is not known.
+The MS-R1 binary is the older v1.6 format: its `CONF` blocks have the v2.0
+layout, but its bus and pad entries do not and were not decoded.
 
 ## Other per-board files
 
@@ -264,14 +294,15 @@ sets an OPP table, Vmin, SPT, the 100 MHz OPP, GPIO functions or `op_mode`.
 |---|---|---|---|---|---|
 | PMIC/EDP | – | – | – | caps and rails (above) | – |
 | Board sensors | – | – | 2 on I2C3 `0x4d`, regs 0 and 1 | – | – |
-| Fans | – (the EC controls the fan) | CPU fan 720–3720 rpm and M.2 fan, 25 kHz | fan 0: 8-step table 1500–3200 rpm, perf up to 5500, quiet from 90 °C; fans 1/2 on sensors 13/14; 5 kHz | fan 0: 2900–5200 rpm, 25 kHz; fans 1/2 as MS-R1 but invalid | – |
+| Fans | – (EC) | CPU fan 720–3720 rpm and M.2 fan, 25 kHz | fan 0: 8-step table 1500–3200 rpm, perf up to 5500, quiet from 90 °C; fans 1/2 on sensors 13/14; 5 kHz | fan 0: 2900–5200 rpm, 25 kHz; fans 1/2 as MS-R1 but invalid | – (EC) |
 | NOC idle | 2 | – | 2 | 2 | 2 |
 | PM watchdog | 5 s | – | 5 s | 5 s | 5 s |
 | PM log | – | – | – | – | `0x2DBA0C1D`, 115200 |
 
 An empty fan section does not mean the board has no fan control: on the O6
-the EC runs the fan, so `PM_FAN_TABLE_CONFIG` is 0. The O6N has no EC fan
-path and lets CSU_PM drive its fans. The O6N source also sets
+and the Orange Pi 6 Plus the EC runs the fan (see [EC firmware](#ec-firmware)),
+so the fan section is empty. Boards without a working EC (O6N, MS-R1,
+Orange Pi 6) let CSU_PM drive their fans. The O6N source also sets
 `PM_NOC_IDLE_CONFIG 0` and `PM_WDT_CONFIG 0`.
 
 To reproduce: build the generator's parse mode (`csupm_bin_config <bin>`)

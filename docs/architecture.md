@@ -90,13 +90,13 @@ recovered from the vendor images ([provenance](provenance/orangepi.md)):
 
 ### Boot firmware and `pm_config` per board
 
-| Board | BL1 / BL2 | BL1 SHA-256 | `pm_config` | Format |
-|---|---|---|---|---|
-| Orion O6 | `radxa/edk2-non-osi` `4e99786e` | `fcddd093…` | built from `O6/pm_config` | v3.0 |
-| Orion O6N | `radxa/edk2-non-osi` `4e99786e` | `fcddd093…` (same as O6) | built from `O6N/pm_config` | v3.0 |
-| MS-R1 | vendor image (`vendor/minisforum/ms-r1/`) | `7b1e83ad…` | built from `MGP1WSB/pm_config` | v3.1 |
-| Orange Pi 6 | vendor image (`vendor/orangepi/opi6/`) | `ed15fa1e…` | vendor binary | v3.2 |
-| Orange Pi 6 Plus | vendor image (`vendor/orangepi/opi6plus/`) | `e8162901…` | vendor binary | v3.0 |
+| Board | BL1 / BL2 | BL1 SHA-256 | `pm_config` | Format | DRAM (MT/s) | EC |
+|---|---|---|---|---|---|---|
+| Orion O6 | `radxa/edk2-non-osi` `4e99786e` | `fcddd093…` | built from `O6/pm_config` | v3.0 | 5500 (4800–6000 by variant) | yes |
+| Orion O6N | `radxa/edk2-non-osi` `4e99786e` | `fcddd093…` (same as O6) | built from `O6N/pm_config` | v3.0 | 5500 (4800–6000 by variant) | no |
+| MS-R1 | vendor image (`vendor/minisforum/ms-r1/`) | `7b1e83ad…` | built from `MGP1WSB/pm_config` | v3.1 | 5500 | no |
+| Orange Pi 6 | vendor image (`vendor/orangepi/opi6/`) | `ed15fa1e…` | vendor binary | v3.2 | 6000 (5500 for one variant and the default) | not used |
+| Orange Pi 6 Plus | vendor image (`vendor/orangepi/opi6plus/`) | `e8162901…` | vendor binary | v3.0 | 6400 (Micron) | yes |
 
 The format is `PM_CONFIG_VERSION_MAJOR/MINOR` in the board's
 `pm_export_config.h`, or the first four bytes of `csu_pm_config.bin`
@@ -107,7 +107,10 @@ uses either.
 The format version is not the BL1 version. The BL1, BL31 and OP-TEE builds,
 EC versions, memory configuration variants, `pm_config` contents and the
 remaining small files per board are in [closed firmware](closed-firmware.md).
-On the O6 the EC controls the fan, so its `pm_config` has no fan tables.
+DRAM is the maximum data rate in the board's `memory_config.bin`; the rate
+per DRAM variant is in [closed firmware](closed-firmware.md#memory-configuration).
+On the O6 and the Orange Pi 6 Plus the EC controls the fan, so their
+`pm_config` has no fan tables.
 
 No board carries an OPP table (`PM_OPP_TABLE_CONFIG 0` in the source-built
 boards, the section erased in both Orange Pi binaries), so CPU, GPU and NPU
