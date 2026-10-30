@@ -40,7 +40,9 @@ against the CIX 2026Q3 shared code unchanged. Local changes (all listed in
 BL1, BL2 and the TrustZone configuration come from `radxa/edk2-non-osi`
 `4e99786e`; the O6 EC firmware from `radxa/edk2-platforms` `14cf7bdc`. The O6N
 EC firmware is not in any public tree; it is taken from Radxa's 1.3.1 release
-package (`edk2-cix_1.3.1_all.deb`), byte-identical to what Radxa ships.
+package (`edk2-cix_1.3.1_all.deb`), byte-identical to what Radxa ships. That
+image is blank (`0xFF`/`0x00` only): the O6N has no EC, and CSU_PM drives its
+fans from `pm_config`. On the O6 the EC (`EC V1.07`) controls the fan.
 
 ### Minisforum MS-R1 (`MGP1WSB`)
 
@@ -102,8 +104,13 @@ The format is `PM_CONFIG_VERSION_MAJOR/MINOR` in the board's
 and the CIX source in `edk2-platforms/.../Alcor/pm_config` is v3.4; no board
 uses either.
 
-The source-built boards carry no OPP table (`PM_OPP_TABLE_CONFIG 0`), and
-the Orange Pi binaries have not been decoded that far, so CPU, GPU and NPU
+The format version is not the BL1 version. The BL1, BL31 and OP-TEE builds,
+EC versions, memory configuration variants, `pm_config` contents and the
+remaining small files per board are in [closed firmware](closed-firmware.md).
+On the O6 the EC controls the fan, so its `pm_config` has no fan tables.
+
+No board carries an OPP table (`PM_OPP_TABLE_CONFIG 0` in the source-built
+boards, the section erased in both Orange Pi binaries), so CPU, GPU and NPU
 frequency levels are whatever the SCP firmware reports over SCMI; `AcpiSocDxe` copies the highest and lowest level of each
 domain into `_CPC` at boot. The per-domain `opp_max` caps and per-rail EDP
 limits are only present in the Orange Pi 6 binary (`opp_max` all

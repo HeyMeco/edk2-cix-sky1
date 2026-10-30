@@ -68,6 +68,24 @@ same trusted-key certificate and default CIX OEM key that already sign BL33
 (see [architecture](architecture.md#build-flow-scriptsbuildpy)), and TF-A's
 `cert_create` produces the certificates.
 
+### Builds per board
+
+Each board's `bootloader2` comes from the same source as its BL1, and the
+BL31 in it is the same build as the BL2 in that BL1 (same `Built :` line).
+
+| `bootloader2` | BL31 | OP-TEE (BL32) |
+|---|---|---|
+| Orion O6 / O6N (`7ff0c68c…`, Radxa `4e99786e`) | `Beta_2.1.5_release`, Jun 13 2026 | `Beta_2.1.5`, Mar 24 2026 |
+| MS-R1 retail (`2b830829…`) | `Beta_2.0.3_release`, Oct 24 2025 | `Beta_2.0.3_release-3.17-6dc7ab48a9ef`, Jul 14 2025 |
+| Orange Pi 6 (`a5041da9…`) | `Beta_2.1.5_release`, Dec 10 2025 | `Beta_2.1.5_release-3.17-bd3cc0e2705e`, Jan 4 2026 |
+| Orange Pi 6 Plus (`99f9ab63…`) | `Beta_2.1.3_release`, Sep 4 2025 | `Beta_2.1.3_release-3.17-7c1538ba6c38`, Jul 9 2025 |
+| CIX 2026Q3 (`cbe992c9…`; `Firmwares2/` `e535526f…`) | `Beta_2.1.5_release`, Jul 15 2026 | `Beta_2.1.5_release-3.17-67e342df9765`, Aug 3 2026 |
+
+MS-R1 is the only board on the `Beta_2.0.x` line. Its retail `bootloader2`
+and Minisforum's public one (`6738acee…`) carry the same version strings and
+BL31 build; the OP-TEE builds are 8 seconds apart (10:21:32 vs 10:21:24 on
+Jul 14 2025). Only the strings were compared.
+
 ### Firmware TPM (fTPM): not available
 
 The 2026Q3 UEFI tree carries CIX's fTPM trusted application
@@ -118,10 +136,14 @@ A signed `CIXBTFF!` container:
 
 | Image | Key 1 | Key 2 |
 |---|---|---|
-| CIX default, Radxa `4e99786e`, Minisforum `c22fb43e` | `c6d0e93f…` | `5672dfd9…` |
-| Orange Pi 6, Orange Pi 6 Plus, Minisforum MS-R1 retail image | `fb3f60e4…` | `fb3f60e4…` (same key) |
+| CIX default (`Firmwares/`), Radxa `4e99786e`, Minisforum `c22fb43e` | `c6d0e93f…` | `5672dfd9…` |
+| Orange Pi 6, Orange Pi 6 Plus, Minisforum MS-R1 retail image, CIX 2026Q3 `Firmwares2/` | `fb3f60e4…` | `fb3f60e4…` (same key) |
 
 (prefixes of SHA-256 over the 384-byte modulus)
+
+CIX 2026Q3 `Firmwares2/bootloader1.img` carries the same three images as
+`Firmwares/` (identical SHA-256), signed with the `fb3f60e4` chain instead.
+It may therefore start on the Orange Pi and retail MS-R1 boards; not tested.
 
 The SE firmware verifies a two-step chain (`Verify Cix ROTPK successful`,
 `Verify OEM ROTPK successful`). Orange Pi ships a different key, self-certified
@@ -135,6 +157,26 @@ the mask ROM, so this cannot be confirmed from the binaries. The test is to
 re-sign an unmodified Orange Pi BL1 with a new key and boot it on a board
 that can be recovered with an SPI programmer. The CIX package tool does not
 build this container; a packer would have to be written.
+
+### Builds per board
+
+None of these BL1s carries a single release number. The table lists what the
+images contain: the SE weekly tag (where present), the CSU_PM build
+(`MINI_PORT_00.10.002G<yymmddhhmmss><branch><commit>`) and the TF-A BL2 tag.
+
+| BL1 | SE firmware | CSU_PM | TF-A BL2 | BL2 offset | SPI flash entries |
+|---|---|---|---|---|---|
+| Orion O6 / O6N (`fcddd093…`) | no tag, stamp 2026-06-03 | `cix_trunk` `79f0fdb030f9`, 2026-05-11 | `v2.7-ed9772217e49` release, Jun 13 2026 | `0xa4000` | 10 |
+| MS-R1 retail (`7b1e83ad…`) | no tag, stamp 2025-12-08 | `cix_p1_mg_202510_dev` `86cd83d159f8`, 2026-02-09 | `v2.7-8d091f2c5132` debug, Oct 24 2025 | `0xa4000` | 9 |
+| Orange Pi 6 (`ed15fa1e…`) | `2.0.2026W01.01` | `cix_trunk` `64709ae53a19`, 2025-12-23 | `v2.7-4adcf71a1937` debug, Dec 10 2025 | `0xa4000` | 10 |
+| Orange Pi 6 Plus (`e8162901…`) | `2.0.2025W36.01` | `cix_trunk` `8b80e7d12d8d`, 2026-01-29 | `v2.7-6f1cdf4f3a61` debug, Sep 4 2025 | `0xa4000` | 9 |
+| CIX 2026Q3 (`6a3b4bbd…`, `Firmwares2/` `96536692…`) | `2.0.2026W31.01` | `cix_trunk` `791c46272210`, 2026-07-21 | `v2.7-33527c31abbe` release, Jul 15 2026 | `0xa3000` | 10 |
+
+* The MS-R1 retail BL1 has the same three images and the same flash table as
+  Minisforum's public one (`c22fb43e`, `e6de7d0f…`); only the keys and
+  the signature differ.
+* The 9-entry flash tables lack JEDEC `c8 60 18` (GigaDevice, 16 MB).
+* Every image's SHA-256 matches the hash in its container's table.
 
 ### Per component
 
@@ -151,6 +193,45 @@ build this container; a packer would have to be written.
   which is proprietary. This is the firmware that sets frequency caps.
 * **SE firmware**: no counterpart. It contains the DRAM training and the
   eFuse and secure-boot logic; not a realistic target.
+
+## EC firmware
+
+| Board | `ec_fw.bin` | Version | Flashed |
+|---|---|---|---|
+| Orion O6 | `84cbdc21…` (`radxa/edk2-platforms`) | `EC V1.07` | yes, `0x10000` |
+| Orion O6N | `03a5a116…` (Radxa 1.3.1 release) | none: 8 KiB of `0xFF`, then 120 KiB of `0x00`, no code | yes, `0x10000` |
+| MS-R1 | `c228c902…` (CIX default, staged by the generic flow) | `EC V1.13` | no: `ec_file` is `dummy.bin` |
+| Orange Pi 6 | `12c3f1c3…` (vendor image) | `EC V1.15` | yes, `0x10000` |
+| Orange Pi 6 Plus | `07a81289…` (vendor image) | `EC V1.13` | yes, `0x10000` |
+
+All the real images are ITE (`ITE EC-V00.1`) builds of the same CIX EC code
+base. The O6N and MS-R1 have no EC: the O6N writes a blank region and lets
+CSU_PM run its fans, and the MS-R1 writes the dummy image. On the O6 the EC
+controls the fan, which is why its `pm_config` has no fan tables.
+
+## Memory configuration
+
+`memory_config.bin` is a list of `CDCB` blocks (the count is the 16-bit value
+at `0x2e`). Each board carries the DRAM variants it supports:
+
+| Board | Blocks | Source | DRAM variants |
+|---|---|---|---|
+| Orion O6 | 24 | built from `O6/mem_config` | `GlobalConfigBlock` 8/12/16/32/64 GB, 32 GB Lo, 64 GB Rayson, 16/24/48 GB and 32 GB x8 HS, 32 GB Hynix; Hive Semi and Hynix PHY pad and Hynix training blocks; `BoardIdMapBlock` |
+| Orion O6N | 21 | built from `O6N/mem_config` | 64 GB Rayson, 16/24/48 GB and 32 GB x8 HS, 16/32/48 GB Hynix; Hive Semi 48 GB bus, pad and trace blocks; `BoardIdGetMethod` instead of a board ID map |
+| MS-R1 | 16 | built from `MGP1WSB/mem_config` | 4/8/16/32 GB, x8 bus and pad blocks, Meigao 32 GB; `BoardIdGetMethod` |
+| Orange Pi 6 | 14 | vendor image | not decoded |
+| Orange Pi 6 Plus | 14 | vendor image | not decoded |
+| CIX 2026Q3 default | 27 | `edk2-non-osi` | (no board uses it) |
+
+## Other per-board files
+
+| File | O6 / O6N | MS-R1 | Orange Pi 6 | Orange Pi 6 Plus |
+|---|---|---|---|---|
+| `sfh_fw.bin` | CIX stock `80a2cb58…` | same | same | same |
+| `se_config.bin` | CIX stock `7bb9621a…` (3856 B) | Minisforum `30b25c64…` (144 B) | CIX stock | CIX stock |
+| `trustzone_config.bin` | Radxa `818bd96d…`, flashed at `0xF0000` | CIX stock `7b35f99a…`, staged but not in the flash layout | same as MS-R1 | same as MS-R1 |
+| `certs/trusted_key_no.crt` | Radxa pregenerated `2a25ee2b…` | same | regenerated with the OEM key (`trusted_key_cert: regenerate`), 1602 B | Radxa pregenerated |
+| `certs/nt_fw_*.crt` | generated per build | same | same | same |
 
 ## PM configuration
 
@@ -173,6 +254,25 @@ MP2845 at 790 mV with 15–30 mV guard bands. Fan 1 and 2 are marked invalid
 but carry table data, so a source version has to write every field, not just
 the meaningful ones; OPP table, PVT, log, Vmin, SPT, 100 MHz OPP, GPIO and
 `op_mode` are unset.
+
+### Contents per board
+
+From the built (Radxa, MS-R1) and vendor (Orange Pi) binaries. None of them
+sets an OPP table, Vmin, SPT, the 100 MHz OPP, GPIO functions or `op_mode`.
+
+| Setting | O6 | O6N | MS-R1 | Orange Pi 6 | Orange Pi 6 Plus |
+|---|---|---|---|---|---|
+| PMIC/EDP | – | – | – | caps and rails (above) | – |
+| Board sensors | – | – | 2 on I2C3 `0x4d`, regs 0 and 1 | – | – |
+| Fans | – (the EC controls the fan) | CPU fan 720–3720 rpm and M.2 fan, 25 kHz | fan 0: 8-step table 1500–3200 rpm, perf up to 5500, quiet from 90 °C; fans 1/2 on sensors 13/14; 5 kHz | fan 0: 2900–5200 rpm, 25 kHz; fans 1/2 as MS-R1 but invalid | – |
+| NOC idle | 2 | – | 2 | 2 | 2 |
+| PM watchdog | 5 s | – | 5 s | 5 s | 5 s |
+| PM log | – | – | – | – | `0x2DBA0C1D`, 115200 |
+
+An empty fan section does not mean the board has no fan control: on the O6
+the EC runs the fan, so `PM_FAN_TABLE_CONFIG` is 0. The O6N has no EC fan
+path and lets CSU_PM drive its fans. The O6N source also sets
+`PM_NOC_IDLE_CONFIG 0` and `PM_WDT_CONFIG 0`.
 
 To reproduce: build the generator's parse mode (`csupm_bin_config <bin>`)
 against the matching header to decode, write `user_config.h` from the decoded
