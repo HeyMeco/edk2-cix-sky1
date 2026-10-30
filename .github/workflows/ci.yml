@@ -1,13 +1,22 @@
 # SPDX-License-Identifier: BSD-2-Clause-Patent
 #
-# Build check for pushes and pull requests.
+# Build check for pushes and pull requests. Changes that only touch
+# documentation do not start it.
 
 name: CI
 
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - LICENSE
   pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - LICENSE
   workflow_dispatch:
 
 permissions:
