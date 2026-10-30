@@ -1,0 +1,59 @@
+## @file
+#  Publish the discrete SPI TPM to the OS as a CRB TPM with the ACPI start
+#  method: the TPM2 table, the command/response buffer, and an SSDT whose
+#  _DSM moves each command over SPI.  The OS needs no SPI controller driver;
+#  its own TPM driver (tpm.sys, Linux tpm_crb) and ACPI interpreter do the
+#  rest.  The SPI controller is hidden from the OS, and the TPM platform
+#  hierarchy is locked at EndOfDxe.  The driver only dispatches once
+#  Tcg2Dxe has found the TPM.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = SpiTpmAcpiDxe
+  FILE_GUID                      = 0E3A6C59-2B8F-4D13-A7C4-91F5D2B8E604
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = SpiTpmAcpiDxeEntry
+
+[Sources]
+  SpiTpmAcpi.h
+  SpiTpmAcpiDxe.c
+  Tpm2.aslc
+  SpiTpm.asl
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  SecurityPkg/SecurityPkg.dec
+  Silicon/CIX/Sky1/CixPkg.dec
+  Platform/CIX/Sky1/Sky1.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  CacheMaintenanceLib
+  DebugLib
+  DxeServicesLib
+  DxeServicesTableLib
+  MemoryAllocationLib
+  TpmPlatformHierarchyLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+  UefiLib
+
+[Guids]
+  gEfiEndOfDxeEventGroupGuid
+
+[Protocols]
+  gEfiAcpiTableProtocolGuid
+  gEfiAcpiSdtProtocolGuid
+
+[FixedPcd]
+  gCixPlatformTokenSpaceGuid.PcdDTPMSpiBus
+  gCixPlatformTokenSpaceGuid.PcdDTPMSpiChipSelect
+
+[Depex]
+  gEfiAcpiTableProtocolGuid AND gEfiTcg2ProtocolGuid

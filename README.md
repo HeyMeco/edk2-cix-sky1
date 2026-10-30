@@ -24,7 +24,9 @@ on top of the CIX 2026Q3 BSP and booting operating systems through **ACPI**.
   submodules ([manifests/pins.json](manifests/pins.json)).
 * **Board packages** in `edk2-project/`, which takes precedence over
   `edk2-platforms` in `PACKAGES_PATH`.
-* **A patch queue** for CIX code in [patches/2026Q3/edk2-platforms](patches/2026Q3/edk2-platforms):
+* **A patch queue** for CIX code in [patches/2026Q3/edk2-platforms](patches/2026Q3/edk2-platforms)
+  (and two for EDK2 core in [patches/2026Q3/edk2](patches/2026Q3/edk2), for
+  the MS-R1 Secure Boot defaults and the TPM on the Secure Boot page):
   DSDT board-configuration guards used by the Orange Pi boards, plus fixes
   that apply to every board, most of them from
   [Neol00/edk2-cix-unlocked](https://github.com/Neol00/edk2-cix-unlocked):
@@ -45,6 +47,12 @@ on top of the CIX 2026Q3 BSP and booting operating systems through **ACPI**.
     (ASPM Max Support: Disable / L0s / L1 / L0sL1)
   * Port0 shown as x4 (no X8 width option) on the O6N and the Orange Pi
     boards, where the x8 root port drives an x4 M.2 slot
+* **MS-R1 Secure Boot and TPM** (tested with Windows 11; Linux untested):
+  Microsoft's PK/KEK/db as the Secure Boot defaults
+  ([SecureBootKeys](edk2-project/Platform/CIX/Sky1/SecureBootKeys)), and TPM
+  2.0 measured boot with a discrete TPM on the dTPM header (ASUS TPM-SPI,
+  Nuvoton NPCT750), shown on the Secure Boot Configuration page and published
+  to the OS as a CRB TPM driven from AML, so Windows' inbox driver uses it
 * **Signed UEFI capsules** (`.cap`) for the boards whose firmware supports
   capsule updates (MS-R1, Orange Pi 6, Orange Pi 6 Plus).
 * **Scripts** that fetch and verify vendor binaries, build, sign, package and

@@ -4,7 +4,7 @@
 
 | Layer | Location | Notes |
 |---|---|---|
-| EDK2 core | `edk2/` | CIX fork, 2026Q2 RC4 (`9212cf39`) |
+| EDK2 core | `edk2/` | CIX fork, 2026Q2 RC4 (`9212cf39`) + `patches/2026Q3/edk2/` |
 | SoC and CIX boards | `edk2-platforms/` | CIX 2026Q3 RC2.3 (`e5cb70f6`) + `patches/2026Q3/edk2-platforms/` |
 | Binary modules, packaging tools, keys | `edk2-non-osi/` | CIX 2026Q3 RC2.3 (`e725a1d3`) |
 | Board packages | `edk2-project/` | this repository |
@@ -164,10 +164,11 @@ where `<release>` is `bios_version` in `manifests/pins.json` (currently
 `2026Q3`). Only the queue for the pinned release is applied; queues for
 earlier releases stay in the tree as history.
 
-`patches/2026Q3/edk2-platforms/*.patch` are `git format-patch` files applied
-in order to the pinned `edk2-platforms` by `scripts/prepare.py` (it records a
-hash of the queue in the submodule's git directory and re-applies when the
-queue changes). To work on them:
+`patches/2026Q3/edk2-platforms/*.patch` (and `patches/2026Q3/edk2/*.patch`
+for `edk2`) are `git format-patch` files applied in order to the pinned
+submodule by `scripts/prepare.py` (it records a hash of the queue in the
+submodule's git directory and re-applies when the queue changes). To work on
+them:
 
 ```sh
 cd edk2-platforms

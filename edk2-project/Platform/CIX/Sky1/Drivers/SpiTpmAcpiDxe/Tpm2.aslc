@@ -1,0 +1,32 @@
+/** @file
+  TPM2 table: CRB interface with the ACPI start method (start method 2).
+  SpiTpmAcpiDxe fills in the control area address.
+
+  SPDX-License-Identifier: BSD-2-Clause-Patent
+**/
+
+#include <IndustryStandard/Acpi.h>
+#include <IndustryStandard/Tpm2Acpi.h>
+#include <Include/AcpiPlatform.h>
+
+EFI_TPM2_ACPI_TABLE  Tpm2Table = {
+  {
+    EFI_ACPI_5_0_TRUSTED_COMPUTING_PLATFORM_2_TABLE_SIGNATURE,
+    sizeof (EFI_TPM2_ACPI_TABLE),
+    EFI_TPM2_ACPI_TABLE_REVISION_3,
+    0,                          // Checksum, filled in when installed
+    EFI_ACPI_OEM_ID_PCI,
+    EFI_ACPI_OEM_TABLE_ID,
+    EFI_ACPI_OEM_REVISION,
+    EFI_ACPI_CREATOR_ID,
+    EFI_ACPI_CREATOR_REVISION,
+  },
+  0,                            // Flags (platform class: client)
+  0,                            // Address of the control area, set at boot
+  EFI_TPM2_ACPI_TABLE_START_METHOD_ACPI,
+};
+
+//
+// Reference the table so the compiler keeps it.
+//
+VOID *CONST  ReferenceAcpiTable = &Tpm2Table;

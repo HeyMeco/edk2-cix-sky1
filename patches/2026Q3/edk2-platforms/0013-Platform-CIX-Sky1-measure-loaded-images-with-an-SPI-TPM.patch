@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: edk2-cix <edk2-cix@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 10:00:00 +0100
+Subject: [PATCH] Platform/CIX/Sky1: measure loaded images with an SPI TPM
+
+Boards with a discrete TPM driven by their own Tpm2DeviceLib (the MS-R1
+sets SPI_TPM_ENABLE) need SecurityStubDxe to measure PE images into
+PCR 4.  CIX's DTPM_SUPPORT/FTPM_SUPPORT paths depend on drivers that are
+not in the public tree, so add a separate switch, off by default, that
+only links DxeTpm2MeasureBootLib into SecurityStubDxe.
+---
+ Platform/CIX/Sky1/Sky1Common.dsc.inc | 10 +++++++++-
+ Platform/CIX/Sky1/Sky1Define.dsc.inc |  1 +
+ 2 files changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/Platform/CIX/Sky1/Sky1Common.dsc.inc b/Platform/CIX/Sky1/Sky1Common.dsc.inc
+--- a/Platform/CIX/Sky1/Sky1Common.dsc.inc
++++ b/Platform/CIX/Sky1/Sky1Common.dsc.inc
+@@ -739,13 +739,21 @@
+   MdeModulePkg/Universal/SecurityStubDxe/SecurityStubDxe.inf {
+     <LibraryClasses>
+       NULL|SecurityPkg/Library/DxeImageVerificationLib/DxeImageVerificationLib.inf
++!if $(SPI_TPM_ENABLE) == TRUE
++      NULL|SecurityPkg/Library/DxeTpm2MeasureBootLib/DxeTpm2MeasureBootLib.inf
++!endif
+   }
+   SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfigDxe.inf
+   SecurityPkg/EnrollFromDefaultKeysApp/EnrollFromDefaultKeysApp.inf
+   Platform/CIX/Sky1/Drivers/SecureBootDxe/SecureBootDxe.inf
+   SecurityPkg/VariableAuthenticated/SecureBootDefaultKeysDxe/SecureBootDefaultKeysDxe.inf
+ !else
+-  MdeModulePkg/Universal/SecurityStubDxe/SecurityStubDxe.inf
++  MdeModulePkg/Universal/SecurityStubDxe/SecurityStubDxe.inf {
++    <LibraryClasses>
++!if $(SPI_TPM_ENABLE) == TRUE
++      NULL|SecurityPkg/Library/DxeTpm2MeasureBootLib/DxeTpm2MeasureBootLib.inf
++!endif
++  }
+ !endif
+   Silicon/CIX/Sky1/Drivers/RngDxe/RngDxe.inf
+   MdeModulePkg/Universal/CapsuleRuntimeDxe/CapsuleRuntimeDxe.inf
+diff --git a/Platform/CIX/Sky1/Sky1Define.dsc.inc b/Platform/CIX/Sky1/Sky1Define.dsc.inc
+--- a/Platform/CIX/Sky1/Sky1Define.dsc.inc
++++ b/Platform/CIX/Sky1/Sky1Define.dsc.inc
+@@ -122,6 +122,7 @@
+   DEFINE GPIO_POWER_BUTTON_ENABLE   = FALSE
+   DEFINE DTPM_SUPPORT               = FALSE
+   DEFINE FTPM_SUPPORT               = FALSE
++  DEFINE SPI_TPM_ENABLE             = FALSE
+   DEFINE DEBUG_MODE_SUPPORT         = FALSE
+   DEFINE EFUSE_OEM_KEY_ENABLE       = FALSE
+   DEFINE LINUX_AB_BOOT_SELECT       = FALSE
