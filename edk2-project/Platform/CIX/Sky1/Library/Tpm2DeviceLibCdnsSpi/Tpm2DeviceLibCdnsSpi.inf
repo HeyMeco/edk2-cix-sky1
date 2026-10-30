@@ -27,6 +27,7 @@
   BaseLib
   BaseMemoryLib
   DebugLib
+  GpioLib
   IoLib
   PcdLib
   TimerLib

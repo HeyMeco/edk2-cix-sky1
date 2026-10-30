@@ -511,8 +511,13 @@
 
   gCixPlatformTokenSpaceGuid.PcdDTPMSupport|$(DTPM_SUPPORT)
   gCixPlatformTokenSpaceGuid.PcdFTPMSupport|$(FTPM_SUPPORT)
+  # Minisforum's block diagram and GPIO datasheet (MS-R1-Docs/Datasheet): the
+  # dTPM header is on SPI1 (the FCH controller at 0x04090000, CIX's SPI1_*
+  # pads), SPI2 (0x040A0000) goes to the 40-pin GPIO header and SPI0 is the
+  # boot flash (XSPI).  The TPM answers on chip select 1 (tested with an ASUS
+  # TPM-SPI, NPCT750).
   gCixPlatformTokenSpaceGuid.PcdDTPMSpiBus|0x0          # 0:SPI1=0x04090000  1:SPI2=0x040A0000
-  gCixPlatformTokenSpaceGuid.PcdDTPMSpiChipSelect|0x1   # 1:Slave Select 0   2:Slave Select 1
+  gCixPlatformTokenSpaceGuid.PcdDTPMSpiChipSelect|0x2   # 1:Slave Select 0   2:Slave Select 1
 
   gCixPlatformTokenSpaceGuid.PcdRegisterFastBootSupport|TRUE
 

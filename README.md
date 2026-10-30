@@ -41,10 +41,12 @@ on top of the CIX 2026Q3 BSP and booting operating systems through **ACPI**.
   * **PCIe 64-bit window** setup option (Auto / 16 / 32 / 64 / 128 GB) for the
     x8 slot, so GPUs with 16 GB or 24 GB of VRAM can use Resizable BAR; Auto
     sizes it from the installed card
-* **MS-R1 Secure Boot and TPM** (untested on hardware): Microsoft's PK/KEK/db
-  as the Secure Boot defaults ([SecureBootKeys](edk2-project/Platform/CIX/Sky1/SecureBootKeys)),
-  and TPM 2.0 measured boot with a discrete TPM on the SPI header (ASUS
-  TPM-SPI, Nuvoton NPCT750)
+* **MS-R1 Secure Boot and TPM** (tested with Windows 11; Linux untested):
+  Microsoft's PK/KEK/db as the Secure Boot defaults
+  ([SecureBootKeys](edk2-project/Platform/CIX/Sky1/SecureBootKeys)), and TPM
+  2.0 measured boot with a discrete TPM on the dTPM header (ASUS TPM-SPI,
+  Nuvoton NPCT750), shown on the Secure Boot Configuration page and published
+  to the OS as a CRB TPM driven from AML, so Windows' inbox driver uses it
 * **Signed UEFI capsules** (`.cap`) for the boards whose firmware supports
   capsule updates (MS-R1, Orange Pi 6, Orange Pi 6 Plus).
 * **Scripts** that fetch and verify vendor binaries, build, sign, package and

@@ -34,8 +34,10 @@
 [LibraryClasses]
   BaseLib
   BaseMemoryLib
+  CacheMaintenanceLib
   DebugLib
   DxeServicesLib
+  DxeServicesTableLib
   MemoryAllocationLib
   TpmPlatformHierarchyLib
   UefiBootServicesTableLib
@@ -48,6 +50,10 @@
 [Protocols]
   gEfiAcpiTableProtocolGuid
   gEfiAcpiSdtProtocolGuid
+
+[FixedPcd]
+  gCixPlatformTokenSpaceGuid.PcdDTPMSpiBus
+  gCixPlatformTokenSpaceGuid.PcdDTPMSpiChipSelect
 
 [Depex]
   gEfiAcpiTableProtocolGuid AND gEfiTcg2ProtocolGuid

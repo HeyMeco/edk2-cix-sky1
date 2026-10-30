@@ -21,8 +21,10 @@
 #include <Guid/EventGroup.h>
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
+#include <Library/CacheMaintenanceLib.h>
 #include <Library/DebugLib.h>
 #include <Library/DxeServicesLib.h>
+#include <Library/DxeServicesTableLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/TpmPlatformHierarchyLib.h>
 #include <Library/UefiBootServicesTableLib.h>
@@ -53,16 +55,18 @@ InitCrb (
   VOID
   )
 {
-  EFI_STATUS                  Status;
-  EFI_TPM2_ACPI_CONTROL_AREA  *Control;
+  EFI_STATUS                       Status;
+  EFI_TPM2_ACPI_CONTROL_AREA       *Control;
+  EFI_GCD_MEMORY_SPACE_DESCRIPTOR  Descriptor;
 
   //
-  // Below 4 GB: the SSDT describes it with Memory32Fixed.
+  // Below 4 GB: the SSDT describes it with Memory32Fixed.  Reserved memory,
+  // as Microsoft requires for the control area.
   //
   mCrbBase = MAX_UINT32;
   Status   = gBS->AllocatePages (
                     AllocateMaxAddress,
-                    EfiACPIMemoryNVS,
+                    EfiReservedMemoryType,
                     EFI_SIZE_TO_PAGES (SPI_TPM_CRB_SIZE),
                     &mCrbBase
                     );
@@ -80,17 +84,64 @@ InitCrb (
   Control->Command      = mCrbBase + SPI_TPM_CRB_DATA_BUFFER;
   Control->ResponseSize = SPI_TPM_CRB_DATA_SIZE;
   Control->Response     = mCrbBase + SPI_TPM_CRB_DATA_BUFFER;
+
+  //
+  // The OS TPM driver maps the area as device memory, and an OS that
+  // follows the memory map's cacheability for the SSDT's operation region
+  // (Linux on arm64) would map it cached: on arm64 the two would not see
+  // each other's writes.  Make the area uncached only, so every mapping
+  // agrees, once the values above are in memory.  System memory is not
+  // UC capable here to begin with.
+  //
+  WriteBackInvalidateDataCacheRange ((VOID *)(UINTN)mCrbBase, SPI_TPM_CRB_SIZE);
+  ZeroMem (&Descriptor, sizeof (Descriptor));
+  Status = gDS->GetMemorySpaceDescriptor (mCrbBase, &Descriptor);
+  if (!EFI_ERROR (Status)) {
+    Status = gDS->SetMemorySpaceCapabilities (
+                    mCrbBase,
+                    SPI_TPM_CRB_SIZE,
+                    Descriptor.Capabilities | EFI_MEMORY_UC
+                    );
+  }
+
+  if (!EFI_ERROR (Status)) {
+    Status = gDS->SetMemorySpaceAttributes (
+                    mCrbBase,
+                    SPI_TPM_CRB_SIZE,
+                    (Descriptor.Attributes & ~EFI_CACHE_ATTRIBUTE_MASK) | EFI_MEMORY_UC
+                    );
+  }
+
+  if (!EFI_ERROR (Status)) {
+    Status = gDS->SetMemorySpaceCapabilities (
+                    mCrbBase,
+                    SPI_TPM_CRB_SIZE,
+                    (Descriptor.Capabilities & ~EFI_CACHE_ATTRIBUTE_MASK) | EFI_MEMORY_UC
+                    );
+  }
+
+  if (EFI_ERROR (Status)) {
+    DebugPrint (
+      DEBUG_ERROR,
+      "SpiTpmAcpiDxe: CRB area left cacheable (capabilities 0x%lx, attributes 0x%lx): %r\n",
+      Descriptor.Capabilities,
+      Descriptor.Attributes,
+      Status
+      );
+  }
+
   return EFI_SUCCESS;
 }
 
 /**
-  Replace the DWordConst SPI_TPM_CRB_PLACEHOLDER in the SSDT (CRBA) with the
-  CRB address.
+  Replace the one DWordConst Placeholder in the SSDT with Value.
 **/
 STATIC
 EFI_STATUS
-PatchSsdt (
-  IN OUT EFI_ACPI_DESCRIPTION_HEADER  *Table
+PatchSsdtDword (
+  IN OUT EFI_ACPI_DESCRIPTION_HEADER  *Table,
+  IN     UINT32                       Placeholder,
+  IN     UINT32                       Value
   )
 {
   UINT8  *Aml;
@@ -101,9 +152,9 @@ PatchSsdt (
   Count = 0;
   for (Index = sizeof (*Table); Index + sizeof (UINT32) < Table->Length; Index++) {
     if ((Aml[Index] == AML_DWORD_PREFIX) &&
-        (ReadUnaligned32 ((UINT32 *)&Aml[Index + 1]) == SPI_TPM_CRB_PLACEHOLDER))
+        (ReadUnaligned32 ((UINT32 *)&Aml[Index + 1]) == Placeholder))
     {
-      WriteUnaligned32 ((UINT32 *)&Aml[Index + 1], (UINT32)mCrbBase);
+      WriteUnaligned32 ((UINT32 *)&Aml[Index + 1], Value);
       Index += sizeof (UINT32);
       Count++;
     }
@@ -151,7 +202,22 @@ InstallTables (
     if (Table->Signature == EFI_ACPI_5_0_TRUSTED_COMPUTING_PLATFORM_2_TABLE_SIGNATURE) {
       ((EFI_TPM2_ACPI_TABLE *)Table)->AddressOfControlArea = mCrbBase + SPI_TPM_CRB_CONTROL_AREA;
     } else if (Table->Signature == EFI_ACPI_6_3_SECONDARY_SYSTEM_DESCRIPTION_TABLE_SIGNATURE) {
-      Status = PatchSsdt (Table);
+      Status = PatchSsdtDword (Table, SPI_TPM_CRB_PLACEHOLDER, (UINT32)mCrbBase);
+      if (!EFI_ERROR (Status)) {
+        Status = PatchSsdtDword (
+                   Table,
+                   SPI_TPM_SPI_PLACEHOLDER,
+                   SPI_TPM_SPI_BASE (FixedPcdGet8 (PcdDTPMSpiBus))
+                   );
+      }
+
+      if (!EFI_ERROR (Status)) {
+        Status = PatchSsdtDword (
+                   Table,
+                   SPI_TPM_CS_PLACEHOLDER,
+                   SPI_TPM_SPI_CS_FIELD (FixedPcdGet8 (PcdDTPMSpiChipSelect))
+                   );
+      }
     }
 
     if (!EFI_ERROR (Status)) {
@@ -171,7 +237,8 @@ InstallTables (
 }
 
 /**
-  Report \_SB.SPI0 as absent in the DSDT: with the TPM on it, the _DSM owns
+  Report the TPM's SPI controller (\_SB.SPI0 or SPI1) as absent in the DSDT:
+  with the TPM on it, the _DSM owns
   the controller, and an OS SPI driver (CixSpiDriver on Windows, the CIX
   spi-cadence driver on Linux) would reprogram it in the middle of a
   command.
@@ -196,12 +263,14 @@ HideSpiController (
   UINT8                   *Data;
   UINTN                   DataSize;
   BOOLEAN                 Hidden;
+  STATIC CHAR8            Path[] = "\\_SB.SPI0._STA";
 
   gBS->CloseEvent (Event);
+  Path[8] = (CHAR8)('0' + FixedPcdGet8 (PcdDTPMSpiBus));
 
   Status = gBS->LocateProtocol (&gEfiAcpiSdtProtocolGuid, NULL, (VOID **)&AcpiSdt);
   if (EFI_ERROR (Status)) {
-    DebugPrint (DEBUG_ERROR, "SpiTpmAcpiDxe: no ACPI SDT protocol, SPI0 left visible\n");
+    DebugPrint (DEBUG_ERROR, "SpiTpmAcpiDxe: no ACPI SDT protocol, %a left visible\n", Path);
     return;
   }
 
@@ -215,7 +284,7 @@ HideSpiController (
       continue;
     }
 
-    if (!EFI_ERROR (AcpiSdt->FindPath (TableHandle, "\\_SB.SPI0._STA", &Object))) {
+    if (!EFI_ERROR (AcpiSdt->FindPath (TableHandle, Path, &Object))) {
       //
       // Name (_STA, 0x0F): option 2 is the ByteConst.
       //
@@ -236,7 +305,7 @@ HideSpiController (
   }
 
   if (!Hidden) {
-    DebugPrint (DEBUG_ERROR, "SpiTpmAcpiDxe: \\_SB.SPI0._STA not found, SPI0 left visible\n");
+    DebugPrint (DEBUG_ERROR, "SpiTpmAcpiDxe: %a not found, controller left visible\n", Path);
   }
 }
 

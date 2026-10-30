@@ -1,0 +1,285 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: edk2-cix <edk2-cix@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 13:40:00 +0100
+Subject: [PATCH] SecurityPkg/SecureBootConfigDxe: show the TPM
+
+Add a read-only TPM section to the Secure Boot Configuration form: device
+(TPM 2.0 or not found), vendor (TPM_PT_MANUFACTURER and the vendor
+strings), firmware version (TPM_PT_FIRMWARE_VERSION_1/2, as Windows shows
+it) and the active PCR banks, read through the TCG2 protocol when the form
+opens.
+---
+ .../SecureBootConfigDxe/SecureBootConfig.vfr  |  26 +++
+ .../SecureBootConfigDxe.inf                   |   1 +
+ .../SecureBootConfigImpl.c                    | 166 ++++++++++++++++++
+ .../SecureBootConfigImpl.h                    |   1 +
+ .../SecureBootConfigStrings.uni               |  11 ++
+ 5 files changed, 205 insertions(+)
+
+diff --git a/SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfig.vfr b/SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfig.vfr
+index e4560c592c..df94de9019 100644
+--- a/SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfig.vfr
++++ b/SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfig.vfr
+@@ -75,6 +75,32 @@ formset
+       flags  = INTERACTIVE,
+       key    = KEY_SECURE_BOOT_RESET_TO_DEFAULT;
+ 
++    //
++    // TPM information, filled in when the form opens.
++    //
++    subtitle text = STRING_TOKEN(STR_NULL);
++    subtitle text = STRING_TOKEN(STR_TPM_TITLE);
++
++    text
++      help   = STRING_TOKEN(STR_TPM_HELP),
++      text   = STRING_TOKEN(STR_TPM_DEVICE_PROMPT),
++        text   = STRING_TOKEN(STR_TPM_DEVICE_CONTENT);
++
++    text
++      help   = STRING_TOKEN(STR_TPM_HELP),
++      text   = STRING_TOKEN(STR_TPM_VENDOR_PROMPT),
++        text   = STRING_TOKEN(STR_TPM_VENDOR_CONTENT);
++
++    text
++      help   = STRING_TOKEN(STR_TPM_HELP),
++      text   = STRING_TOKEN(STR_TPM_FIRMWARE_PROMPT),
++        text   = STRING_TOKEN(STR_TPM_FIRMWARE_CONTENT);
++
++    text
++      help   = STRING_TOKEN(STR_TPM_HELP),
++      text   = STRING_TOKEN(STR_TPM_PCR_BANKS_PROMPT),
++        text   = STRING_TOKEN(STR_TPM_PCR_BANKS_CONTENT);
++
+   endform;
+ 
+   //
+diff --git a/SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfigDxe.inf b/SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfigDxe.inf
+index 1671d5be7c..abe9c73a69 100644
+--- a/SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfigDxe.inf
++++ b/SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfigDxe.inf
+@@ -111,6 +111,7 @@
+   gEfiHiiConfigAccessProtocolGuid               ## PRODUCES
+   gEfiDevicePathProtocolGuid                    ## PRODUCES
+   gEfiHiiPopupProtocolGuid
++  gEfiTcg2ProtocolGuid                          ## SOMETIMES_CONSUMES
+   gEfiRealTimeClockArchProtocolGuid             ## CONSUMES
+ 
+ [Depex]
+diff --git a/SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfigImpl.c b/SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfigImpl.c
+index 4299a6b5e5..b69b099d39 100644
+--- a/SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfigImpl.c
++++ b/SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfigImpl.c
+@@ -3294,6 +3294,171 @@ UpdateSecureBootString (
+   return EFI_SUCCESS;
+ }
+ 
++#pragma pack(1)
++typedef struct {
++  TPM2_COMMAND_HEADER    Header;
++  TPM_CAP                Capability;
++  UINT32                 Property;
++  UINT32                 PropertyCount;
++} SECUREBOOT_TPM_GET_CAPABILITY_COMMAND;
++
++typedef struct {
++  TPM2_RESPONSE_HEADER    Header;
++  TPMI_YES_NO             MoreData;
++  TPM_CAP                 Capability;
++  UINT32                  Count;
++  TPMS_TAGGED_PROPERTY    Property[8];
++} SECUREBOOT_TPM_GET_CAPABILITY_RESPONSE;
++#pragma pack()
++
++/**
++  Copy the four ASCII characters of a TPM property value (most significant
++  first) to Buffer, without NULs and trailing spaces.
++**/
++STATIC
++VOID
++AppendTpmPropertyChars (
++  IN     UINT32  Value,
++  IN OUT CHAR16  *Buffer,
++  IN     UINTN   BufferCount
++  )
++{
++  UINTN  Length;
++  UINTN  Index;
++  CHAR8  Char;
++
++  Length = StrLen (Buffer);
++  for (Index = 0; Index < 4 && Length + 1 < BufferCount; Index++) {
++    Char = (CHAR8)(Value >> (24 - 8 * Index));
++    if ((Char >= 0x20) && (Char < 0x7F)) {
++      Buffer[Length++] = (CHAR16)Char;
++    }
++  }
++
++  while ((Length > 0) && (Buffer[Length - 1] == L' ')) {
++    Length--;
++  }
++
++  Buffer[Length] = L'\0';
++}
++
++/**
++  Update the TPM strings: device, vendor (TPM_PT_MANUFACTURER and the vendor
++  strings), firmware version and active PCR banks.
++
++  @param[in]    Private             Module's private data.
++**/
++VOID
++UpdateTpmString (
++  IN SECUREBOOT_CONFIG_PRIVATE_DATA  *Private
++  )
++{
++  EFI_STATUS                             Status;
++  EFI_TCG2_PROTOCOL                      *Tcg2;
++  EFI_TCG2_BOOT_SERVICE_CAPABILITY       Capability;
++  SECUREBOOT_TPM_GET_CAPABILITY_COMMAND  Command;
++  SECUREBOOT_TPM_GET_CAPABILITY_RESPONSE Response;
++  UINT32                                 Value[8];
++  UINT32                                 Count;
++  UINT32                                 Index;
++  UINT32                                 Banks;
++  CHAR16                                 String[64];
++
++  Status = gBS->LocateProtocol (&gEfiTcg2ProtocolGuid, NULL, (VOID **)&Tcg2);
++  if (!EFI_ERROR (Status)) {
++    ZeroMem (&Capability, sizeof (Capability));
++    Capability.Size = sizeof (Capability);
++    Status          = Tcg2->GetCapability (Tcg2, &Capability);
++  }
++
++  if (EFI_ERROR (Status) || !Capability.TPMPresentFlag) {
++    HiiSetString (Private->HiiHandle, STRING_TOKEN (STR_TPM_DEVICE_CONTENT), L"Not found", NULL);
++    HiiSetString (Private->HiiHandle, STRING_TOKEN (STR_TPM_VENDOR_CONTENT), L" ", NULL);
++    HiiSetString (Private->HiiHandle, STRING_TOKEN (STR_TPM_FIRMWARE_CONTENT), L" ", NULL);
++    HiiSetString (Private->HiiHandle, STRING_TOKEN (STR_TPM_PCR_BANKS_CONTENT), L" ", NULL);
++    return;
++  }
++
++  HiiSetString (Private->HiiHandle, STRING_TOKEN (STR_TPM_DEVICE_CONTENT), L"TPM 2.0", NULL);
++
++  //
++  // TPM_PT_MANUFACTURER, TPM_PT_VENDOR_STRING_1-4, TPM_PT_VENDOR_TPM_TYPE,
++  // TPM_PT_FIRMWARE_VERSION_1 and _2 are consecutive properties.
++  //
++  Command.Header.tag         = SwapBytes16 (TPM_ST_NO_SESSIONS);
++  Command.Header.paramSize   = SwapBytes32 (sizeof (Command));
++  Command.Header.commandCode = SwapBytes32 (TPM_CC_GetCapability);
++  Command.Capability         = SwapBytes32 (TPM_CAP_TPM_PROPERTIES);
++  Command.Property           = SwapBytes32 (TPM_PT_MANUFACTURER);
++  Command.PropertyCount      = SwapBytes32 (ARRAY_SIZE (Value));
++  ZeroMem (&Response, sizeof (Response));
++  ZeroMem (Value, sizeof (Value));
++  Status = Tcg2->SubmitCommand (
++                   Tcg2,
++                   sizeof (Command),
++                   (UINT8 *)&Command,
++                   sizeof (Response),
++                   (UINT8 *)&Response
++                   );
++  if (!EFI_ERROR (Status) && (SwapBytes32 (Response.Header.responseCode) == TPM_RC_SUCCESS)) {
++    Count = MIN (SwapBytes32 (Response.Count), ARRAY_SIZE (Value));
++    for (Index = 0; Index < Count; Index++) {
++      if (SwapBytes32 (Response.Property[Index].property) == TPM_PT_MANUFACTURER + Index) {
++        Value[Index] = SwapBytes32 (Response.Property[Index].value);
++      }
++    }
++  }
++
++  String[0] = L'\0';
++  AppendTpmPropertyChars (Value[0], String, ARRAY_SIZE (String));
++  StrCatS (String, ARRAY_SIZE (String), L" ");
++  for (Index = 1; Index <= 4; Index++) {
++    AppendTpmPropertyChars (Value[Index], String, ARRAY_SIZE (String));
++  }
++
++  HiiSetString (Private->HiiHandle, STRING_TOKEN (STR_TPM_VENDOR_CONTENT), (String[0] == L' ') ? L"Unknown" : String, NULL);
++
++  if ((Value[6] == 0) && (Value[7] == 0)) {
++    StrCpyS (String, ARRAY_SIZE (String), L"Unknown");
++  } else {
++    UnicodeSPrint (
++      String,
++      sizeof (String),
++      L"%d.%d.%d.%d",
++      Value[6] >> 16,
++      Value[6] & 0xFFFF,
++      Value[7] >> 16,
++      Value[7] & 0xFFFF
++      );
++  }
++
++  HiiSetString (Private->HiiHandle, STRING_TOKEN (STR_TPM_FIRMWARE_CONTENT), String, NULL);
++
++  Banks     = Capability.ActivePcrBanks;
++  String[0] = L'\0';
++  if ((Banks & EFI_TCG2_BOOT_HASH_ALG_SHA1) != 0) {
++    StrCatS (String, ARRAY_SIZE (String), L"SHA1 ");
++  }
++
++  if ((Banks & EFI_TCG2_BOOT_HASH_ALG_SHA256) != 0) {
++    StrCatS (String, ARRAY_SIZE (String), L"SHA256 ");
++  }
++
++  if ((Banks & EFI_TCG2_BOOT_HASH_ALG_SHA384) != 0) {
++    StrCatS (String, ARRAY_SIZE (String), L"SHA384 ");
++  }
++
++  if ((Banks & EFI_TCG2_BOOT_HASH_ALG_SHA512) != 0) {
++    StrCatS (String, ARRAY_SIZE (String), L"SHA512 ");
++  }
++
++  if ((Banks & EFI_TCG2_BOOT_HASH_ALG_SM3_256) != 0) {
++    StrCatS (String, ARRAY_SIZE (String), L"SM3 ");
++  }
++
++  HiiSetString (Private->HiiHandle, STRING_TOKEN (STR_TPM_PCR_BANKS_CONTENT), (String[0] == L'\0') ? L"None" : String, NULL);
++}
++
+ /**
+   This function extracts configuration from variable.
+ 
+@@ -4531,6 +4696,7 @@ SecureBootCallback (
+       // Update secure boot strings when opening this form
+       //
+       Status = UpdateSecureBootString (Private);
++      UpdateTpmString (Private);
+       SecureBootExtractConfigFromVariable (Private, IfrNvData);
+       mIsEnterSecureBootForm = TRUE;
+     } else {
+diff --git a/SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfigImpl.h b/SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfigImpl.h
+index 37c66f1b95..1bbb72df03 100644
+--- a/SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfigImpl.h
++++ b/SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfigImpl.h
+@@ -19,6 +19,7 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
+ #include <Protocol/DevicePath.h>
+ #include <Protocol/DebugPort.h>
+ #include <Protocol/LoadFile.h>
++#include <Protocol/Tcg2Protocol.h>
+ 
+ #include <Library/BaseLib.h>
+ #include <Library/BaseMemoryLib.h>
+diff --git a/SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfigStrings.uni b/SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfigStrings.uni
+index 0d01701de7..4ae18b4490 100644
+--- a/SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfigStrings.uni
++++ b/SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfigStrings.uni
+@@ -23,6 +23,17 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
+ 
+ #string STR_SECURE_RESET_TO_DEFAULTS_HELP  #language en-US "Enroll keys with data from default variables"
+ #string STR_SECURE_RESET_TO_DEFAULTS       #language en-US "Reset Secure Boot Keys"
++
++#string STR_TPM_TITLE                      #language en-US "TPM"
++#string STR_TPM_HELP                       #language en-US "The TPM found by the firmware (TCG2 protocol)."
++#string STR_TPM_DEVICE_PROMPT              #language en-US "TPM Device"
++#string STR_TPM_DEVICE_CONTENT             #language en-US " "
++#string STR_TPM_VENDOR_PROMPT              #language en-US "TPM Vendor"
++#string STR_TPM_VENDOR_CONTENT             #language en-US " "
++#string STR_TPM_FIRMWARE_PROMPT            #language en-US "TPM Firmware"
++#string STR_TPM_FIRMWARE_CONTENT           #language en-US " "
++#string STR_TPM_PCR_BANKS_PROMPT           #language en-US "Active PCR Banks"
++#string STR_TPM_PCR_BANKS_CONTENT          #language en-US " "
+ #string STR_RESET_TO_DEFAULTS_POPUP        #language en-US "Secure Boot Keys & databases will be initialized from defaults.\n Are you sure?"
+ 
+ #string STR_SECURE_BOOT_ENROLL_SIGNATURE   #language en-US "Enroll Signature"
