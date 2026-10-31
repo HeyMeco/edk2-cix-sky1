@@ -153,16 +153,32 @@ make -C firmware/csupm O=/tmp/csupm all check
 * [`arch/vectors.S`](arch/vectors.S): reset, the register-window vectors
   and the exception vectors; start-up enables coprocessor 0, clears .bss
   (the SE does not) and calls `main`.
-* [`src/main.c`](src/main.c): stage 1, the SE handshake, then idle.
+* [`src/main.c`](src/main.c): the power-on sequence (CIX's
+  `ss_por_enter`) as far as it goes, the SE handshake, then idle;
+  [`src/lcru.c`](src/lcru.c) the core's clock and reset block and the
+  local watchdog, [`src/uart.c`](src/uart.c) the debug UART,
+  [`src/i2c.c`](src/i2c.c) the Cadence I2C controllers,
+  [`src/pmic.c`](src/pmic.c) the PMICs: the board's layout found by
+  probing as CIX does (CIX's eight layouts of which buck feeds which EDP
+  domain), each rail at its boot voltage.
 * `csupm.xbin` is the bootloader1 image ("pm"):
   [`scripts/open/xbin.py`](../../scripts/open/xbin.py) writes CIX's XBIN
   format (header, one entry per program header, data), checked by
   rebuilding the images in both vendor bootloader1 files byte for byte.
 
-Against CIX's image in `test_pm.py`, stage 1 boots and completes the
-handshake; of what CIX's image does by then, 1328 of 1329 registers, 5 of
-8 pages of shared memory and the 35 I2C transfers still differ, and so do
-the SCMI answers. The rest builds on SCP-firmware v2.11.0, the upstream
+Against CIX's image in `test_pm.py` (CIX's boot: 1329 registers, 8 pages
+of shared memory, 33 I2C transfers, then 185 SCMI answers): it boots and
+completes the handshake, 30 of the 33 I2C transfers match in order (the
+other three are DVFS changes later in boot), and 5 registers match so
+far. Next by size are the interconnect PMU set-up behind the bandwidth
+monitoring (`perf_stream_init`: 755 registers of the NI-700 instances at
+`0x4d000000` and the CI-700 nodes at `0x50000000`-`0x53ffffff`), the clock
+tree and the DVFS levels. To read CIX's code,
+[`scripts/open/xtensa_dis.py`](../../scripts/open/xtensa_dis.py) gives
+objdump's listing with the FLIX bundles and the instructions GNU's
+description lacks.
+
+The rest builds on SCP-firmware v2.11.0, the upstream
 release closest to CIX's framework and modules (their DWARF has the
 fewest functions upstream lacks and upstream has the fewest CIX lacks,
 of v2.9 to v2.14); CIX changed `fwk_core.c` to run inside FreeRTOS and
@@ -192,6 +208,7 @@ in order; the shared-memory ones counted by 4 KiB page):
 | Model of the SoC as CSU_PM sees it (`pm_emu.py`): CIX's image reaches its idle task and answers SCMI | done |
 | Differential test harness (`test_pm.py`: register writes, I2C, SCMI answers) | done; suspend/resume to add |
 | Start-up, vectors, libc, XBIN image; stage 1 boots and does the SE handshake | done |
+| Power-on: clock and reset block, watchdog, UART, I2C, PMICs (30 of 33 boot I2C transfers) | done |
 | Interrupts (aggregator, mailboxes), timer, idle with WAITI | to do |
 | SCP-firmware framework and modules (upstream plus CIX's changes), CIX modules and configuration | to do |
 | CIX `Source/common` and `Source/projects/sky1`, without the debug CLI | to do |
