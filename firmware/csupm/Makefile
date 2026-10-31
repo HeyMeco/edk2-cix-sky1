@@ -55,12 +55,35 @@ $(O)/scp/module/scmi_clock/%: FW_CFLAGS = $(SCP_CFLAGS)
 $(O)/scp/module/dvfs/%: FW_CFLAGS = $(SCP_CFLAGS)
 $(O)/scp/module/psu/%: FW_CFLAGS = $(SCP_CFLAGS)
 $(O)/scp/module/scmi_perf/%: FW_CFLAGS = $(SCP_CFLAGS)
+$(O)/scp/module/transport/%: FW_CFLAGS = $(SCP_CFLAGS)
+$(O)/scp/module/scmi_system_power/%: FW_CFLAGS = $(SCP_CFLAGS)
 
 SRCS	:= arch/vectors.S src/main.c src/lcru.c src/uart.c src/i2c.c src/pmic.c src/soc.c \
-	   src/pmu.c src/mbox.c src/power.c src/pvt.c src/plat.c $(wildcard src/clk/*.c) $(wildcard src/dpm/*.c) lib/string.c lib/malloc.c lib/printf.c lib/libgcc.c $(SCP_SRCS)
+	   src/pmu.c src/mbox.c src/power.c src/pvt.c src/plat.c $(wildcard src/clk/*.c) $(wildcard src/dpm/*.c) \
+	   $(wildcard src/rtt/*.c) $(wildcard src/log/*.c) $(wildcard src/pcc/*.c) \
+	   $(wildcard src/hsm/*.c) $(wildcard src/msg/*.c) $(wildcard src/mclp/*.c) $(wildcard src/s3script/*.c) \
+	   lib/string.c lib/malloc.c lib/printf.c lib/libgcc.c $(SCP_SRCS)
 OBJS	:= $(patsubst %,$(O)/%.o,$(SRCS)) $(SCP_GEN)/fwk_module_list.c.o
 
 all: $(O)/csupm.xbin
+
+# The version the AP reads (src/log/md_fwver.c): ours in CIX's layout, the
+# commit and its date from git; $(O)/fwver.h changes only when they do
+CSUPM_VERSION	?= open
+FWVER_GIT	:= $(shell git -c safe.directory='*' log -1 --abbrev=12 --format='%h %cd' \
+		     --date=format:'%y%m%d %H%M%S' 2>/dev/null)
+FWVER_HASH	:= $(or $(word 1,$(FWVER_GIT)),unknown)
+FWVER_DATE	:= $(or $(word 2,$(FWVER_GIT)),000000)
+FWVER_TIME	:= $(or $(word 3,$(FWVER_GIT)),000000)
+
+$(O)/fwver.h: FORCE
+	@mkdir -p $(O)
+	@printf '#define %s "%s"\n' CSUPM_VERSION '$(CSUPM_VERSION)' CSUPM_GIT_HASH $(FWVER_HASH) \
+		CSUPM_GIT_DATE $(FWVER_DATE) CSUPM_GIT_TIME $(FWVER_TIME) > $@.tmp
+	@cmp -s $@.tmp $@ && rm -f $@.tmp || mv $@.tmp $@
+
+$(O)/src/log/md_fwver.c.o: $(O)/fwver.h
+$(O)/src/log/md_fwver.c.o: FW_CFLAGS += -I$(O)
 
 $(CORE): core/pm_core_v1.json $(ROOT)/scripts/open/xtensa_core.py
 	@mkdir -p $(O)
@@ -72,7 +95,7 @@ $(SCP_GEN)/fwk_module_idx.h $(SCP_GEN)/fwk_module_list.c: scp/modules.py Makefil
 	@mkdir -p $(SCP_GEN)
 	@python3 scp/modules.py $(SCP_GEN) $(SCP_MODULES)
 
-$(O)/%.c.o: %.c $(CORE) $(wildcard include/*.h scp/include/*.h src/clk/*.h src/dpm/*.h scp/module/*/include/*.h scp/module/*/include/*/*.h) $(SCP_GEN)/fwk_module_idx.h Makefile
+$(O)/%.c.o: %.c $(CORE) $(wildcard include/*.h scp/include/*.h src/clk/*.h src/dpm/*.h src/rtt/*.h src/log/*.h src/pcc/*.h src/hsm/*.h src/msg/*.h src/mclp/*.h src/s3script/*.h scp/module/*/include/*.h scp/module/*/include/*/*.h) $(SCP_GEN)/fwk_module_idx.h Makefile
 	@mkdir -p $(dir $@)
 	@echo "  CC      $<"
 	@$(CC) $(FW_CFLAGS) -c -o $@ $<
@@ -112,4 +135,6 @@ check: $(CHECK_OBJS) $(O)/csupm.elf
 clean:
 	rm -rf $(O)
 
-.PHONY: all check clean
+FORCE:
+
+.PHONY: all check clean FORCE

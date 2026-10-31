@@ -14,7 +14,14 @@ Devices:
   * Cadence I2C controllers (cdns,i2c-r1p14; 16-bit registers) at
     0xa0010000, 0xa0011000, 0xa0012000 (masters) and 0xa0013000 (slave),
     with I2cDevice slaves attached by 7-bit address;
-  * the PL011 at 0xa0030000 (UART4 on the board), whose output is captured.
+  * the PL011 at 0xa0030000 (UART4 on the board), whose output is captured;
+  * the clock generator's PLLs (they lock at once), the mailboxes and the
+    interrupt aggregator, the SE's side of the boot handshake and of
+    suspend/resume (SePeer, after firmware/se/service/str.c);
+  * for the power sequence (modelled, not known): the S5 power controller
+    (sleep type, the PM's wake interrupt on aggregator line 18, warm
+    reset), the DSU's and cores' power policy units (status follows the
+    policy), the DDR controllers' low-power command/state handshake.
 """
 
 import argparse
@@ -245,10 +252,23 @@ PLL_LOCK = {base + 0x0c for base in PLLS}
 PM_MAGIC = 0xa0100090                 # the SE's 0x46610090 (firmware/se/service/main.c)
 
 
+PM_FAST_CHANNEL = 0xa010008c         # mailbox 8 fast channel 0, the SE's 0x4661008c
+
+# S5 registers the SE writes around suspend (firmware/se/service/str.c)
+S5_SW_SUSPEND, S5_SW_STR, S5_SW_REG6, S5_PM_RUN = 0x5600020c, 0x56000228, 0x56000518, 0x56000704
+
+
 class SePeer:
     """The SE's side of the boot handshake: the PM announces itself with
     0x5c5a, the SE clears it, finishes its SoC init and writes 0x55ca; the
-    PM answers 0x5a5c, which the SE clears before it loads BL2."""
+    PM answers 0x5a5c, which the SE clears before it loads BL2.
+
+    Suspend to RAM (firmware/se/service/str.c): the AP's FFA_SUSPEND makes
+    the SE's idle loop flush the system cache, mark the S5 registers and
+    write 2 into the PM's fast channel (suspend); here that happens at once
+    (suspend()).  On wake-up the SE resumes, writes 1 into the fast channel
+    (wake()) and waits for the PM's 0xaacc (start the sensor fusion hub:
+    the SE answers 0xccaa) or 0xaabb (stop it: the SE writes 0)."""
 
     def __init__(self, soc):
         self.soc = soc
@@ -259,9 +279,99 @@ class SePeer:
             self.log.append(value)
             if value == 0x5c5a:
                 return 0x55ca
-            if value == 0x5a5c:
+            if value in (0x5a5c, 0xaabb):
                 return 0
+            if value == 0xaacc:
+                return 0xccaa
         return value
+
+    def suspend(self):
+        mem = self.soc.mem
+        mem.write(S5_SW_SUSPEND, 4, mem.read(S5_SW_SUSPEND, 4) | 1)
+        mem.write(S5_SW_STR, 4, 1)
+        mem.write(S5_SW_REG6, 4, mem.read(S5_SW_REG6, 4) | 1)
+        mem.write(PM_FAST_CHANNEL, 4, 2)
+
+    def wake(self):
+        self.soc.mem.write(S5_PM_RUN, 4, 0)
+        self.soc.mem.write(PM_FAST_CHANNEL, 4, 1)
+
+
+# --- S5 power controller, power policy units, DDR controllers ------------------------
+
+S5_PMCTRL = 0x56000000                # CIX's S5 register block (mclp_retention.c's layout)
+S5_SLP_TYP, S5_CSU_PM_INTR, S5_CSU_PM_INTR_EN, S5_WARM_RST = 0x100, 0x220, 0x22c, 0x300
+S5_LINE = 18                          # aggregator line 18, source 0: the S5 controller's PM interrupt
+
+
+class S5PmCtrl:
+    """The S5 power controller as the PM uses it: a sleep type (0x100: 1
+    suspend, 2 shutdown) after which the S0 domain powers down, the PM's
+    wake interrupt (status 0x220, enable 0x22c, aggregator line 18; the PM
+    clears it by writing 0x220) and the warm reset (0x300).  The SoC's
+    response is only modelled: wake() raises the interrupt as a wake-up
+    source would; sleep and reset requests are recorded in events."""
+
+    def __init__(self, soc):
+        self.soc = soc
+        self.base = S5_PMCTRL
+
+    def read(self, off, size):
+        return self.soc.mem.read(self.base + off, size)
+
+    def write(self, off, size, value):
+        self.soc.mem.write(self.base + off, size, value)
+        if off == S5_SLP_TYP and value:
+            self.soc.events.append(("sleep", value))
+        elif off == S5_WARM_RST and value & 1:
+            self.soc.events.append(("warm reset", value))
+        if off in (S5_CSU_PM_INTR, S5_CSU_PM_INTR_EN):
+            self.soc.update_irqs()
+
+    def wake(self):
+        self.soc.mem.write(self.base + S5_CSU_PM_INTR, 4, 1)
+        self.soc.events.append(("wake", 1))
+        self.soc.update_irqs()
+
+    def pending(self):
+        return self.soc.mem.read(self.base + S5_CSU_PM_INTR, 4) & 1
+
+
+def ppu_status(addr):
+    """Arm PPUs of the DSU (0x4f030000) and the cores (0x4f080000 + core <<
+    20): the power status (+8) follows the policy (+0) at once (modelled;
+    CIX's power_up_dsu_and_bsp and wait_for_bsp_and_dsu_idle poll it)."""
+    if addr & 0xffff != 8 or addr >> 24 != 0x4f:
+        return False
+    if addr == 0x4f030008:
+        return True
+    return (addr >> 16) & 0xf == 8 and (addr >> 20) & 0xf < 12
+
+
+# Cadence (Denali) DDR controllers at 0x4c010000 + 0x20000 * channel: CIX's
+# mclp_swif sends a low-power command in LP_CMD (+0x2bc [22:16]) and polls
+# LP_STATE (+0x2f8 [14:8], bit 14: the last command completed) for the state
+# _s_lp_SwCmdStMap gives the command.  Modelled: the state changes at once.
+DDRC = [0x4c010000 + 0x20000 * ch for ch in range(4)]
+DDRC_LP_CMD, DDRC_LP_STATE = 0x2bc, 0x2f8
+LP_CMD_STATE = {2: 0, 3: 1, 0x23: 2, 5: 3, 0x25: 4, 9: 11, 0x29: 12, 0x11: 13, 0x31: 14, 0x51: 15}
+
+
+class Ddrc:
+    def __init__(self, soc, base):
+        self.soc, self.base = soc, base
+        self.lp_state = 0x40                            # idle, the last command completed
+
+    def read(self, off, size):
+        v = self.soc.mem.read(self.base + off, size)
+        if off == DDRC_LP_STATE and size == 4:
+            v = (v & ~0x7f00) | self.lp_state << 8
+        return v
+
+    def write(self, off, size, value):
+        self.soc.mem.write(self.base + off, size, value)
+        if off == DDRC_LP_CMD and size == 4:
+            self.lp_state = 0x40 | LP_CMD_STATE.get((value >> 16) & 0x7f, 0)
 
 
 # --- mailboxes and the interrupt aggregator ----------------------------------------
@@ -349,6 +459,11 @@ class PmSoc:
         self.mbox = [Mailbox(self, i) for i in range(MBOX_N)]
         for mb in self.mbox:
             self.blocks[mb.base] = mb
+        self.events = []                                # sleep, wake, warm reset
+        self.s5 = S5PmCtrl(self)
+        self.blocks[S5_PMCTRL] = self.s5
+        for base in DDRC:
+            self.blocks[base] = Ddrc(self, base)
         cgc_reset(self.mem)
         for addr, v in SE_HANDOFF.items():
             self.mem.write(addr, 4, v)
@@ -356,13 +471,15 @@ class PmSoc:
     def agg_raw(self, line):
         if line == MBOX_LINE:
             return sum(1 << mb.i for mb in self.mbox if mb.pending())
+        if line == S5_LINE:
+            return self.s5.pending()
         return 0
 
     def update_irqs(self):
         if self.cpu is None:
             return
         lines = 0
-        for line in (MBOX_LINE,):
+        for line in (MBOX_LINE, S5_LINE):
             if self.agg_raw(line) & self.mem.read(AGG + 0x80 + 4 * (line - 12), 4):
                 lines |= 1 << line
         self.cpu.int_lines = lines
@@ -379,6 +496,8 @@ class PmSoc:
             return dev.read(addr & 0xfff, size)
         if addr in PLL_LOCK:
             return self.mem.read(addr, size) | 0x10     # PLLs lock at once
+        if ppu_status(addr):
+            return (self.mem.read(addr, size) & ~0xf) | (self.mem.read(addr - 8, 4) & 0xf)
         if AGG <= addr < AGG + 0x4c:
             return self.agg_raw(12 + (addr - AGG) // 4)
         return self.mem.read(addr, size)

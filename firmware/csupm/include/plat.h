@@ -22,6 +22,9 @@ extern uint64_t boot_strap;
  * core present, [15:12] the boot core; core_info[1] >> 4 is its DPM element) */
 extern bool core_info_valid;
 extern uint8_t core_info[4];
+/* The SE's memory repair information (0x56000504; bit 1: the boot core's
+ * SRAM is repaired when it powers up after suspend) */
+extern uint32_t memr_info;
 
 void plat_init(void);
 

@@ -10,8 +10,8 @@
 static TREE_NODE *root;
 
 
-/* CIX's dpm_element_to_clk_id_table (dpm.c) */
-static CLK_TREE_ENUM_IDX dpm_elem_get_clk_id(uint32_t elem)
+/* CIX's dpm_element_to_clk_id_table (dpm.c); src/pcc uses it too */
+CLK_TREE_ENUM_IDX dpm_elem_get_clk_id(uint32_t elem)
 {
 	static const uint16_t clk_id[20] = {
 		CLK_TREE_CPU_CLK_LC0, CLK_TREE_CPU_CLK_LC1, CLK_TREE_CPU_CLK_LC2,

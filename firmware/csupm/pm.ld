@@ -73,6 +73,12 @@ SECTIONS
 	/* the heap (lib/malloc.c) is the rest of DRAM1 */
 	_heap_start = _bss_end;
 	_heap_end = _stack_bottom;
+	/*
+	 * ddr_s3_enter borrows PM RAM from 0x237b4 bytes below the stack
+	 * pointer (src/mclp/mclp_retention.c); that must be heap at the
+	 * stack's deepest, or the blocks would be pushed over the stack
+	 */
+	ASSERT(_heap_start + 0x237b4 <= _stack_bottom, "heap too small for DDR retention")
 
 	/* the eFuse copy's default (src/pvt.c); the SE overwrites it */
 	.dram1.efuse 0x200be700 : { KEEP(*(.dram1.efuse)) } > efuse

@@ -1,21 +1,18 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
 /*
- * System power requests from SCMI (shutdown, reset).  CIX's firmware
- * records the target (stdby_target: 5 shutdown, 0 reset) for its system
- * power state machine (pwr_hsm), which runs the sequence with the SE.
- * That sequence is not here yet: the request is kept and reported on the
- * debug UART.
+ * System power requests from the power domain module (CIX's
+ * rcsu_pd_shutdown): cold and warm resets and shutdowns (also forced) set
+ * the target of the PM's power sequence (src/hsm), which runs from the
+ * idle loop.
  */
 #include <mod_rcsu.h>
 
-#include "uart.h"
-
-volatile int power_request = -1;
+#include "hsm/hsm.h"
 
 void rcsu_system_shutdown_request(enum mod_pd_system_shutdown type)
 {
-	power_request = (int)type;
-	uart_puts(type == MOD_PD_SYSTEM_SHUTDOWN || type == MOD_PD_SYSTEM_FORCED_SHUTDOWN ?
-		  "CSU_PM: shutdown requested (not implemented)\n" :
-		  "CSU_PM: reset requested (not implemented)\n");
+	if (type == MOD_PD_SYSTEM_COLD_RESET || type == MOD_PD_SYSTEM_WARM_RESET)
+		trigger_RST();
+	else
+		trigger_SD();
 }

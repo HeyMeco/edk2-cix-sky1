@@ -35,5 +35,14 @@ void pmic_check(void);
 /* The board layout found (CIX's dpm_edp_cfg_type); the rails' voltages are
  * set with dpm_edp_set_voltage (src/dpm/dvfs_cfg.h) */
 enum pmic_preset pmic_get_preset(void);
+/* The rails at the voltages last asked for (after suspend) */
+bool dpm_edp_restore_voltage(void);
+/* CIX's dev_pmic.c for the messages: revisions, fault status, voltages */
+enum pmic_status_time { PMIC_STATUS_POR, PMIC_STATUS_RUN, PMIC_STATUS_ALL };
+unsigned pmic_get_versions(uint16_t ver[4]);
+bool dev_pmic_read_status(enum pmic_status_time idx);
+uint32_t dev_pmic_build_msg_report_buffer(enum pmic_status_time idx, uint32_t *buf, uint32_t len);
+bool dev_pmic_readVoltage(const struct rail *r, uint16_t *mv);
+
 
 #endif

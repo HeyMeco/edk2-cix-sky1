@@ -107,7 +107,7 @@ same blocks at `0x46510000`). What CIX's image needs to boot:
 | Block | CSU_PM | Model |
 |---|---|---|
 | I2C masters 0-2, slave | `0xa0010000`-`0xa0013000` | Cadence I2C (`cdns,i2c-r1p14`, 16-bit registers), transfers complete at once; any address answers as a register file. The three MP5475 PMICs are at `0x60` on masters 0-2 |
-| UART (UART4 on the O6) | `0xa0030000` | PL011, output captured; CIX's image logs in binary to a trace buffer instead and keeps the UART quiet |
+| UART (UART4 on the O6) | `0xa0030000` | PL011, output captured; CIX's image logs to a RAM log in DRAM instead and keeps the UART quiet |
 | clock generator (CGC) | `0xa0060000` | 23 PLLs: +0 feedback divider, +4 fraction and enable, +8 post and reference dividers, +0xc lock; VCO = 24 MHz × (fbdiv + frac/2²⁴) / refdiv, which CIX's image wants between 1.6 and 2.1 GHz. Reset values unknown, the model uses 2 GHz (a read of SoC `0x06570000` on a running board would tell) |
 | mailboxes 0-9 | `0xa0080000` + 0x10000 × i | 32 data words, doorbell +0x80, interrupt enables +0xbc (to the AP) and +0xc0 (to the PM), clear +0xc4, status +0xc8. Even mailboxes take AP requests, odd ones carry the PM's |
 | SE handshake | `0xa0100090` (mailbox 8) | the SE's side: PM `0x5c5a`, SE `0x55ca`, PM `0x5a5c` (`firmware/se/service/main.c`) |
@@ -161,18 +161,44 @@ What runs, in CIX's order:
    number and V/F fuses, the table CIX picks for the part from them and the
    PM strap, the minimum voltages computed from the fuses as CIX computes
    them, the OPPs of the 12 DVFS domains), then `0x5c5a` to the SE and a
-   wait for its `0x55ca`.
+   wait for its `0x55ca`; then the RTT window into DRAM
+   ([`src/rtt`](src/rtt): the TLB window, CIX's channels), the RAM log
+   ([`src/log`](src/log): CIX's text records in DRAM; `0xaa55` tells the SE
+   it is on) and the version for the AP (ours, in CIX's layout).
 2. Init (`ss_init_enter`): the clock tree at its power-on settings
    ([`src/clk`](src/clk)), the interconnect counters stopped and cleared
    ([`src/pmu.c`](src/pmu.c): NI-700 hubs, CI-700 DTC and XP watchpoints,
    DFD trace, AMU, MPMM gears; static layouts from CIX's topology tables),
-   each DVFS domain at its sustained OPP (clock, then rail voltage).
+   each DVFS domain at its sustained OPP (clock, then rail voltage), the
+   DDR controllers' low-power interface ([`src/mclp`](src/mclp)).
 3. Run (`ss_run_enter`): the counters again, the PVT sensors
-   ([`src/pvt.c`](src/pvt.c): eFuse trims, weights, thresholds), the ten
-   mailboxes cleared and routed ([`src/mbox.c`](src/mbox.c)).
+   ([`src/pvt.c`](src/pvt.c): eFuse trims, weights, thresholds), CIX's
+   message ports on the mailboxes ([`src/msg`](src/msg)), the PCC tables
+   for ACPI CPPC ([`src/pcc`](src/pcc)), GPIO.
 4. SCP-firmware's modules ([`scp/`](scp)): initialised, bound and
-   started, then `0x5a5c` tells the SE to start the AP, and the PM serves
-   interrupts and events, sleeping in WAITI.
+   started, then CIX's `pm_ready` ends with `0x5a5c`, which tells the SE to
+   start the AP, and the PM serves interrupts and events, sleeping in
+   WAITI.
+
+The system power sequence ([`src/hsm`](src/hsm), CIX's `subsys_hsm.c` and
+`pwr_hsm.c`) runs CIX's state machine: TF-A's suspend (PM message 0x42
+with the boot core, then SCMI suspend on its channel) saves the mailboxes,
+waits for the boot core and the DSU to idle, puts DRAM in self-refresh
+with the controllers' state kept in borrowed PM RAM (`ddr_s3_enter`, its
+previous contents saved to DRAM first) and hands over to the SE; on wake
+(the SE's `0xaabb`) DRAM comes back (`ddr_s3_exit`, checksummed), the rails
+get their voltages again, UEFI's S3 boot script runs
+([`src/s3script`](src/s3script)), the run phase is replayed and the boot
+core and DSU powered up. Shutdown and warm reset go to the S5 controller
+as CIX's do.
+
+CIX's PM messages (a CIX format in the SCMI channels' memory, told apart
+by a route field in the header; [`src/msg`](src/msg), CIX's `md_msg.c`,
+`app_msginit.c` and handlers) are answered on mailboxes 0, 2, 4 and 6:
+firmware version, platform information, the S3 script's registration,
+PMIC versions and events, core online/offline and the boot core, locked
+performance, SMN register access, DSU DVFS mode, EDP voltages, fans (no
+fan configured yet: not supported).
 
 SCP-firmware is built as its CMake would build it (the module index and
 list are generated from `SCP_MODULES` in the Makefile) with
@@ -184,9 +210,9 @@ drivers that hand an interrupt on). Modules, upstream and ours:
 
 | Module | From | What |
 |---|---|---|
-| `transport`, `scmi` | upstream | SCMI over the mailboxes' data words (TF-A's `mailbox_mem_t`) |
+| `transport`, `scmi` | upstream (`transport` with CIX's header writes) | SCMI over the mailboxes' data words (TF-A's `mailbox_mem_t`) |
 | `cix_mbox` | ours | the mailboxes' doorbells under `transport` (CIX's `ipc_arbiter` merges both); writes to the OS's performance fast channels to `scmi_perf` |
-| `power_domain`, `scmi_power_domain`, `scmi_system_power` | upstream | ISP0, GPUTOP under SYSTOP |
+| `power_domain`, `scmi_power_domain`, `scmi_system_power` | upstream (`scmi_system_power` with CIX's change) | ISP0, GPUTOP under SYSTOP; shutdown, reset and suspend to the system power sequence |
 | `rcsu` | ours, CIX's `extmodules/rcsu` | the RCSU power controls (SRAM repair, power bits) |
 | `timer` | upstream | alarms |
 | `xt_timer` | ours | CCOUNT extended to 64 bits, CCOMPARE2 |
@@ -217,14 +243,25 @@ rebuilding the images in both vendor bootloader1 files byte for byte.
 
 Against CIX's image in `test_pm.py` (CIX's boot: 1329 registers, 8 pages
 of shared memory, 33 I2C transfers, then 215 SCMI answers): it boots and
-completes the handshake; 13 of CIX's 1329 registers differ (the RTT
-window at `0xb001xxxx`, interrupt aggregator lines CIX enables for
-services not written yet, a mailbox status write, the SE's `0xaa55` in
-mailbox 8, the GPIO block); the 33 I2C transfers are the same, in order;
-all 215 SCMI answers are the same (base, power domains, system power,
-sensors, the 273 clocks, performance on 12 domains, levels set directly
-and through fast channels, with the same PLL writes and I2C transfers as
-CIX's). The shared memory differs (CIX's RAM log, PCC tables).
+completes the handshake; all 1329 registers get the same values in the
+same order; the 33 I2C transfers are the same, in order; all 215 SCMI
+answers are the same (base, power domains, system power, sensors, the 273
+clocks, performance on 12 domains, levels set directly and through fast
+channels, with the same PLL writes and I2C transfers as CIX's). Of the
+shared memory, the RTT control block and the PCC tables are CIX's byte for
+byte; three pages differ: the version (ours), and the RAM log (CIX's text
+records, but CIX's line buffer fills early in boot and is never flushed,
+so CIX's log holds bytes from past it; ours holds its messages).
+
+With `--power` (about a minute more) it then sends the PM messages UEFI,
+Linux and TF-A send (20 answers, the same), runs TF-A's suspend (the same
+43 registers, both asleep), the SE's wake (16641 of 16657 registers the
+same: the 16 others are performance-stream counters CIX's DPM runtime sets
+up again, not ported; the 8 I2C transfers restoring the rails the same),
+SCMI after resume, shutdown and warm reset (the same). What pm_emu models
+of the S5 controller, the power policy units, the DDR controllers and the
+SE's side of suspend is in its source; it is modelled on what CIX's image
+waits for, not known from documentation.
 
 [`scripts/open/test_vf.py`](../../scripts/open/test_vf.py) checks the V/F
 tables beyond the emulator's blank fuses: it gives both images the same
@@ -242,7 +279,8 @@ third PMIC's status), regulators other than the MP5475 (Phecda's and
 Alcor's MP2845s are not driven), the DPM runtime (power model, TDP and EDP
 limits, CIX's `dpm_opp_run`: [`scp/src/scp_dpm_stubs.c`](scp/src/scp_dpm_stubs.c)
 has what the performance modules call of it, as CIX's firmware has it at
-boot) and CIX's PMIC error notification (its SCMI protocol 0x81).
+boot) and CIX's PMIC error notification (its protocol 0x81, from the PM
+to the AP).
 
 ### What CIX's image does before it idles
 
@@ -266,7 +304,7 @@ in order; the shared-memory ones counted by 4 KiB page):
 | FLIX formats of pm_core_v1, inferred from known code (`xtensa_flix.py`) | done |
 | Emulator for the core (`xt_emu.py`), running CIX's image into its drivers | done |
 | Model of the SoC as CSU_PM sees it (`pm_emu.py`): CIX's image reaches its idle task and answers SCMI | done |
-| Differential test harness (`test_pm.py`: register writes, I2C, SCMI answers) | done; suspend/resume to add |
+| Differential test harness (`test_pm.py`: register writes, I2C, SCMI answers, PM messages, suspend/resume, shutdown, reset) | done |
 | Start-up, vectors, libc, XBIN image; stage 1 boots and does the SE handshake | done |
 | Power-on: clock and reset block, watchdog, UART, I2C, PMICs | done |
 | Interconnect counters, PVT sensors, mailboxes | done |
@@ -275,7 +313,8 @@ in order; the shared-memory ones counted by 4 KiB page):
 | Clock tree and PLLs, SCMI clocks | done |
 | V/F tables from the fuses, boot DVFS levels (`test_vf.py`) | done |
 | DVFS: PMIC, PSU, DVFS, performance plugins, SCMI perf | done; DPM runtime (power model, TDP/EDP limits) to do |
-| System power sequence (shutdown, reset, suspend), RTT, logs, PCC tables | to do |
+| RTT, RAM log, version, PCC tables | done |
+| System power sequence (shutdown, reset, suspend/resume, DDR retention, S3 script), PM messages | done; fans, PMIC error notification to do |
 | CIX `Source/common` and `Source/projects/sky1`, without the debug CLI | to do |
 | Our image passes `test_pm.py` | to do |
 | `build.sh --open` puts it in bootloader1 | to do |

@@ -16,6 +16,7 @@ bool boot_strap_valid;
 uint64_t boot_strap;
 bool core_info_valid;
 uint8_t core_info[4];
+uint32_t memr_info;
 
 void plat_init(void)
 {
@@ -30,6 +31,8 @@ void plat_init(void)
 		plat_id_0 = (plat_id_0 & ~0x60000u) + 0x40000;
 		plat_id_4 = (plat_id_4 & 0x80000000u) + 0x15fa3dff;
 	}
+	/* the SE's memory repair information (S5 software register) */
+	memr_info = REG32(0x56000504);
 	/* the SE's PM strap counts when it is set and its bytes sum to 0xff */
 	boot_strap = REG32(PM_STRAP) | (uint64_t)REG32(PM_STRAP + 4) << 32;
 	if (boot_strap) {

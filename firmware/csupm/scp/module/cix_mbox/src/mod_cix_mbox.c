@@ -6,9 +6,12 @@
  *
  * A write to one of a mailbox's fast channels also sets a status bit
  * (mbox.h).  As CIX's ipc_arbiter (_on_mbox_event) does, writes to the OS's
- * performance fast channels (mailbox 0, all but channel 1) go to scmi_perf;
- * the others (channel 1 of mailbox 0, CIX's PCC commands, not handled yet,
- * and mailbox 2's) are cleared and dropped.
+ * performance fast channels (mailbox 0, all but channel 1) go to scmi_perf,
+ * a write to channel 1 of mailbox 0 is a PCC command (src/pcc); the others
+ * (mailbox 2's) are cleared and dropped.  A doorbell first goes to CIX's
+ * PM messages (src/msg), which take the channel when its first word says
+ * so; otherwise it is SCMI.  Mailbox 9 takes only PM messages (CIX routes
+ * it to the PM, with no SCMI channel).
  */
 #include <mod_cix_mbox.h>
 #ifdef BUILD_HAS_MOD_SCMI_PERF
@@ -25,6 +28,8 @@
 
 #include "irq.h"
 #include "mbox.h"
+#include "msg/msg.h"
+#include "pcc/pcc.h"
 
 /* Mailbox 0's fast channel 1: CIX's PCC commands */
 #define PCC_FAST_BIT	BIT(9 + 1)
@@ -58,8 +63,14 @@ static void mbox_isr(void)
 		if (m == 0 && (st & MBOX_FAST_BITS & ~PCC_FAST_BIT))
 			on_fast_channel_interrupt(false);
 #endif
-		if (st & MBOX_DOORBELL_BIT)
+		if (m == 0 && (st & PCC_FAST_BIT))
+			pcc_cmd_handler();
+		if ((st & MBOX_DOORBELL_BIT) && !app_msg_on_doorbell(m))
 			(void)c->transport->signal_message(c->channel);
+	}
+	if (REG32(MBOX_STATUS(9)) & MBOX_DOORBELL_BIT) {
+		REG32(MBOX_CLEAR(9)) = MBOX_DOORBELL_BIT;
+		(void)app_msg_on_doorbell(9);
 	}
 }
 
@@ -158,8 +169,10 @@ static int cix_mbox_start(fwk_id_t id)
 	status = fwk_interrupt_set_isr(IRQ_MBOX, mbox_isr);
 	if (status != FWK_SUCCESS)
 		return status;
+	sources |= BIT(9);			/* PM messages only */
+	/* app_msgInit (src/msg) enables them first, as CIX does */
 	for (unsigned int m = 0; m < MBOX_N; m++) {
-		if (sources & BIT(m))
+		if ((sources & BIT(m)) && !(REG32(AGG_ENABLE(IRQ_MBOX)) & BIT(m)))
 			REG32(AGG_ENABLE(IRQ_MBOX)) |= BIT(m);
 	}
 	return fwk_interrupt_enable(IRQ_MBOX);
