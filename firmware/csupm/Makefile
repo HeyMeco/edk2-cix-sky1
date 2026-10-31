@@ -49,7 +49,7 @@ FW_CFLAGS := $(CFLAGS) -Os -Iinclude -Wvla $(SCP_DEFS) $(SCP_INC)
 SCP_CFLAGS := $(filter-out -Wextra -Werror,$(CFLAGS)) -Os -Iinclude $(SCP_DEFS) $(SCP_INC)
 
 SRCS	:= arch/vectors.S src/main.c src/lcru.c src/uart.c src/i2c.c src/pmic.c src/soc.c \
-	   src/pmu.c src/mbox.c src/power.c src/pvt.c $(wildcard src/clk/*.c) lib/string.c lib/malloc.c lib/printf.c lib/libgcc.c $(SCP_SRCS)
+	   src/pmu.c src/mbox.c src/power.c src/pvt.c src/plat.c $(wildcard src/clk/*.c) lib/string.c lib/malloc.c lib/printf.c lib/libgcc.c $(SCP_SRCS)
 OBJS	:= $(patsubst %,$(O)/%.o,$(SRCS)) $(SCP_GEN)/fwk_module_list.c.o
 
 all: $(O)/csupm.xbin

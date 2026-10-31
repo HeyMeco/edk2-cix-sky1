@@ -5,10 +5,12 @@
  * modules, the SE handshake, then SCP-firmware's event loop.
  */
 #include "arch_scp.h"
+#include "clk/clk.h"
 #include "i2c.h"
 #include "lcru.h"
 #include "mbox.h"
 #include "pmic.h"
+#include "plat.h"
 #include "pmu.h"
 #include "pvt.h"
 #include "uart.h"
@@ -39,12 +41,20 @@ static void se_handshake_ready(void)
 /* CIX's ss_init_enter: the SoC is up, nothing runs on it yet */
 static void ss_init(void)
 {
+	bool policy = g_enable_pll_policy;
+
+	pm_ss_state = HSM_ST_INIT;
+	/* the power-on clock settings go to the PLLs directly */
+	g_enable_pll_policy = false;
+	clk_nodes_init();
+	g_enable_pll_policy = policy;
 	pmu_reset_all();			/* perf_stream_init */
 }
 
 /* CIX's ss_run_enter: the services start */
 static void ss_run(void)
 {
+	pm_ss_state = HSM_ST_RUN;
 	pmu_reset_all();			/* perf_stream_restore */
 	pvt_init();				/* sky1_pvt_init */
 	mbox_init();				/* app_msgInit */
@@ -68,6 +78,7 @@ int main(void)
 	lcru_mbox_reset(0x3ff);
 	uart_init();
 	uart_puts("CSU_PM: open firmware\n");
+	plat_init();
 	i2c_setup(I2C_HZ, I2C_MASTERS, I2C_SLAVES);
 	pmic_init();
 	pmic_check();
