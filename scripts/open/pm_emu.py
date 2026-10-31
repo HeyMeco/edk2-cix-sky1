@@ -313,6 +313,21 @@ class Mailbox:
         return self.status & self.soc.mem.read(self.base + MBOX_TO_PM_EN, 4)
 
 
+# --- what the SE leaves for the PM ------------------------------------------------
+
+# Written by CIX's SE firmware before it starts the PM, as se_emu.py runs it
+# on the Orion O6 image with blank eFuses (test_se.py): the PM strap
+# (drv_memcfg_set_pm_strap_info: checksum, board, V/F version, DVFS mode,
+# PVT average), the harvest word (cores and blocks off, boot core) and the
+# CPU frequency mode.
+SE_HANDOFF = {
+    0xa0000800: 0x020fffef,           # PM strap word 0 (the SE's 0x46510800)
+    0xa0000804: 0x00000000,           # PM strap word 1
+    0x56000508: 0x0000a000,           # S5_SW_HARVEST
+    0x5600050c: 0x00000000,           # S5_SW_CPU_FREQ
+}
+
+
 # --- the SoC -----------------------------------------------------------------------
 
 class PmSoc:
@@ -335,6 +350,8 @@ class PmSoc:
         for mb in self.mbox:
             self.blocks[mb.base] = mb
         cgc_reset(self.mem)
+        for addr, v in SE_HANDOFF.items():
+            self.mem.write(addr, 4, v)
 
     def agg_raw(self, line):
         if line == MBOX_LINE:
