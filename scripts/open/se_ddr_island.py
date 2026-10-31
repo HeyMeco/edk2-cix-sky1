@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-2-Clause-Patent
 """Relinkable DDR driver from CIX's SE firmware debug ELF.
 
-  se_ddr_island.py se_fw.elf OUT.S [--report] [--original-layout]
+  se_ddr_island.py se_fw.elf OUT.S [--report] [--original-layout] [--data NAME]...
 
 The DDR driver (CIX security/firmware/driver/ddr, identified through the
 DWARF compile units) is emitted as GNU assembly:
@@ -420,15 +420,33 @@ class Island:
             k += 1
 
 
+def emit_data_object(img, name):
+    found = [(addr, size) for addr, (n, size) in img.objects.items() if n == name]
+    if not found:
+        raise SystemExit(f"no data object {name}")
+    addr, size = found[0]
+    data = img.read(addr, size)
+    out = [f"\t.section .rodata.cix.{name}, \"a\", %progbits", "\t.p2align 2",
+           f"\t.global {name}", f"\t.type {name}, %object", f"\t.size {name}, {size}", f"{name}:"]
+    for i in range(0, size, 16):
+        out.append("\t.byte " + ", ".join(f"{b:#04x}" for b in data[i:i + 16]))
+    return "\n".join(out) + "\n"
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("elf")
     ap.add_argument("out")
     ap.add_argument("--report", action="store_true")
     ap.add_argument("--original-layout", action="store_true")
+    ap.add_argument("--data", action="append", default=[], metavar="NAME",
+                    help="also emit CIX's data object NAME as it is (no pointers in it)")
     a = ap.parse_args()
-    island = Island(Image(a.elf), a.original_layout)
+    img = Image(a.elf)
+    island = Island(img, a.original_layout)
     text = island.emit()
+    for name in a.data:
+        text += emit_data_object(img, name)
     with open(a.out, "w") as f:
         f.write(text)
     if a.report:

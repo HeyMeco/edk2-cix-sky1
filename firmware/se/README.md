@@ -55,14 +55,22 @@ through 7 (`drv_ddr_init`, `drv_ddr_postci`, `drv_ddr_get_mem_size`,
 |---|---|
 | Structure, boot path and interfaces mapped (`main` → `fw_init` → `services_init`) | done |
 | DDR island generator; with every symbol at its original address it reassembles to CIX's 43 876 code bytes exactly | done |
-| Startup, UART, timer, heap, log | to do |
-| Flash access (QSPI/xSPI), firmware header, image loading | to do |
-| eFuse, key management, crypto | to do |
-| SoC init (CRU, PLL, power, memory repair, harvest) | to do |
-| CI-700, TZC-400, MMHUB, RCSU | to do |
-| Secure boot: verify and start CSU_PM and BL2 | to do |
-| Runtime mailbox services, suspend/resume | to do |
+| Startup, UART, timer, heap, log, RAM log | done |
+| Flash access (QSPI and FCH xSPI), firmware table, SE config | done |
+| eFuse, key manager, crypto (Mbed TLS for SHA-2, HKDF, RSA; SM2/SM3 here; engine bring-up, TRNG, OTP from CIX's binary) | done |
+| SoC init (PLLs, clocks/resets/power, MPU, memory repair, fuse distribution, harvest) | done |
+| CI-700, MMHUB, RCSU gaskets (the TZC-400s are set up by the DDR driver) | done |
+| Secure boot: load, verify and start CSU_PM and BL2 | done; the signed path is not yet exercised in the emulator |
+| Runtime mailbox services, suspend/resume, SFH loading | written; not yet exercised in the emulator |
+| Crash information | written; clock and power records are reduced to raw registers |
+| Cold boot from reset to AP release, against CIX's firmware in the emulator | identical (831 registers, DRAM and PM SRAM) for life cycles 4, 5 and 7 |
 
-Each function is checked against CIX's by running both in Unicorn on the
-same peripheral model, as `scripts/open/test_sfh.py` does for the sensor
-fusion hub.
+The services keep CIX's interface, with two differences: secret eFuse
+fields (device and model keys) are given only to requests on the TEE
+mailbox, and the hash service only reads DRAM.  CIX's firmware serves both
+to the non-secure side.
+
+`scripts/open/test_se.py` runs CIX's debug build and this firmware in
+Unicorn (`scripts/open/se_emu.py`, a model of the SoC as the SE sees it) on
+the same flash image and compares every register write and what ends up in
+DRAM and the PM's SRAM.
