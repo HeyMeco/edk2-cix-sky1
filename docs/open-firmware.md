@@ -45,7 +45,7 @@ pinned by hash in [manifests/cix-keys.json](../manifests/cix-keys.json) and
 fetched at build time.
 
 On the chain-B boards only BL33 can be replaced: the retail MS-R1 already
-showed that these chips reject a `cix`-chain BL1 (they stay silent). The BL33
+showed that these chips reject a chain-A BL1 (they stay silent). The BL33
 FIP on every board is rooted at `0d999213` (the pregenerated
 `trusted_key_no.crt`, NV counter 223), separately from bootloader2.
 
@@ -205,7 +205,7 @@ build. `sfh_fw.bin` (17 KB Cortex-M) is small enough to clean-room later.
 
 1. Boot-test `--open` on an O6 (UART log of BL31/OP-TEE, variables persist
    across a cold boot, Secure Boot keys enrol). Then make it the default for
-   the `cix` boards.
+   the chain-A boards.
 2. BL2 from source: the five platform files, first without trusted board
    boot, checked against the vendor BL2's behaviour on UART; then re-signed
    into bootloader1 for the O6.
