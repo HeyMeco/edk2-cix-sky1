@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from xt_emu import EPC1, EXCCAUSE, EXCVADDR, Xtensa  # noqa: E402
 
 # a call to any of these is a failure (CIX: argument 0 is a trace code)
-ASSERTS = ("vAssertCalledWithTRC", "vAssertCalled", "_xt_panic")
+ASSERTS = ("vAssertCalledWithTRC", "vAssertCalled", "_xt_panic", "arch_panic")
 
 # busy-waits on CCOUNT, done at once (argument: cycles)
 DELAYS = ("cc_delay",)

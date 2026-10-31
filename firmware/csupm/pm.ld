@@ -1,0 +1,69 @@
+/* SPDX-License-Identifier: BSD-2-Clause-Patent */
+/*
+ * CSU_PM memory map (PM addresses; the PM SRAM is SoC 0x06a10000).  The
+ * regions are those of CIX's image: code in IRAM, read-only data and data
+ * in DRAM0, bss and the stack in DRAM1 below the areas other agents use
+ * (eFuse copy, scratch, BIOS configuration).  The SE loads the image's
+ * sections from bootloader1 (scripts/open/xbin.py) and starts the PM at
+ * the reset vector, 0x20000000.
+ */
+OUTPUT_ARCH(xtensa)
+ENTRY(_ResetVector)
+
+MEMORY
+{
+	iram  (rx)  : ORIGIN = 0x20000000, LENGTH = 0x30000
+	dram0 (rw)  : ORIGIN = 0x20040000, LENGTH = 0x10000
+	dram1 (rw)  : ORIGIN = 0x20080000, LENGTH = 0x3e700
+}
+
+VECBASE = 0x20000400;
+
+SECTIONS
+{
+	.ResetVector.text 0x20000000 : { KEEP(*(.ResetVector.text)) } > iram
+
+	.WindowVectors.text VECBASE : { KEEP(*(.WindowVectors.text)) } > iram
+	.Level2InterruptVector.text VECBASE + 0x17c : { KEEP(*(.Level2InterruptVector.text)) } > iram
+	.Level3InterruptVector.text VECBASE + 0x19c : { KEEP(*(.Level3InterruptVector.text)) } > iram
+	.Level4InterruptVector.text VECBASE + 0x1bc : { KEEP(*(.Level4InterruptVector.text)) } > iram
+	.Level5InterruptVector.text VECBASE + 0x1dc : { KEEP(*(.Level5InterruptVector.text)) } > iram
+	.DebugExceptionVector.text VECBASE + 0x1fc : { KEEP(*(.DebugExceptionVector.text)) } > iram
+	.NMIExceptionVector.text VECBASE + 0x21c : { KEEP(*(.NMIExceptionVector.text)) } > iram
+	.KernelExceptionVector.text VECBASE + 0x23c : { KEEP(*(.KernelExceptionVector.text)) } > iram
+	.UserExceptionVector.text VECBASE + 0x25c : { KEEP(*(.UserExceptionVector.text)) } > iram
+	.DoubleExceptionVector.text VECBASE + 0x27c : { KEEP(*(.DoubleExceptionVector.text)) } > iram
+
+	/* literals before the code that loads them (L32R reaches backwards) */
+	.text VECBASE + 0x2a0 : {
+		*(.ResetHandler.literal .literal .literal.*)
+		*(.ResetHandler.text .text .text.*)
+	} > iram
+
+	.rodata : {
+		*(.rodata .rodata.*)
+		. = ALIGN(4);
+	} > dram0
+
+	.data : {
+		*(.data .data.*)
+		. = ALIGN(4);
+	} > dram0
+
+	.bss (NOLOAD) : {
+		_bss_start = .;
+		*(.bss .bss.* COMMON)
+		. = ALIGN(16);
+		_bss_end = .;
+	} > dram1
+
+	_stack_top = ORIGIN(dram1) + LENGTH(dram1);
+	_stack_bottom = _stack_top - 0x4000;
+	ASSERT(_bss_end <= _stack_bottom, "bss overlaps the stack")
+
+	/* Xtensa property tables (instruction ranges, literals), not loaded */
+	.xt.lit 0 : { *(.xt.lit .xt.lit.*) }
+	.xt.prop 0 : { *(.xt.prop .xt.prop.*) }
+
+	/DISCARD/ : { *(.comment) *(.note.*) }
+}
