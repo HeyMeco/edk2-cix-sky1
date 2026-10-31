@@ -20,7 +20,7 @@ CFLAGS	:= -mlongcalls -ffp-contract=off -g -std=gnu11 -ffreestanding -fno-builti
 FW_CFLAGS := $(CFLAGS) -Os -Iinclude -Wvla
 LDFLAGS	:= -nostdlib -T pm.ld -Wl,--gc-sections -Wl,-Map=$(O)/csupm.map
 
-SRCS	:= arch/vectors.S src/main.c src/lcru.c src/uart.c src/i2c.c src/pmic.c src/soc.c src/pmu.c lib/string.c
+SRCS	:= arch/vectors.S src/main.c src/lcru.c src/uart.c src/i2c.c src/pmic.c src/soc.c src/pmu.c src/mbox.c lib/string.c
 OBJS	:= $(patsubst %,$(O)/%.o,$(SRCS))
 
 all: $(O)/csupm.xbin
