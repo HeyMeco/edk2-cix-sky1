@@ -383,6 +383,9 @@ the same code in both).  Differences from CIX's firmware, on purpose:
   hardware unique key is derived from;
 * the hash service (`0x8200000c`) only reads DRAM; CIX's hashes any
   address the caller names, SE SRAM and eFuse included;
+* the request to burn the OEM root key hash (`0x8200001a`) is refused;
+  CIX's burns it and turns secure boot on for good. Nothing in the open
+  SE programs eFuses;
 * no debug monitor; a memory-configuration block lookup that is correct
   where CIX's reads past its table; a write enable per erased sector.
 
