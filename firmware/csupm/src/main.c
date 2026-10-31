@@ -1,8 +1,10 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
 /*
  * CSU_PM firmware: the power-on sequence (CIX's ss_por_enter), what CIX's
- * ss_init_enter does as far as it is here, the SE handshake, then idle.
+ * ss_init_enter and ss_run_enter do as far as it is here, SCP-firmware's
+ * modules, the SE handshake, then SCP-firmware's event loop.
  */
+#include "arch_scp.h"
 #include "i2c.h"
 #include "lcru.h"
 #include "mbox.h"
@@ -33,12 +35,6 @@ static void se_handshake_ready(void)
 	REG32(PM_MAGIC) = PM_MAGIC_READY;
 }
 
-__attribute__((noinline)) void arch_idle(void)
-{
-	/* nothing to wait for yet: no interrupt is enabled */
-	__asm__ volatile("" ::: "memory");
-}
-
 /* CIX's ss_init_enter: the SoC is up, nothing runs on it yet */
 static void ss_init(void)
 {
@@ -52,8 +48,17 @@ static void ss_run(void)
 	mbox_init();				/* app_msgInit */
 }
 
+static void run_constructors(void)
+{
+	extern void (*__init_array_start[])(void), (*__init_array_end[])(void);
+
+	for (void (**f)(void) = __init_array_start; f < __init_array_end; f++)
+		(*f)();
+}
+
 int main(void)
 {
+	run_constructors();
 	lcru_core_clock(1);			/* 400 MHz */
 	scratch_clear();
 	lcru_axprot();
@@ -67,7 +72,7 @@ int main(void)
 	se_handshake_up();
 	ss_init();
 	ss_run();
+	scp_init();				/* SCMI on the mailboxes */
 	se_handshake_ready();
-	for (;;)
-		arch_idle();
+	scp_run();
 }

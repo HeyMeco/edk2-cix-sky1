@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pm_emu  # noqa: E402
 
 CIX_PM = "release/pm_fw/Release/csupm_sky1"
-IDLE = ("vApplicationIdleHook", "arch_idle")    # CIX's (FreeRTOS), ours
+IDLE = ("vApplicationIdleHook", "arch_irq_wait")    # CIX's (FreeRTOS), ours
 BOOT_BUDGET = 8_000_000
 CHANNELS = (0, 2, 4, 6)               # AP -> PM mailboxes with an SMT channel
 # not compared register by register: UART data, I2C controllers (the

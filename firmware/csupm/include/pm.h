@@ -13,6 +13,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #define REG32(a)		(*(volatile uint32_t *)(uintptr_t)(a))
 #define REG16(a)		(*(volatile uint16_t *)(uintptr_t)(a))
@@ -38,13 +39,7 @@ static inline uint32_t ccount(void)
 	return v;
 }
 
-void arch_idle(void);
 void udelay_cycles(uint32_t cycles);	/* busy-wait on CCOUNT */
 
-void *memcpy(void *dst, const void *src, size_t n);
-void *memmove(void *dst, const void *src, size_t n);
-void *memset(void *dst, int c, size_t n);
-int memcmp(const void *a, const void *b, size_t n);
-size_t strlen(const char *s);
 
 #endif

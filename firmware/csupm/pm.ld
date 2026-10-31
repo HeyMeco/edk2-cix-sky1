@@ -45,6 +45,14 @@ SECTIONS
 		. = ALIGN(4);
 	} > dram0
 
+	/* constructors (SCP-firmware's FWK_CONSTRUCTOR), run by main */
+	.init_array : {
+		__init_array_start = .;
+		KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*)))
+		KEEP(*(.init_array .ctors))
+		__init_array_end = .;
+	} > dram0
+
 	.data : {
 		*(.data .data.*)
 		. = ALIGN(4);
@@ -60,6 +68,10 @@ SECTIONS
 	_stack_top = ORIGIN(dram1) + LENGTH(dram1);
 	_stack_bottom = _stack_top - 0x4000;
 	ASSERT(_bss_end <= _stack_bottom, "bss overlaps the stack")
+
+	/* the heap (lib/malloc.c) is the rest of DRAM1 */
+	_heap_start = _bss_end;
+	_heap_end = _stack_bottom;
 
 	/* Xtensa property tables (instruction ranges, literals), not loaded */
 	.xt.lit 0 : { *(.xt.lit .xt.lit.*) }

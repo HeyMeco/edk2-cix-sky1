@@ -413,10 +413,14 @@ def scmi(cpu, soc, protocol, msg, args=(), mbox=2, token=0, budget=5_000_000, ch
     rd = lambda off: soc.mem.read(base + off, 4)          # noqa: E731
     wr = lambda off, v: soc.mem.write(base + off, 4, v)   # noqa: E731
     end = cpu.insns + budget
+    # a PM without a running timer sleeps in WAITI until the doorbell
+    asleep = lambda why: why is not None and str(why).startswith("waiti with nothing")  # noqa: E731
     while not rd(SMT_STATUS) & SMT_FREE:
         if cpu.insns >= end:
             raise ScmiError(f"channel {mbox} never free")
         why = cpu.run(chunk)
+        if asleep(why):
+            raise ScmiError(f"channel {mbox} never free")
         if why is not None:
             raise ScmiError(f"stopped: {why}")
     header = (msg & 0xff) | (protocol & 0xff) << 10 | (token & 0x3ff) << 18
@@ -431,7 +435,9 @@ def scmi(cpu, soc, protocol, msg, args=(), mbox=2, token=0, budget=5_000_000, ch
         if cpu.insns >= end:
             raise ScmiError(f"no answer to protocol {protocol:#x} message {msg}")
         why = cpu.run(chunk)
-        if why is not None:
+        if asleep(why) and not rd(SMT_STATUS) & SMT_FREE:
+            raise ScmiError(f"no answer to protocol {protocol:#x} message {msg} (the PM sleeps)")
+        if why is not None and not asleep(why):
             raise ScmiError(f"stopped: {why} at {cpu.func(cpu.pc)}")
     if rd(SMT_STATUS) & SMT_ERROR:
         raise ScmiError("channel error")
