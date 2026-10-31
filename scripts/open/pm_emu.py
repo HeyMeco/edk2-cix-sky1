@@ -28,7 +28,7 @@ from xt_emu import EPC1, EXCCAUSE, EXCVADDR, Xtensa  # noqa: E402
 ASSERTS = ("vAssertCalledWithTRC", "vAssertCalled", "_xt_panic", "arch_panic")
 
 # busy-waits on CCOUNT, done at once (argument: cycles)
-DELAYS = ("cc_delay",)
+DELAYS = ("cc_delay", "udelay_cycles")      # CIX's, ours
 
 RAM = (0x20000000, 0x110000)          # IRAM/DRAM, overlay storage at 0x20100000
 RESET = 0x20000000
