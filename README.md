@@ -57,6 +57,10 @@ on top of the CIX 2026Q3 BSP and booting operating systems through **ACPI**.
   capsule updates (MS-R1, Orange Pi 6, Orange Pi 6 Plus).
 * **Scripts** that fetch and verify vendor binaries, build, sign, package and
   check the images ([scripts/](scripts)).
+* **One codebase for every board** (work in progress, [docs/parity.md](docs/parity.md)):
+  the Orange Pi boards and MS-R1 build from one shared DSC/FDF;
+  `--boot-firmware cix` gives every board the same CIX 2026Q3 SE, PM, BL2,
+  BL31 and OP-TEE (not boot-tested yet).
 * **Open boot firmware** (work in progress, [docs/open-firmware.md](docs/open-firmware.md)):
   TF-A and OP-TEE as pinned submodules; `--open` builds `bootloader2`
   (BL31 + OP-TEE) from source and signs it with CIX's published keys for the
