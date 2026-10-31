@@ -5,6 +5,7 @@
  */
 #include "i2c.h"
 #include "lcru.h"
+#include "mbox.h"
 #include "pmic.h"
 #include "pmu.h"
 #include "uart.h"
@@ -48,6 +49,7 @@ static void ss_init(void)
 static void ss_run(void)
 {
 	pmu_reset_all();			/* perf_stream_restore */
+	mbox_init();				/* app_msgInit */
 }
 
 int main(void)
