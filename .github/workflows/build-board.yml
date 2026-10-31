@@ -62,6 +62,12 @@ jobs:
           ./build.sh "${{ inputs.board }}" --target "${{ inputs.target }}" \
             --version "${{ inputs.version }}" ${{ inputs.open && '--open' || '' }}
 
+      - name: CSU_PM toolchain check
+        if: inputs.open
+        run: |
+          docker run --rm -v "$PWD:/work" edk2-cix-build:${{ steps.tag.outputs.tag }} \
+            make -C firmware/csupm O=/tmp/csupm check
+
       - uses: actions/upload-artifact@v7
         with:
           name: firmware-${{ inputs.board }}${{ inputs.open && '-open' || '' }}

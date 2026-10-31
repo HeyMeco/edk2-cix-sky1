@@ -58,9 +58,37 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc-arm-none-eabi libnewlib-arm-none-eabi binutils-arm-none-eabi python3-capstone \
     && rm -rf /var/lib/apt/lists/*
 
+# Xtensa (CSU_PM, Cadence LX7 core "pm_core_v1"): Espressif's GCC, which
+# loads the core description at run time (xtensa-dynconfig), and the
+# overlay sources scripts/open/xtensa_core.py builds that description from.
+ARG XTENSA_GCC=esp-14.4.0_20260914
+ARG XTENSA_GCC_SHA256_AMD64=972c6bd7925691f5dcbe8aa41616a570a66b9a7003b5b5bc2069c3837b9a6cfd
+ARG XTENSA_GCC_SHA256_ARM64=d796a6dc3ff325165d8bbe194b8c11312092c0e8bf075f15fe00400578740985
+ARG XTENSA_OVERLAYS_COMMIT=ef3bd5ed567e363e714d32402e73f2be99f03cfe
+ARG XTENSA_DYNCONFIG_COMMIT=905b913aa65638be53ac22029c379fa16dab31db
+RUN set -eux; \
+    case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
+      amd64) host=x86_64;  sha="${XTENSA_GCC_SHA256_AMD64}" ;; \
+      arm64) host=aarch64; sha="${XTENSA_GCC_SHA256_ARM64}" ;; \
+    esac; \
+    ver="${XTENSA_GCC#esp-}"; \
+    curl -fsSL -o /tmp/xt.tar.xz \
+      "https://github.com/espressif/crosstool-NG/releases/download/${XTENSA_GCC}/xtensa-esp-elf-${ver}-${host}-linux-gnu.tar.xz"; \
+    echo "${sha}  /tmp/xt.tar.xz" | sha256sum -c -; \
+    mkdir -p /opt/xtensa; \
+    tar -xf /tmp/xt.tar.xz -C /opt/xtensa; \
+    rm /tmp/xt.tar.xz; \
+    for r in overlays:${XTENSA_OVERLAYS_COMMIT} dynconfig:${XTENSA_DYNCONFIG_COMMIT}; do \
+      n="${r%%:*}"; c="${r#*:}"; \
+      git init -q "/opt/xtensa/$n"; \
+      git -C "/opt/xtensa/$n" fetch -q --depth 1 "https://github.com/espressif/xtensa-$n" "$c"; \
+      git -C "/opt/xtensa/$n" checkout -q FETCH_HEAD; \
+      rm -rf "/opt/xtensa/$n/.git"; \
+    done
+
 ENV GCC5_AARCH64_PREFIX=/opt/toolchain/aarch64-none-elf/bin/aarch64-none-elf- \
     IASL_PREFIX=/opt/acpica/bin/ \
-    PATH=/opt/acpica/bin:/opt/toolchain/aarch64-none-elf/bin:$PATH
+    PATH=/opt/acpica/bin:/opt/toolchain/aarch64-none-elf/bin:/opt/xtensa/xtensa-esp-elf/bin:$PATH
 
 # The workspace is bind-mounted here; mark it safe for git regardless of
 # the host UID that owns it.

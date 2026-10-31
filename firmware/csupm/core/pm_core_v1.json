@@ -1,0 +1,17 @@
+{
+  "_comment": "Compiler configuration for CSU_PM's core (Cadence Xtensa LX7.1.10, CORE_NAME pm_core_v1, HW_CONFIGID 0xc000b286/0x2a8a7d6a, from the .xtensa.info note of CIX's csupm_sky1 ELF). scripts/open/xtensa_core.py takes Espressif's ESP32-S3 overlay (LX7, the closest public configuration) and applies these overrides. Evidence: instruction counts from 'xtensa_isa.py census' over CIX's ELF (2026-10-31): every option set to 1 is used by CIX's compiler, every option set to 0 never is. Options the compiler does not use (caches, MMU, interrupts, AREGS) do not matter here.",
+  "base_overlay": "xtensa_esp32s3",
+  "overrides": {
+    "XCHAL_HAVE_MAC16": {"value": 0, "why": "no MAC16 opcode (op0 4) anywhere in CIX's code"},
+    "XCHAL_HAVE_CLAMPS": {"value": 0, "why": "never used"},
+    "XCHAL_HAVE_S32C1I": {"value": 0, "why": "never used; FreeRTOS here runs on one core with interrupts masked"},
+    "XCHAL_HAVE_THREADPTR": {"value": 0, "why": "RUR/WUR only touch the FP control and status registers"},
+    "XCHAL_HAVE_RELEASE_SYNC": {"value": 0, "why": "no L32AI/S32RI"},
+    "XCHAL_HAVE_FP_RECIP": {"value": 0, "why": "not seen; libgcc does it"},
+    "XCHAL_HAVE_FP_SQRT": {"value": 0, "why": "not seen; libgcc does it"},
+    "XCHAL_HAVE_FP_RSQRT": {"value": 0, "why": "not seen; libgcc does it"}
+  },
+  "used": ["windowed ABI", "density", "loops", "MUL16", "MUL32", "MUL32_HIGH", "DIV32", "NSA", "MINMAX", "SEXT",
+           "booleans", "SALT/SALTU", "single-precision FPU with divide (DIV0.S/DIVN.S/MADDN.S) and post-increment loads",
+           "XTENSA_MARCH stays at the overlay's LX7.0.12: GCC only gains LX7.0 instructions, which LX7.1 has"]
+}

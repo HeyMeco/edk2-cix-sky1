@@ -7,3 +7,4 @@
 /blobs-cache/
 __pycache__/
 *.pyc
+/firmware/*/build/

@@ -22,6 +22,7 @@
   "toolchain": {
     "gcc": "gcc-arm-10.2-2020.11 aarch64-none-elf",
     "acpica": "R2024_12_12 (7dae72155bf06b0edda9f3aea713da1d48c1c418)",
-    "container": "debian:12-slim"
+    "container": "debian:12-slim",
+    "xtensa": "Espressif xtensa-esp-elf esp-14.4.0_20260914 with xtensa-dynconfig 905b913a and xtensa-overlays ef3bd5ed (CSU_PM core pm_core_v1, firmware/csupm)"
   }
 }
