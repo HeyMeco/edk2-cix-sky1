@@ -375,7 +375,11 @@ def check_nv_store(cfg, layout):
     SPI_VARIABLE_SIZE from SPI_VARIABLE_BASE) is erased and rewritten at run
     time, so it must sit inside the layout's reserved region."""
     dsc = (ROOT / cfg["package"] / Path(cfg["dsc"]).name).read_text()
-    defs = dict(re.findall(r"^\s*DEFINE\s+(SPI_VARIABLE_BASE|SPI_VARIABLE_SIZE)\s*=\s*(\S+)", dsc, re.M))
+    pattern = r"^\s*DEFINE\s+(SPI_VARIABLE_BASE|SPI_VARIABLE_SIZE)\s*=\s*(\S+)"
+    defs = dict(re.findall(pattern, dsc, re.M))
+    if "Sky1Board.dsc.inc" in dsc:      # defaults of the shared board body
+        shared = (ROOT / "edk2-project/Platform/CIX/Sky1/Sky1Board.dsc.inc").read_text()
+        defs = {**dict(re.findall(pattern, shared, re.M)), **defs}
     if len(defs) != 2:
         die(f"{cfg['board']}: SPI_VARIABLE_BASE/SIZE not defined in {cfg['dsc']}")
     start = int(defs["SPI_VARIABLE_BASE"], 0)

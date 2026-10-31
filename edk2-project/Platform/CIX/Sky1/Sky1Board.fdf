@@ -1,4 +1,8 @@
 ## @file
+#  Flash description shared by the CIX Sky1 boards (FLASH_DEFINITION of each
+#  board DSC).  The board modules come from the BOARD_* macros of the DSC
+#  (see Sky1Board.dsc.inc); BOARD_FDF_DXE_EARLY and BOARD_FDF_DXE list
+#  board-only DXE drivers before and after the shared ones.
 #
 #  Copyright 2024 Cix Technology Group Co., Ltd. All Rights Reserved.
 #  Copyright (c) 2011 - 2019, ARM Limited. All rights reserved.
@@ -130,7 +134,7 @@ READ_LOCK_STATUS   = TRUE
   INF Platform/CIX/Sky1/Drivers/PlatformConfigParamsManageDxe/PlatformConfigParamsManageDxe.inf
   INF Silicon/CIX/Sky1/Drivers/ConfigParamsManageDxe/ConfigParamsManageDxe.inf
 !endif
-!if $(TOKEN_SETUP_SUPPORT) == TRUE
+!if $(TOKEN_SETUP_SUPPORT) == TRUE || $(BOARD_SETUP_MANAGER_DXE) == TRUE
   INF Platform/CIX/Sky1/Drivers/PlatformSetupVariableInitDxe/PlatformSetupVariableInitDxe.inf
 !endif
   INF Platform/CIX/Sky1/Drivers/PlatformDxe/PlatformDxe.inf
@@ -142,14 +146,19 @@ READ_LOCK_STATUS   = TRUE
 !endif
   }
 
+  # board-only DXE drivers placed before the shared list
+  !include $(BOARD_FDF_DXE_EARLY)
+
 # inf file list has be move to Sky1Common.fdf.inc
 # please put xxx.inf to Sky1Common.fdf.inc
 !include Platform/CIX/Sky1/Sky1Common.fdf.inc
+!if $(BOARD_DTB_UPDATE_DXE) == TRUE
   INF Platform/CIX/Sky1/Drivers/DtbUpdateDxeSi/DtbUpdateDxe.inf
+!endif
 
 !if $(ACPI_ENABLE) == TRUE
-  INF RuleOverride = ACPITABLE2 Platform/CIX/Sky1/OPI6/ACPI/AcpiPlatformTables/AcpiPlatformTables.inf
-  INF Platform/CIX/Sky1/Merak/ACPI/AcpiPlatformDxe/AcpiPlatformDxe.inf
+  INF RuleOverride = ACPITABLE2 $(BOARD_ACPI_TABLES)
+  INF $(BOARD_ACPI_PLATFORM_DXE)
 !endif
 
   #
@@ -163,8 +172,11 @@ READ_LOCK_STATUS   = TRUE
       SECTION RAW = Platform/CIX/Sky1/Bin/ntroot.cer //root pubkey
   }
 !if $(SMBIOS_ENABLE) == TRUE
-  INF Platform/CIX/Sky1/OPI6/PlatformSmbios/PlatformSmbios.inf
+  INF $(BOARD_SMBIOS)
 !endif
+
+  # board-only DXE drivers
+  !include $(BOARD_FDF_DXE)
 
 [FV.FVMAIN_COMPACT]
 FvAlignment        = 16
