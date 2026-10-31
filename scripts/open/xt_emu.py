@@ -58,7 +58,9 @@ VEC = {"overflow4": 0x000, "underflow4": 0x040, "overflow8": 0x080, "underflow8"
 INTLEVEL = (1, 1, 1, 1, 2, 3, 1, 4, 5, 4, 5, 5, 1, 1, 1, 1,
             1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 7)
 EXCM_LEVEL = 5
-TIMER_INT = (6, 7, 13)       # CCOMPARE1 is interrupt 7 (FreeRTOS tick); 0 and 2 unused by CIX
+# CCOMPARE0..2 interrupts: CIX's image takes its tick from CCOMPARE1 on 7 and
+# programs CCOMPARE2 with _hw_timer_callback on 8; 6 for CCOMPARE0 is a guess
+TIMER_INT = (6, 7, 8)
 
 
 def sx(v, bits):
