@@ -173,6 +173,41 @@ the mask ROM, so this cannot be confirmed from the binaries. The retail MS-R1
 does not start a BL1 of the CIX default chain, so at least those chips have
 a key fused.
 
+### What CIX documents
+
+The *CIX P1 Security Development Guide* V1.0 describes the chain like this:
+
+* bootloader1 and bootloader2 belong to CIX and are signed with the
+  **platform key**. The BootROM verifies bootloader1 against the platform key
+  in eFuse; bootloader1 then verifies bootloader2 and "the root certificate of
+  bootloader3" with the same key. OP-TEE is part of bootloader2 and is signed
+  the same way. The guide does not cover the platform keys themselves
+  (`c6d0e93f`/`5672dfd9`, `fb3f60e4`).
+* bootloader3 and everything after it belong to the OEM and are signed with
+  the **OEM key**. A test build uses the default `Keys/oem_privatekey.pem`
+  and `certs/trusted_key_no.crt`. For a production key, the OEM either sends
+  its public key to CIX, which returns a new `trusted_key_no.crt` (the key can
+  be changed later), or burns the key hash into eFuse with
+  `private_pem_convert_public_hash.py` and `fastboot flash oem_pk_fuse
+  hash.bin` (permanent; `EfuseOemKeyDxe` does the same from UEFI and is
+  pinned off in `Sky1Board.dsc.inc`).
+* OP-TEE TAs are signed with the OEM key too
+  (`optee_core_export/keys/oem_privatekey.pem`).
+
+This matches what the images show. `trusted_key_no.crt` `2a25ee2b…`, used on
+the O6, O6N, OPI6 Plus and retail MS-R1, is self-signed by the `fb3f60e4`
+platform key (SPKI `0d999213`) and carries the **default** OEM public key
+(SPKI `27d49f04`) as its non-trusted-world key and no trusted-world key. It
+is the test-build certificate: these vendors ship the test OEM key, so anyone
+can sign BL33 for them, but not BL31/BL32. A board whose `oem_pk_fuse` holds
+another key would reject such a BL33.
+
+The default OEM public key modulus also appears verbatim in all three
+chain-B `bootloader2.img` (OPI6, OPI6 Plus, MS-R1). Which component holds it
+is not yet known: BL2 (which would explain why the OPI6 accepts a
+`trusted_key_no.crt` self-signed by the OEM key) or OP-TEE as the TA key
+(which would let TAs signed with the public key load on these boards).
+
 ### Builds per board
 
 None of these BL1s carries a single release number. The table lists what the
