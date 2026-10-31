@@ -130,6 +130,8 @@ void clk_dump_tree(TREE_NODE *root);
 void clk_dump_node(TREE_NODE *node);
 void clk_node_override_default(void);
 void * clk_nodes_get(CLK_TREE_ENUM_IDX enum_idx);
+/* The clock of a DPM element (core, DSU, GPU, ...; CIX's cfg_dpm.c) */
+CLK_TREE_ENUM_IDX dpm_elem_get_clk_id(uint32_t elem);
 void clk_nodes_init(void);
 void clk_nodes_clr_tracking_bit(void);
 void clk_nodes_save(void);

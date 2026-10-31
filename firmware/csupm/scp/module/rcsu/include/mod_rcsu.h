@@ -38,8 +38,8 @@ enum mod_rcsu_api_idx {
 	MOD_RCSU_API_IDX_COUNT,
 };
 
-/* The system power sequence (src/power.c): what CIX's pwr_hsm does on a
- * shutdown or reset request */
+/* The system power sequence (src/power.c, src/hsm): a shutdown or reset
+ * request sets its target, as CIX's trigger_SD and trigger_RST */
 void rcsu_system_shutdown_request(enum mod_pd_system_shutdown type);
 
 #endif

@@ -1,0 +1,13 @@
+SCP-firmware v2.11.0's transport module with CIX's changes (CIX merges it
+with the mailbox driver in its ipc_arbiter module):
+
+* a completer's shared memory is initialised as CIX's
+  ipc_arbiter_mailbox_init does it: the first word, then the status
+  (free), then the rest of the header, a word at a time (upstream assigns
+  the whole header at once);
+* answers and the PM's messages set the first word's bits 6:0, the buffer
+  length the AP's shared-memory driver reads (0x7f, CIX's
+  ipc_arbiter_respond and ipc_arbiter_transmit).
+
+The PM's own messages, which share the channels (src/msg), never reach it:
+the mailbox driver (cix_mbox) hands a doorbell to them first.

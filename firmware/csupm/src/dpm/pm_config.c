@@ -14,9 +14,10 @@
  *
  * Left out for now, with the parts of the firmware they configure: the
  * board's rail layout (pmic_scheme_config), fans, PVT, SPT, watchdog,
- * GPIO, PSI7 mode, log UART.
+ * GPIO, PSI7 mode.  The log's part goes to src/log (pm_log_config).
  */
 #include "dpm.h"
+#include "log/log.h"
 
 #define BIOS_CFG		0x200bf000u
 #define BIOS_CFG_VERSION	3
@@ -25,6 +26,7 @@
 
 /* offsets in pm_config_t */
 #define CFG_OPP_VALID		0x80	/* pm_config_opp_t opp_config */
+#define CFG_LOG			0xce3	/* the log's: DRAM log magic, UART rate */
 #define CFG_OPPS		0x81	/* domain_opp_config_t opps[13], 212 bytes each */
 #define CFG_VMIN_DISABLE	0xceb
 #define CFG_VMIN_PROFILE	0xcef
@@ -116,6 +118,7 @@ void do_pm_config(void)
 	bios_cfg_valid = do_pm_config_crc_check();
 	if (!bios_cfg_valid)
 		return;
+	pm_log_config((const uint8_t *)(uintptr_t)(PM_CONFIG + CFG_LOG));
 	opp_table_config();
 	vmin_config();
 }
