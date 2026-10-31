@@ -49,7 +49,7 @@ FW_CFLAGS := $(CFLAGS) -Os -Iinclude -Wvla $(SCP_DEFS) $(SCP_INC)
 SCP_CFLAGS := $(filter-out -Wextra -Werror,$(CFLAGS)) -Os -Iinclude $(SCP_DEFS) $(SCP_INC)
 
 SRCS	:= arch/vectors.S src/main.c src/lcru.c src/uart.c src/i2c.c src/pmic.c src/soc.c \
-	   src/pmu.c src/mbox.c src/power.c src/pvt.c lib/string.c lib/malloc.c lib/printf.c lib/libgcc.c $(SCP_SRCS)
+	   src/pmu.c src/mbox.c src/power.c src/pvt.c $(wildcard src/clk/*.c) lib/string.c lib/malloc.c lib/printf.c lib/libgcc.c $(SCP_SRCS)
 OBJS	:= $(patsubst %,$(O)/%.o,$(SRCS)) $(SCP_GEN)/fwk_module_list.c.o
 
 all: $(O)/csupm.xbin
@@ -64,7 +64,7 @@ $(SCP_GEN)/fwk_module_idx.h $(SCP_GEN)/fwk_module_list.c: scp/modules.py Makefil
 	@mkdir -p $(SCP_GEN)
 	@python3 scp/modules.py $(SCP_GEN) $(SCP_MODULES)
 
-$(O)/%.c.o: %.c $(CORE) $(wildcard include/*.h scp/include/*.h) $(SCP_GEN)/fwk_module_idx.h Makefile
+$(O)/%.c.o: %.c $(CORE) $(wildcard include/*.h scp/include/*.h src/clk/*.h) $(SCP_GEN)/fwk_module_idx.h Makefile
 	@mkdir -p $(dir $@)
 	@echo "  CC      $<"
 	@$(CC) $(FW_CFLAGS) -c -o $@ $<
