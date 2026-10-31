@@ -22,8 +22,16 @@ on top of the CIX 2026Q3 BSP and booting operating systems through **ACPI**.
 
 * **CIX 2026Q3** `edk2`, `edk2-platforms` and `edk2-non-osi` as pinned
   submodules ([manifests/pins.json](manifests/pins.json)).
-* **Board packages** in `edk2-project/`, which takes precedence over
-  `edk2-platforms` in `PACKAGES_PATH`.
+* **One firmware for every board**: all five boards build from one shared
+  DSC/FDF ([Sky1Board.dsc.inc](edk2-project/Platform/CIX/Sky1/Sky1Board.dsc.inc),
+  CIX 2026Q3 plus the patch queue) with the same features; a board package in
+  `edk2-project/` only describes its hardware ([docs/parity.md](docs/parity.md)).
+  Every board has the CIX setup interface, the network stack (PXE/HTTP boot,
+  Realtek RTL8125/8126/8168 drivers; off until enabled in setup), Microsoft's
+  Secure Boot keys as defaults, ACPI or device-tree boot (DTB from disk),
+  FPDT and SPCR tables, the x86 option-ROM emulator for graphics cards and the
+  boot watchdog. Firmware is updated by flashing the image; there are no
+  capsules.
 * **A patch queue** for CIX code in [patches/2026Q3/edk2-platforms](patches/2026Q3/edk2-platforms)
   (and two for EDK2 core in [patches/2026Q3/edk2](patches/2026Q3/edk2), for
   the MS-R1 Secure Boot defaults and the TPM on the Secure Boot page):
@@ -34,7 +42,8 @@ on top of the CIX 2026Q3 BSP and booting operating systems through **ACPI**.
   * setup variable left by the vendor firmware (different layout) reset to
     the defaults instead of being read at the wrong offsets
   * unassigned USB-PD alert pins (0xFF) registered as GPIO interrupts
-  * boot watchdog raised from 20 s to 90 s (no false resets on slow boots)
+  * boot watchdog raised from 20 s to 90 s (no false resets on slow boots;
+    before the shared firmware, only MS-R1 built the watchdog driver)
   * SCMI shared memory `reg-io-width` (SCMI/DVFS/GPU on Linux ≥ 6.13)
   * PCIe x4 `bus-range` matching `_CRS`
   * SMMU HTTU (hardware access/dirty) advertised in IORT
@@ -47,20 +56,19 @@ on top of the CIX 2026Q3 BSP and booting operating systems through **ACPI**.
     (ASPM Max Support: Disable / L0s / L1 / L0sL1)
   * Port0 shown as x4 (no X8 width option) on the O6N and the Orange Pi
     boards, where the x8 root port drives an x4 M.2 slot
-* **MS-R1 Secure Boot and TPM** (tested with Windows 11; Linux untested):
-  Microsoft's PK/KEK/db as the Secure Boot defaults
+* **Secure Boot and TPM** (tested with Windows 11 on MS-R1; Linux untested):
+  Microsoft's PK/KEK/db as the Secure Boot defaults on every board
   ([SecureBootKeys](edk2-project/Platform/CIX/Sky1/SecureBootKeys)), and TPM
-  2.0 measured boot with a discrete TPM on the dTPM header (ASUS TPM-SPI,
+  2.0 measured boot with a discrete TPM on MS-R1's dTPM header (ASUS TPM-SPI,
   Nuvoton NPCT750), shown on the Secure Boot Configuration page and published
-  to the OS as a CRB TPM driven from AML, so Windows' inbox driver uses it
-* **Signed UEFI capsules** (`.cap`) for the boards whose firmware supports
-  capsule updates (MS-R1, Orange Pi 6, Orange Pi 6 Plus).
+  to the OS as a CRB TPM driven from AML, so Windows' inbox driver uses it.
+  Another board with a TPM on an SPI bus only sets `SPI_TPM_ENABLE` and the
+  bus/chip-select PCDs ([parity](docs/parity.md#spi-tpm)).
 * **Scripts** that fetch and verify vendor binaries, build, sign, package and
   check the images ([scripts/](scripts)).
-* **One codebase for every board** (work in progress, [docs/parity.md](docs/parity.md)):
-  the Orange Pi boards and MS-R1 build from one shared DSC/FDF;
-  `--boot-firmware cix` gives every board the same CIX 2026Q3 SE, PM, BL2,
-  BL31 and OP-TEE (not boot-tested yet).
+* **One boot firmware for every board**: `--boot-firmware cix` gives every
+  board the same CIX 2026Q3 SE, PM, BL2, BL31 and OP-TEE (not boot-tested
+  yet; [docs/parity.md](docs/parity.md)).
 * **Open boot firmware** (work in progress, [docs/open-firmware.md](docs/open-firmware.md)):
   TF-A and OP-TEE as pinned submodules; `--open` builds `bootloader2`
   (BL31 + OP-TEE) from source and signs it with CIX's published keys for the
@@ -108,8 +116,7 @@ defaults to the CIX BSP release (`bios_version` in
 firmware version string shown in setup.
 
 `--extras` additionally writes `dist/extras/<board>_<version>_extras.zip` with
-the unpadded image, the BL33-only OTA image, the signed UEFI capsules (MS-R1,
-Orange Pi), the raw FD and `manifest.json`. Intermediate files and the build
+the unpadded image, the BL33-only OTA image, the raw FD and `manifest.json`. Intermediate files and the build
 log stay in `output/<board>/RELEASE/`.
 
 Options: `--target DEBUG`, `--version 2026Q3-2`, `--extras`, `--jobs N`,
@@ -160,8 +167,7 @@ settings (the firmware re-initialises its variable store on first boot).
   (e.g. `flashrom -p ch341a_spi -w orion-o6_2026Q3.bin`).
 
 For updates without touching the rest of the flash, `--extras` provides the
-BL33-only `cix_flash_ota.bin` and, on MS-R1 and the Orange Pi boards, signed
-UEFI capsules (`*.cap`, e.g. for `CapsuleApp.efi`).
+BL33-only `cix_flash_ota.bin`.
 
 All images are signed with the default CIX OEM key, like the vendor firmware.
 

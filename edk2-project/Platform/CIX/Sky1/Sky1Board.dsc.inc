@@ -1,15 +1,18 @@
 ## @file
 #  Shared body of the CIX Sky1 board DSCs.
 #
-#  Every board uses the same modules, libraries, build options and PCD
-#  defaults from here; a board DSC only gives its [Defines] header, the
-#  DEFINEs that describe its hardware (BOARD_DIR, BOARD_DTB_NAME,
-#  PCIE_RP0_X4_SLOT, LINUX_ACPI_CONFIG_OVERRIDE, the BOARD_* module macros
-#  and its feature switches) and, after the !include, the PCDs, components
-#  and build options that are its own.  A PCD set again after this file
-#  overrides the value here.  Macros that Sky1Define.dsc.inc already defines
-#  (SPI_VARIABLE_*, CAPSULE_ENABLE, I2S_MC_SUPPORT, DTPM/FTPM_SUPPORT, ...)
-#  must be set by the board DSC; !ifndef cannot give them a default here.
+#  Every board gets the same firmware from here: modules, libraries, build
+#  options, features (the "Shared features" block below) and PCD defaults.
+#  A board DSC only describes its hardware: its [Defines] header, the
+#  defines for its board modules and hardware (BOARD_DIR, BOARD_DTB_NAME,
+#  BOARD_FD_SIZE, PCIE_RP0_X4_SLOT, I2C_EC_ENABLE, POWER_BUTTON_ENABLE,
+#  PLATFORM_PD_ENABLE, SOC_GMAC_ENABLE, SPI_TPM_ENABLE, SPI_VARIABLE_*, the
+#  BOARD_* module macros) and, after the !include, its own PCDs and
+#  components.  A PCD set again after this file overrides the value here.
+#
+#  Macros that Sky1Define.dsc.inc already defines cannot get an !ifndef
+#  default here: a hardware switch must be set by every board DSC, and a
+#  shared feature is set below, after the board's defines.
 #
 #  Copyright 2024 Cix Technology Group Co., Ltd. All Rights Reserved.
 #  Copyright (c) 2011 - 2020, ARM Limited. All rights reserved.
@@ -26,6 +29,74 @@
 !ifndef LINUX_ACPI_CONFIG_OVERRIDE
   DEFINE LINUX_ACPI_CONFIG_OVERRIDE = FALSE
 !endif
+!ifndef DEBUG_ON_UART3
+  # TRUE: DEBUG() output on UART3 (40-pin header on the Orion boards), the
+  # console stays on UART2
+  DEFINE DEBUG_ON_UART3             = FALSE
+!endif
+
+################################################################################
+#
+# Shared features: the same on every board (docs/parity.md).
+#
+################################################################################
+  DEFINE DTB_UPDATE_ENABLE          = FALSE
+  DEFINE PLATFORM_DTB_UPDATE_ENABLE = TRUE    # DT boot: DTB file BOARD_DTB_NAME from disk
+  DEFINE TOKEN_CONSOLE_PREF_SUPPORT = FALSE
+  DEFINE FW_VERSION_ENABLE          = TRUE
+  DEFINE SOC_PWR_CLK_RST_ENABLE     = TRUE
+  DEFINE WATCH_DOG_ENABLE           = FALSE
+  DEFINE NO_GIC_NO_TIMER            = FALSE
+  DEFINE SOC_I2C_ENABLE             = TRUE
+  DEFINE SOC_XSPI_ENABLE            = TRUE
+  DEFINE SOC_SPI_ENABLE             = TRUE
+  DEFINE SOC_GOP_ENABLE             = TRUE
+  DEFINE SOC_CDNSP_HOST_ENABLE      = TRUE
+  DEFINE PCIE_HOST_ENABLE           = TRUE
+  DEFINE I2C_HID_ENABLE             = TRUE
+  DEFINE FW_UPDATE_ENABLE           = TRUE
+  DEFINE TOKEN_SETUP_SUPPORT        = TRUE    # the CIX setup interface (SetupManagerDxe)
+  DEFINE NTFS_DRIVER_SUPPORT        = FALSE
+  DEFINE EXT4_DRIVER_SUPPORT        = FALSE
+  DEFINE AMD_GOP_DRIVER_SUPPORT     = TRUE
+  DEFINE TOKEN_RAM_DISK_SUPPORT     = FALSE
+  DEFINE VARIABLE_SUPPORT           = $(COMPILE_VARIABLE_TYPE)
+  DEFINE STMM_SUPPORT               = $(COMPILE_STMM_SUPPORT)
+  DEFINE REALTEK_LAN_DRIVER_SUPPORT = FALSE   # Sky1Board.fdf carries the Realtek drivers
+  DEFINE MEM_CONFIG_UPDATE_SUPPORT  = TRUE
+  DEFINE SE_CONFIG_UPDATE_SUPPORT   = TRUE
+  DEFINE PM_CONFIG_UPDATE_SUPPORT   = FALSE
+  DEFINE DYNAMIC_ACPI_CPU_ENABLE    = TRUE
+  DEFINE FV_SIMPLE_FILE_SUPPORT     = FALSE
+  DEFINE DYNAMIC_GET_MEM_SIZE       = TRUE
+  DEFINE SECURE_BOOT_ENABLE         = TRUE
+  DEFINE DEFAULT_KEYS               = TRUE
+  DEFINE UEFI_FW_STAGE              = Beta2
+  DEFINE BOOT_LOGO_ENABLE           = FALSE   # the board logo comes from BOARD_LOGO_DXE
+  DEFINE FUNC_BOOT_PERF_ENABLE      = TRUE
+  DEFINE DEBUG_MODE_SUPPORT         = FALSE
+  DEFINE CIX_GPNV_ENABLE            = TRUE
+  DEFINE BIOS_BACKUP_RECOVERY       = FALSE
+  DEFINE CAPSULE_ENABLE             = FALSE   # no capsule updates: flash cix_flash_all.bin
+  DEFINE I2S_MC_SUPPORT             = TRUE
+  DEFINE DTPM_SUPPORT               = FALSE   # CIX's dTPM/fTPM drivers are not public;
+  DEFINE FTPM_SUPPORT               = FALSE   # SPI_TPM_ENABLE is the discrete TPM
+  DEFINE NETWORK_ENABLE             = TRUE    # built in; off until enabled in setup
+
+  #
+  # Secure Boot defaults: Microsoft's keys (see SecureBootKeys/README.md), so
+  # "Reset Secure Boot Keys" enables Windows and shim-signed Linux.  DBX stays
+  # on the Sky1 default; Windows Update maintains it.
+  #
+  DEFINE MS_KEYS                    = Platform/CIX/Sky1/SecureBootKeys/Microsoft
+  DEFINE PK_DEFAULT_FILE            = $(MS_KEYS)/WindowsOEMDevicesPK.der
+  DEFINE KEK_DEFAULT_FILE1          = $(MS_KEYS)/MicCorKEKCA2011_2011-06-24.der
+  DEFINE KEK_DEFAULT_FILE2          = $(MS_KEYS)/MicCorKEK2kCA2023.der
+  DEFINE DB_DEFAULT_FILE1           = $(MS_KEYS)/MicWinProPCA2011_2011-10-19.der
+  DEFINE DB_DEFAULT_FILE2           = $(MS_KEYS)/WindowsUEFICA2023.der
+  DEFINE DB_DEFAULT_FILE3           = $(MS_KEYS)/MicCorUEFCA2011_2011-06-27.der
+  DEFINE DB_DEFAULT_FILE4           = $(MS_KEYS)/MicUEFICA2023.der
+  DEFINE DB_DEFAULT_FILE5           = $(MS_KEYS)/MicOptionROMUEFICA2023.der
 
 ################################################################################
 #
@@ -62,9 +133,6 @@
 #
 # Network definition
 #
-!ifndef NETWORK_ENABLE
-  DEFINE NETWORK_ENABLE                 = TRUE
-!endif
 !if $(NETWORK_ENABLE) == TRUE
   DEFINE NETWORK_IP4_ENABLE             = TRUE
   DEFINE NETWORK_SNP_ENABLE             = TRUE
@@ -125,13 +193,27 @@
 !ifndef BOARD_FDF_DXE_EARLY
   DEFINE BOARD_FDF_DXE_EARLY        = Platform/CIX/Sky1/Sky1BoardNone.fdf.inc
 !endif
-!ifndef BOARD_DTB_UPDATE_DXE
-  DEFINE BOARD_DTB_UPDATE_DXE       = TRUE
+!ifndef BOARD_PLATFORM_CONFIG_PARAMS_HOOK_LIB
+  DEFINE BOARD_PLATFORM_CONFIG_PARAMS_HOOK_LIB = Platform/CIX/Sky1/Library/PlatformConfigParamsHookLib/PlatformConfigParamsHookLib.inf
 !endif
-!ifndef BOARD_SETUP_MANAGER_DXE
-  # TRUE: the board brings its own setup manager (needs the setup variable
-  # driver in the APRIORI list even without TOKEN_SETUP_SUPPORT)
-  DEFINE BOARD_SETUP_MANAGER_DXE    = FALSE
+!ifndef BOARD_RTC_LIB
+  DEFINE BOARD_RTC_LIB              = Platform/CIX/Sky1/Library/Ra8900ceRealTimeClockLib/Ra8900ceRealTimeClockLib.inf
+!endif
+!ifndef BOARD_LOGO_DXE
+  DEFINE BOARD_LOGO_DXE             = Platform/CIX/Sky1/Drivers/Logo/LogoDxe.inf
+!endif
+!ifndef BOARD_ACPI_CONFIG_DIR
+  # LinuxAcpiConfig.h of the board (LINUX_ACPI_CONFIG_OVERRIDE)
+  DEFINE BOARD_ACPI_CONFIG_DIR      = $(BOARD_DIR)/ACPI
+!endif
+!ifndef BOARD_FD_SIZE
+  # BL33 FD size and its number of 4 KiB blocks; must fit the bootloader3
+  # region of the flash layout
+  DEFINE BOARD_FD_SIZE              = 0x001f0000
+  DEFINE BOARD_FD_BLOCKS            = 0x1f0
+!endif
+!ifndef SPI_TPM_ENABLE
+  DEFINE SPI_TPM_ENABLE             = FALSE
 !endif
 
 !include Platform/CIX/Sky1/Sky1Common.dsc.inc
@@ -150,13 +232,16 @@
 
   PinMuxTableLib|$(BOARD_PINMUX_LIB)
   GpioTableLib|$(BOARD_GPIO_LIB)
-  PlatformConfigParamsHookLib|Platform/CIX/Sky1/Library/PlatformConfigParamsHookLib/PlatformConfigParamsHookLib.inf
+  PlatformConfigParamsHookLib|$(BOARD_PLATFORM_CONFIG_PARAMS_HOOK_LIB)
   ConfigParamsHookLib|$(BOARD_CONFIG_PARAMS_HOOK_LIB)
   PlatformEnvHookLib|$(BOARD_ENV_HOOK_LIB)
-  RealTimeClockLib|Platform/CIX/Sky1/Library/Ra8900ceRealTimeClockLib/Ra8900ceRealTimeClockLib.inf
+  RealTimeClockLib|$(BOARD_RTC_LIB)
 
   PlatformBootHookLib|$(BOARD_BOOT_HOOK_LIB)
   PlatformBootManagerLib|$(BOARD_BOOT_MANAGER_LIB)
+  # Firmware Performance Data Table (FPDT) through the status code router
+  PerformanceLib|MdePkg/Library/BasePerformanceLibNull/BasePerformanceLibNull.inf
+  ReportStatusCodeLib|MdeModulePkg/Library/DxeReportStatusCodeLib/DxeReportStatusCodeLib.inf
 
   TrngLib|Silicon/CIX/Sky1/Library/TrngLib/TrngLib.inf
   RngLib|Silicon/CIX/Sky1/Library/RngLib/RngLib.inf
@@ -207,11 +292,59 @@
 !endif
   Platform/CIX/Sky1/Drivers/DtbUpdateDxeSi/DtbUpdateDxe.inf
 !if $(ACPI_ENABLE) == TRUE
-  $(BOARD_ACPI_TABLES)
+  $(BOARD_ACPI_TABLES) {
+    <BuildOptions>
+      # generated ACPI includes (e.g. Iomux.asl from a PREBUILD step)
+      *_*_*_ASLCC_FLAGS = -I$(WORKSPACE)/$(OUTPUT_DIRECTORY)
+  }
   $(BOARD_ACPI_PLATFORM_DXE)
 !endif
 !if $(SMBIOS_ENABLE) == TRUE
   $(BOARD_SMBIOS)
+!endif
+
+  $(BOARD_LOGO_DXE)
+  Silicon/CIX/Sky1/Drivers/GenericWatchdogDxe/GlobalWatchdogDxe.inf
+  Platform/CIX/Sky1/Drivers/RealtekLan/RealtekLanDxe.inf
+
+  #
+  # Firmware Performance Data Table (FPDT)
+  #
+  MdeModulePkg/Universal/ReportStatusCodeRouter/RuntimeDxe/ReportStatusCodeRouterRuntimeDxe.inf
+  MdeModulePkg/Universal/Acpi/FirmwarePerformanceDataTableDxe/FirmwarePerformanceDxe.inf {
+    <LibraryClasses>
+      LockBoxLib|MdeModulePkg/Library/LockBoxNullLib/LockBoxNullLib.inf
+  }
+  MdeModulePkg/Universal/Disk/RamDiskDxe/RamDiskDxe.inf
+
+!if $(DEBUG_ON_UART3) == TRUE
+  MdeModulePkg/Universal/SerialDxe/SerialDxe.inf {
+    <PcdsFixedAtBuild>
+      gEfiMdeModulePkgTokenSpaceGuid.PcdSerialRegisterBase|0x040D0000
+  }
+!endif
+
+  #
+  # Discrete TPM 2.0 on an SPI bus (Tpm2DeviceLibCdnsSpi): the board sets
+  # SPI_TPM_ENABLE and gCixPlatformTokenSpaceGuid.PcdDTPMSpiBus /
+  # PcdDTPMSpiChipSelect.  Without a TPM answering, both drivers stay idle.
+  #
+!if $(SPI_TPM_ENABLE) == TRUE
+  SecurityPkg/Tcg/Tcg2Dxe/Tcg2Dxe.inf {
+    <LibraryClasses>
+      Tpm2DeviceLib|Platform/CIX/Sky1/Library/Tpm2DeviceLibCdnsSpi/Tpm2DeviceLibCdnsSpi.inf
+      Tpm2CommandLib|SecurityPkg/Library/Tpm2CommandLib/Tpm2CommandLib.inf
+      HashLib|SecurityPkg/Library/HashLibBaseCryptoRouter/HashLibBaseCryptoRouterDxe.inf
+      NULL|SecurityPkg/Library/HashInstanceLibSha1/HashInstanceLibSha1.inf
+      NULL|SecurityPkg/Library/HashInstanceLibSha256/HashInstanceLibSha256.inf
+      NULL|SecurityPkg/Library/HashInstanceLibSha384/HashInstanceLibSha384.inf
+  }
+  Platform/CIX/Sky1/Drivers/SpiTpmAcpiDxe/SpiTpmAcpiDxe.inf {
+    <LibraryClasses>
+      Tpm2DeviceLib|SecurityPkg/Library/Tpm2DeviceLibTcg2/Tpm2DeviceLibTcg2.inf
+      Tpm2CommandLib|SecurityPkg/Library/Tpm2CommandLib/Tpm2CommandLib.inf
+      TpmPlatformHierarchyLib|SecurityPkg/Library/PeiDxeTpmPlatformHierarchyLib/PeiDxeTpmPlatformHierarchyLib.inf
+  }
 !endif
 
 ###################################################################################################
@@ -296,6 +429,14 @@
   GCC:*_*_*_CC_FLAGS              = -DSTMM_SUPPORT
 !endif
 
+# Setup shows only what the board has (patch 0014 in edk2-platforms)
+!if $(I2C_EC_ENABLE) == FALSE
+  GCC:*_*_*_VFRPP_FLAGS           = -DBOARD_NO_EC
+!endif
+!if $(SOC_GMAC_ENABLE) == FALSE
+  GCC:*_*_*_VFRPP_FLAGS           = -DBOARD_NO_GMAC
+!endif
+
 !ifdef FW_CONFIG_UPDATE_SUPPORT
 !if $(FW_CONFIG_UPDATE_SUPPORT) == TRUE
   GCC:*_*_*_VFRPP_FLAGS           = -DFW_CONFIG_UPDATE_SUPPORT=1
@@ -303,8 +444,8 @@
 !endif
 
 !if $(LINUX_ACPI_CONFIG_OVERRIDE) == TRUE
-  # Board DSDT configuration ($(BOARD_DIR)/ACPI/LinuxAcpiConfig.h)
-  GCC:*_*_*_ASLPP_FLAGS           = -DLINUX_ACPI_CONFIG_OVERRIDE -I$(WORKSPACE)/edk2-project/$(BOARD_DIR)/ACPI
+  # Board DSDT configuration ($(BOARD_ACPI_CONFIG_DIR)/LinuxAcpiConfig.h)
+  GCC:*_*_*_ASLPP_FLAGS           = -DLINUX_ACPI_CONFIG_OVERRIDE -I$(WORKSPACE)/edk2-project/$(BOARD_ACPI_CONFIG_DIR)
 !endif
 
 !if $(USERDATA_RESIZE) == enable
@@ -402,6 +543,7 @@
 
   gArmTokenSpaceGuid.PcdSystemMemorySize|0x400000000
 
+  # Network stack built in, off until "Network Stack" is enabled in setup
   gEfiNetworkPkgTokenSpaceGuid.PcdNetworkStackSupport|FALSE
   gEfiNetworkPkgTokenSpaceGuid.PcdIPv4PXESupport|TRUE
   gEfiNetworkPkgTokenSpaceGuid.PcdIPv6PXESupport|TRUE
@@ -440,6 +582,19 @@
   gCixPlatformTokenSpaceGuid.PcdRegisterFastBootSupport|TRUE
 
   gEfiMdeModulePkgTokenSpaceGuid.PcdMaxSizeNonPopulateCapsule|0x1700000
+
+  # SPCR: the console UART (UART2)
+  gArmPlatformTokenSpaceGuid.PcdSerialDbgRegisterBase|0x040D0000
+  gArmPlatformTokenSpaceGuid.PcdSerialDbgInterrupt|330
+  gCixPlatformTokenSpaceGuid.PcdAcpiSpcrEnable|TRUE
+!if $(DEBUG_ON_UART3) == TRUE
+  gEfiMdeModulePkgTokenSpaceGuid.PcdSerialRegisterBase|0x040E0000
+!endif
+
+  # Firmware Performance Data Table (FPDT)
+  gEfiMdePkgTokenSpaceGuid.PcdPerformanceLibraryPropertyMask|1
+  gEfiMdePkgTokenSpaceGuid.PcdReportStatusCodePropertyMask|0x07
+  gEfiMdeModulePkgTokenSpaceGuid.PcdExtFpdtBootRecordPadSize|0x300000
 
 [PcdsDynamicDefault.common]
 

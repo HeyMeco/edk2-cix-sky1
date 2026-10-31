@@ -48,55 +48,82 @@ own default is v3.1), fans on the boards where CSU_PM runs them.
 
 ## UEFI
 
-### Shared DSC/FDF
-
+All five boards build from one shared DSC/FDF,
 [Sky1Board.dsc.inc](../edk2-project/Platform/CIX/Sky1/Sky1Board.dsc.inc) and
-[Sky1Board.fdf](../edk2-project/Platform/CIX/Sky1/Sky1Board.fdf) hold everything
-the boards share (CIX 2026Q3 Merak plus our patches). A board DSC gives its
-`[Defines]` header, the defines that describe it (`BOARD_DIR`,
-`BOARD_DTB_NAME`, `PCIE_RP0_X4_SLOT`, `BOARD_*` module macros, feature
-switches) and, after the `!include`, its own PCDs and components.
+[Sky1Board.fdf](../edk2-project/Platform/CIX/Sky1/Sky1Board.fdf) (CIX 2026Q3
+Merak plus the patch queue). The shared body sets every feature; a board DSC
+only describes hardware ([architecture](architecture.md#shared-board-body)).
 
-| Board | On the shared body |
+### Features (the same on every board)
+
+| Feature | Notes |
 |---|---|
-| Orange Pi 6 | yes; FD byte-identical to before |
-| Orange Pi 6 Plus | yes; FD byte-identical to before |
-| MS-R1 | yes; FD byte-identical to before (its own setup manager, hooks, ACPI driver and logo still board modules) |
-| Orion O6, O6N | no: built on Radxa's copies of CIX's `Sky1Define`/`Sky1Common` (an older CIX release, about 1,270 lines apart) |
+| Setup | the CIX setup interface (`SetupManagerDxe`), with the PCIe 64-bit window and ASPM options; items for hardware a board lacks are hidden (EC: version, fan mode, light sensor, device power; GMAC page) |
+| ACPI or DT boot | chosen in setup (*System Table*); DT boot loads `BOARD_DTB_NAME` from disk |
+| Network | stack, PXE and HTTP boot built in, **off by default** (setup: *Platform → Network Stack*); Realtek PCIe (RTL8125/8126/8136/8161/8168) and USB UNDI drivers load only when it is on |
+| Secure Boot | defaults are Microsoft's PK/KEK/db |
+| Configuration updates | memory and SE configuration from setup (CIX drivers); PM configuration off |
+| Watchdog | `GlobalWatchdogDxe`, boot watchdog 90 s (before this, only MS-R1 built it) |
+| Tables | FPDT (boot performance), SPCR on the UART2 console |
+| Other | x86 option-ROM emulator (graphics cards), AMD GOP, I2C HID, RAM disk, boot logo (per board) |
+| Capsule update | **none**: update by flashing `cix_flash_all.bin` (or the OTA image) |
 
-### Feature differences today
+### SPI TPM
 
-| Feature | O6 | O6N | MS-R1 | OPi 6 | OPi 6 Plus | Target |
-|---|---|---|---|---|---|---|
-| Setup UI | Radxa `PlatformConfigDxe` | Radxa | Minisforum fork of CIX `SetupManagerDxe` | CIX `SetupManagerDxe` | CIX | CIX `SetupManagerDxe` (carries the PCIe window and ASPM patches) with the Radxa and Minisforum additions merged in |
-| Capsule update (`.cap`, ESRT) | no | no | yes | yes | yes | all |
-| Network stack, PXE/HTTP boot | yes | yes | no | yes | yes | all |
-| Realtek LAN UEFI driver | RTL8126 (Radxa) | RTL8126 | CIX Realtek | CIX Realtek | CIX Realtek | all drivers on all boards (cards can be added over PCIe) |
-| Secure Boot defaults | CIX test keys | CIX | Microsoft | CIX | CIX | Microsoft keys everywhere |
-| SPI discrete TPM | no | no | yes | no | no | built in everywhere; the driver must tolerate an empty header (to verify) |
-| AMD GOP, I2C HID | yes | yes | no | yes | yes | all |
-| Boot logo | no | no | Minisforum | Orange Pi | Orange Pi | per board (branding) |
-| Firmware/memory/PM config update from setup | yes (Radxa) | yes | SE config only | SE config only | SE config only | all |
-| System information page | Radxa `SystemInfoDxe` | Radxa | — | — | — | all |
-| DT or ACPI boot selection (`DtPlatformDxe`) | yes | yes | no | DTB update only | DTB update only | all, ACPI default |
-| Boot performance tables (FPDT), SPCR | yes | yes | SPCR | — | — | all |
-| Global watchdog | yes | yes | no | yes | yes | all |
+The discrete TPM support is shared but only MS-R1 turns it on. A board with a
+TPM on one of the SoC SPI controllers adds to its DSC:
 
-Hardware differences that stay per board: EC (O6 and Orange Pi 6 Plus have
-one), power button wiring, PD controllers and USB-C modes, PCIe lanes/reset
-pins/x4 slot, UART and I2S enables, RTC chip (Radxa HYM8563, others RA8900CE),
-flash layout and variable store address, DTB name, ACPI board configuration.
+```
+  DEFINE SPI_TPM_ENABLE             = TRUE          # before the !include
+
+[PcdsFixedAtBuild.common]                           # after it
+  gCixPlatformTokenSpaceGuid.PcdDTPMSpiBus|0x0      # 0: SPI1 (0x04090000), 1: SPI2 (0x040A0000)
+  gCixPlatformTokenSpaceGuid.PcdDTPMSpiChipSelect|0x2   # 1: SS0, 2: SS1
+```
+
+and muxes the SPI pins in its pin table. That builds `Tcg2Dxe` with
+`Tpm2DeviceLibCdnsSpi` (measured boot, Secure Boot page) and `SpiTpmAcpiDxe`
+(the CRB TPM in ACPI for the OS). Without a TPM answering, both stay idle.
+
+### What still differs
+
+Hardware, as intended: pin and GPIO tables, PCIe lanes/reset pins/x4 slot,
+USB and USB-C ports, PD controllers (O6N: CS32G051 with its own PD driver),
+EC (O6, Orange Pi 6 Plus) and power button, RTC chip (HYM8563 on the Orions,
+RA8900CE elsewhere), UART/I2S/DP enables and priorities, flash layout
+(variable store, BL33 size: 0x220000 on the Orions, 0x1F0000 elsewhere), ACPI
+tables and `LinuxAcpiConfig.h`, SMBIOS strings, logo, DTB name.
+
+Not yet merged:
+
+* MS-R1 keeps Minisforum's `PlatformBootManagerLib`, `PlatformEnvHookLib`,
+  `PlatformBootHookLib`, `ConfigParamsHookLib`, reset library and ACPI
+  platform driver; the Orions keep Radxa's ACPI platform driver. These are
+  three-way merges of CIX code with board changes; folding the generic parts
+  back into the shared modules is the next step.
+* Orion O6/O6N power on when AC returns (`PcdStateAfterG3` 1, Radxa's
+  default); the other boards keep CIX's default.
+* MS-R1 no longer names its memory part in setup (Minisforum's setup copy read
+  it from GPIO 82–85); O6N's UFS power option has no setup entry (Auto, from
+  `PcdUFSPowerMode`).
+
+### Changes for users of the previous images
+
+* Orion O6/O6N: setup is the CIX interface instead of Radxa's; DT boot needs
+  `sky1-orion-o6.dtb` / `sky1-orion-o6n.dtb` on the ESP (the embedded DTB and
+  Radxa's ACPI/DT switch are gone); firmware debug output goes to UART2
+  (Radxa's builds used UART3; `DEFINE DEBUG_ON_UART3 = TRUE` in the board
+  DSC restores that).
+* MS-R1, Orange Pi 6, Orange Pi 6 Plus: no capsule updates.
+* Orange Pi, Orion: "Reset Secure Boot keys" installs Microsoft's keys.
+* MS-R1: network stack available (off by default).
+
+All of this is built and checked statically; none of it is boot-tested yet.
 
 ### Order of work
 
-1. Orion O6/O6N onto the shared body, porting Radxa's features (system
-   information, config update, DT/ACPI selection, FPDT, SPCR, RTL8126) into it
-   as shared options instead of keeping Radxa's older CIX copies.
-2. One setup UI: merge MS-R1's `SetupManagerDxe` fork and the Radxa pages into
-   the CIX one; drop the board copies.
-3. Flip the feature switches above to the target values in the shared body,
-   one feature per commit, and remove them from the board DSCs.
-4. Boot-test each board with `--boot-firmware cix`, then make it the default.
-
-Each step is checked by building every board; steps 1–2 change the O6/O6N and
-MS-R1 images, so they need a boot test on those boards.
+1. Boot-test the shared firmware on each board (vendor boot firmware first,
+   then `--boot-firmware cix`).
+2. Fold the remaining MS-R1 and Radxa board-module copies of CIX code back
+   into the shared modules.
+3. Make `--boot-firmware cix` the default per board once it boots.

@@ -18,7 +18,7 @@
 #include <Library/CixPostCodeLib.h>
 #include <Guid/NetworkStackSetup.h>
 #include <PlatformSetupVar.h>
-#include "../../../..//Platforms/CIX/Sky1/Include/RadxaSetupVar.h"
+#include <RadxaSetupVar.h>
 
 // {3F7B73C7-FB70-4e91-86E7-34EAD76AC74D}
 EFI_GUID  gEfiFarmEnableFlagGuid = {
@@ -347,8 +347,11 @@ SetUFSPower (
                   &RadxaSetupVar
                   );
   if (EFI_ERROR (Status)) {
-    DEBUG ((DEBUG_ERROR, "%a: EfiGetVariable failed for gRadxaSetupVariableGuid - %r\n", __FUNCTION__, Status));
-    return;
+    //
+    // The shared CIX setup interface has no UFS option and nothing writes
+    // RadxaSetupVar any more: use the board default (Auto unless changed).
+    //
+    RadxaSetupVar.UFSPowerMode = FixedPcdGet8 (PcdUFSPowerMode);
   }
   DEBUG ((DEBUG_INFO, "%a: EfiGetVariable Success for gRadxaSetupVariableGuid - %r\n", __FUNCTION__, Status));
 

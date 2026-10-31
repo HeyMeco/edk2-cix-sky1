@@ -26,16 +26,50 @@ with a sparse checkout of `edk2-platforms` (`!Platform/Radxa`) so that every
 
 ## Board packages
 
+### Shared board body
+
+Every board DSC includes
+[Sky1Board.dsc.inc](../edk2-project/Platform/CIX/Sky1/Sky1Board.dsc.inc) and
+uses [Sky1Board.fdf](../edk2-project/Platform/CIX/Sky1/Sky1Board.fdf) as its
+`FLASH_DEFINITION`. They are CIX 2026Q3 `Merak.dsc`/`.fdf` with the board
+modules replaced by macros, and they set every feature (the "Shared
+features" block); a board DSC only describes its hardware:
+
+| Board DSC gives | Examples |
+|---|---|
+| `BOARD_DIR`, `BOARD_DTB_NAME`, `BOARD_FD_SIZE`/`BOARD_FD_BLOCKS` | package directory, DT file name, BL33 size for the flash layout |
+| board modules (`BOARD_*` macros) | pin/GPIO tables, platform and config-parameter hooks, RTC, EC and reset libraries, ACPI tables and platform driver, SMBIOS, logo |
+| hardware switches | `I2C_EC_ENABLE`, `POWER_BUTTON_ENABLE`, `PLATFORM_PD_ENABLE`, `SOC_GMAC_ENABLE`, `SPI_TPM_ENABLE`, `PCIE_RP0_X4_SLOT`, `SPI_VARIABLE_*` |
+| PCDs after the `!include` | PCIe lanes and reset pins, I2C buses, USB/USB-C ports, PD wiring, UART/I2S enables, DP priorities |
+
+`Sky1Define.dsc.inc` already defines most switches, so the shared body cannot
+give them `!ifndef` defaults: hardware switches are set by every board DSC,
+features unconditionally by the shared body after the board's defines.
+The CIX setup interface hides what a board lacks from its hardware switches
+(patch 0014: no EC, no GMAC). Board-only drivers go into the FV through
+`BOARD_FDF_DXE_EARLY`/`BOARD_FDF_DXE` (e.g. the O6N's PD driver).
+What is shared and what differs per board: [parity](parity.md).
+
 ### Radxa Orion O6 / O6N
 
-`edk2-project/Platform/Radxa` is a snapshot of `Platform/Radxa` from
-`radxa/edk2-platforms` at `14cf7bdc` (`cix_p1_dev_2026q2`), which builds
-against the CIX 2026Q3 shared code unchanged. Local changes (all listed in
-`manifests/imports.json`):
+`edk2-project/Platform/Radxa` started as a snapshot of `Platform/Radxa` from
+`radxa/edk2-platforms` at `14cf7bdc` (`cix_p1_dev_2026q2`); the differences
+are listed in `manifests/imports.json`. The boards now build on the shared
+body; what is left of the Radxa package are board modules (O6/O6N hooks,
+ACPI tables and platform driver, SMBIOS, HYM8563 RTC, CS32G051 EC/PD, reset
+library, logo). Radxa's own layer over CIX (`Platforms/CIX/Sky1`,
+`RadxaCommon.dsc.inc`) and its setup UI, system-information page,
+configuration-update drivers, FMP capsule and `DtPlatformDxe` are gone: the
+CIX setup interface and drivers replace them, and DT boot reads the DTB
+`sky1-orion-o6.dtb` / `sky1-orion-o6n.dtb` from disk like every other board
+instead of an embedded copy. The newer Realtek UNDI driver Radxa shipped
+(RTL8126) is used on every board (`Platform/CIX/Sky1/Drivers/RealtekUndi`).
+The O6N UFS power mode falls back to `PcdUFSPowerMode` (Auto) now that the
+Radxa setup variable no longer exists.
 
-* DSC include path for `LinuxAcpiConfig.h` (Radxa used `$(WORKSPACE)/..`)
+Other local changes:
+
 * flash layouts copied from `radxa/edk2-non-osi` `4e99786e` into the packages
-* `RadxaSetupVariableInitDxe` stack overrun fix
 * `pm_config` honours `SOURCE_DATE_EPOCH`
 * PCIe setup defaults: O6N Port0 width x4, O6/O6N per-port ASPM L1 ([PCIe setup menu](#pcie-setup-menu-patch-0012))
 
@@ -52,16 +86,16 @@ Minisforum's board lives on a tree that branched from tianocore in 2022 and
 carries its own copies of several CIX drivers. The package was rebased onto
 CIX 2026Q3 rather than copied:
 
-* `MGP1WSB.dsc`/`.fdf` regenerated as CIX 2026Q3 `Merak.dsc`/`.fdf` plus the
-  Minisforum delta (three-way merge of Minisforum-Merak → MGP1WSB onto Q3
-  Merak), keeping MS-R1 choices: no EC, no GMAC, no EC power button,
-  `SPI_VARIABLE_BASE` `0x380000`, HDA enabled, I2S 5/6/8 only.
-* `PlatformSetupVariableInitDxe` (identical to Minisforum's shared copy) is
-  replaced by the CIX 2026Q3 driver.
-* `SetupManagerDxe`, `PlatformBootManagerLib`, `PlatformEnvHookLib`: three-way
-  merged; the PCIe menu follows Q3's per-port layout, with Minisforum's ASPM
-  selection; hardware info shows the memory frequency and PMIC version from
-  Q3 and the MS-R1 memory-chip table.
+* `MGP1WSB.dsc` builds on the shared body; its hardware: no EC, no GMAC, no
+  EC power button, `SPI_VARIABLE_BASE` `0x380000`, HDA enabled, I2S 5/6/8
+  only, discrete TPM on SPI1 chip select 1.
+* Setup is the shared CIX interface. Minisforum's copy of `SetupManagerDxe`
+  (it hid the EC, PD-version and GMAC items and named the memory part from
+  GPIO 82–85) is gone; the EC and GMAC items are hidden by patch 0014, the
+  memory part name is not shown.
+* `PlatformBootManagerLib`, `PlatformEnvHookLib`, `PlatformBootHookLib`,
+  `ConfigParamsHookLib`, the reset library and the ACPI platform driver are
+  still Minisforum's (three-way merged onto Q3).
 * ACPI and SMBIOS: Minisforum's own files, plus shared PD interrupts.
 
 `se_config.bin` comes from
@@ -219,14 +253,10 @@ git checkout --detach <pinned-commit>
    certificates; the build checks that every certificate uses a 32-byte salt.
 6. Layout check: every firmware-header entry is in the layout, fits its region,
    holds the staged file, and no regions overlap.
-7. Capsules (boards with `capsule: true`): `GenerateCapsule` wraps both
-   images for the CIX system-firmware FMP (`351c9808-…`), version 5, signed
-   with the CIX test certificates from `Platform/CIX/Sky1/Bin`, as CIX
-   `GenBiosCap.sh` does. The Radxa firmware has no capsule driver.
-8. `manifest.json` (submodule SHAs, patches, tool versions, hashes, layout).
-9. `dist/<board>_<version>.bin`: `cix_flash_all.bin` padded with 0xFF to the
+7. `manifest.json` (submodule SHAs, patches, tool versions, hashes, layout).
+8. `dist/<board>_<version>.bin`: `cix_flash_all.bin` padded with 0xFF to the
    8 MiB flash size; the default version is `bios_version` from
-   `manifests/pins.json`. `--extras` adds a zip with the OTA image, capsules,
+   `manifests/pins.json`. `--extras` adds a zip with the OTA image,
    FD and manifest.
 
 `BUILD_DATE` and the PM configuration timestamp come from `SOURCE_DATE_EPOCH`

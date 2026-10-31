@@ -11,7 +11,7 @@ The result for each board is dist/<board>_<version>.bin: the full SPI image
 (cix_flash_all.bin) padded with 0xFF to the size of the flash part.  The
 version defaults to bios_version in manifests/pins.json (the CIX BSP release,
 e.g. 2026Q3).  Intermediate files stay in output/<board>/<TARGET>/; --extras
-also packs the OTA image, capsules, FD and manifest into dist/extras/.
+also packs the OTA image, FD and manifest into dist/extras/.
 
 Usage: build.py BOARD... | --all  [--target RELEASE|DEBUG] [--version V] [--extras]
 """
@@ -303,35 +303,6 @@ def package(cfg, fd, outdir, boot_firmware="vendor", bootloader2=None):
         (outdir / out).write_bytes(img)
 
 
-CAPSULE_GUID = "351c9808-4b53-4363-9314-d339386e5685"   # CIX system firmware FMP
-CAPSULE_FW_VERSION = 5                                  # as CIX build_and_package.sh
-
-
-def make_capsules(cfg, outdir):
-    """Wrap the SPI images in signed UEFI capsules, as CIX GenBiosCap.sh does.
-
-    Only for boards whose firmware carries the CIX capsule update driver; the
-    capsule is signed with the CIX test certificates the firmware trusts.
-    """
-    if not cfg.get("capsule"):
-        return []
-    keys = ROOT / "edk2-platforms/Platform/CIX/Sky1/Bin"
-    out = []
-    for f in ("cix_flash_all.bin", "cix_flash_ota.bin"):
-        cap = outdir / f"{f}.cap"
-        run([sys.executable, "-m", "Capsule.GenerateCapsule", "-e", "-o", str(cap),
-             "--guid", CAPSULE_GUID, "--hardware-instance", "0", "--monotonic-count", "1",
-             "--fw-version", str(CAPSULE_FW_VERSION), "--lsv", "0",
-             "--signer-private-cert", str(keys / "NewCert003.pem"),
-             "--other-public-cert", str(keys / "NewSub.pub.pem"),
-             "--trusted-public-cert", str(keys / "ntroot.pub.pem"),
-             "--update-image-index", "1", str(outdir / f)],
-            cwd=ROOT / "edk2/BaseTools/Source/Python", capture=True)
-        out.append(cap.name)
-    log(f"  capsules: {', '.join(out)}")
-    return out
-
-
 def check_layout(cfg, outdir):
     """Validate the packaged image against its flash configuration."""
     layout = json.loads((outdir / "pr/spi_flash_config_all.json").read_text())
@@ -391,10 +362,10 @@ def check_nv_store(cfg, layout):
     die(f"{cfg['board']}: variable store {start:#x}-{end:#x} is not inside a reserved region of the flash layout")
 
 
-def write_manifest(cfg, outdir, target, version, date, layout, capsules=(), open_info=None,
+def write_manifest(cfg, outdir, target, version, date, layout, open_info=None,
                    boot_firmware="vendor"):
     files = {}
-    for f in ("cix_flash_all.bin", "cix_flash_ota.bin", "SKY1_BL33_UEFI.fd", *capsules):
+    for f in ("cix_flash_all.bin", "cix_flash_ota.bin", "SKY1_BL33_UEFI.fd"):
         p = outdir / f
         files[f] = {"size": p.stat().st_size, "sha256": sha256(p)}
     staged = {p.name: sha256(p) for p in sorted((outdir / "pr/Firmwares").iterdir()) if p.is_file()}
@@ -434,7 +405,6 @@ Files
   cix_flash_all.bin   complete SPI NOR image, unpadded (wipes UEFI settings)
   cix_flash_ota.bin   BL33/UEFI-only update image
   SKY1_BL33_UEFI.fd   raw UEFI firmware device (for debugging)
-  *.cap               signed UEFI capsules (boards with capsule update only)
   manifest.json       versions, hashes and flash layout of this build
   SHA256SUMS
 
@@ -492,8 +462,6 @@ def make_extras(cfg, outdir, manifest, repo):
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
         for f in ("cix_flash_all.bin", "cix_flash_ota.bin", "SKY1_BL33_UEFI.fd", "manifest.json"):
             z.write(outdir / f, f"{stem}/{f}")
-        for f in sorted(outdir.glob("*.cap")):
-            z.write(f, f"{stem}/{f.name}")
         z.writestr(f"{stem}/SHA256SUMS", sums)
         z.writestr(f"{stem}/README.txt", readme)
     log(f"{cfg['board']}: {zpath.relative_to(ROOT)}")
@@ -512,7 +480,7 @@ def main():
                     help="vendor firmware image, passed to fetch-blobs.py")
     ap.add_argument("--skip-prepare", action="store_true")
     ap.add_argument("--extras", action="store_true",
-                    help="also pack OTA image, capsules, FD and manifest into dist/extras/")
+                    help="also pack OTA image, FD and manifest into dist/extras/")
     ap.add_argument("--boot-firmware", choices=["vendor", "cix"],
                     help="BL1/BL2/bootloader2 source (default: boot_firmware in boards/<board>.yaml); "
                          "cix: CIX 2026Q3 for the board's signing chain")
@@ -560,8 +528,7 @@ def main():
             bl2, open_info = trusted.build_bootloader2(cfg, a.target, outdir / "open", a.jobs, ref)
         package(cfg, fd, outdir, boot_fw, bl2)
         layout = check_layout(cfg, outdir)
-        capsules = make_capsules(cfg, outdir)
-        manifest = write_manifest(cfg, outdir, a.target, version, date, layout, capsules, open_info, boot_fw)
+        manifest = write_manifest(cfg, outdir, a.target, version, date, layout, open_info, boot_fw)
         log(f"{n}: cix_flash_all.bin {manifest['outputs']['cix_flash_all.bin']['sha256']}")
         write_release_binary(cfg, outdir, manifest)
         if a.extras:

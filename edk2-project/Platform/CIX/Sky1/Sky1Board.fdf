@@ -2,7 +2,8 @@
 #  Flash description shared by the CIX Sky1 boards (FLASH_DEFINITION of each
 #  board DSC).  The board modules come from the BOARD_* macros of the DSC
 #  (see Sky1Board.dsc.inc); BOARD_FDF_DXE_EARLY and BOARD_FDF_DXE list
-#  board-only DXE drivers before and after the shared ones.
+#  board-only DXE drivers before and after the shared ones; BOARD_FD_SIZE
+#  must fit the bootloader3 region of the board's flash layout.
 #
 #  Copyright 2024 Cix Technology Group Co., Ltd. All Rights Reserved.
 #  Copyright (c) 2011 - 2019, ARM Limited. All rights reserved.
@@ -30,11 +31,11 @@
 
 [FD.SKY1_BL33_UEFI]
 BaseAddress   = 0x84400000|gArmTokenSpaceGuid.PcdFdBaseAddress
-Size          = 0x001f0000|gArmTokenSpaceGuid.PcdFdSize
+Size          = $(BOARD_FD_SIZE)|gArmTokenSpaceGuid.PcdFdSize
 ErasePolarity = 1
 
 BlockSize     = 0x00001000
-NumBlocks     = 0x1f0
+NumBlocks     = $(BOARD_FD_BLOCKS)            # BOARD_FD_SIZE / BlockSize
 
 ################################################################################
 #
@@ -52,9 +53,9 @@ NumBlocks     = 0x1f0
 #
 ################################################################################
 #
-# UEFI image size 0x1f0000
+# UEFI image size BOARD_FD_SIZE
 #
-0x00000000|0x001f0000
+0x00000000|$(BOARD_FD_SIZE)
 gArmTokenSpaceGuid.PcdFvBaseAddress|gArmTokenSpaceGuid.PcdFvSize
 FV = FVMAIN_COMPACT
 
@@ -134,7 +135,7 @@ READ_LOCK_STATUS   = TRUE
   INF Platform/CIX/Sky1/Drivers/PlatformConfigParamsManageDxe/PlatformConfigParamsManageDxe.inf
   INF Silicon/CIX/Sky1/Drivers/ConfigParamsManageDxe/ConfigParamsManageDxe.inf
 !endif
-!if $(TOKEN_SETUP_SUPPORT) == TRUE || $(BOARD_SETUP_MANAGER_DXE) == TRUE
+!if $(TOKEN_SETUP_SUPPORT) == TRUE
   INF Platform/CIX/Sky1/Drivers/PlatformSetupVariableInitDxe/PlatformSetupVariableInitDxe.inf
 !endif
   INF Platform/CIX/Sky1/Drivers/PlatformDxe/PlatformDxe.inf
@@ -152,9 +153,7 @@ READ_LOCK_STATUS   = TRUE
 # inf file list has be move to Sky1Common.fdf.inc
 # please put xxx.inf to Sky1Common.fdf.inc
 !include Platform/CIX/Sky1/Sky1Common.fdf.inc
-!if $(BOARD_DTB_UPDATE_DXE) == TRUE
   INF Platform/CIX/Sky1/Drivers/DtbUpdateDxeSi/DtbUpdateDxe.inf
-!endif
 
 !if $(ACPI_ENABLE) == TRUE
   INF RuleOverride = ACPITABLE2 $(BOARD_ACPI_TABLES)
@@ -174,6 +173,36 @@ READ_LOCK_STATUS   = TRUE
 !if $(SMBIOS_ENABLE) == TRUE
   INF $(BOARD_SMBIOS)
 !endif
+
+  INF $(BOARD_LOGO_DXE)
+  INF Silicon/CIX/Sky1/Drivers/GenericWatchdogDxe/GlobalWatchdogDxe.inf
+!if $(SPI_TPM_ENABLE) == TRUE
+  INF SecurityPkg/Tcg/Tcg2Dxe/Tcg2Dxe.inf
+  INF Platform/CIX/Sky1/Drivers/SpiTpmAcpiDxe/SpiTpmAcpiDxe.inf
+!endif
+
+  # Firmware Performance Data Table (FPDT)
+  INF MdeModulePkg/Universal/ReportStatusCodeRouter/RuntimeDxe/ReportStatusCodeRouterRuntimeDxe.inf
+  INF MdeModulePkg/Universal/Acpi/FirmwarePerformanceDataTableDxe/FirmwarePerformanceDxe.inf
+  INF MdeModulePkg/Universal/Disk/RamDiskDxe/RamDiskDxe.inf
+  # x86 option ROMs (graphics cards) through the emulator
+  INF Emulator/X86EmulatorDxe/X86EmulatorDxe.inf
+
+  # Realtek LAN (PCIe and USB) UNDI drivers.  RealtekLanDxe lets them load
+  # only when the setup option Network Stack is enabled (default: off).  The
+  # PCIe driver is the newer Realtek build that also covers the RTL8126
+  # (Drivers/RealtekUndi/README.md).
+  INF Platform/CIX/Sky1/Drivers/RealtekLan/RealtekLanDxe.inf
+  FILE DRIVER = 785277C5-20B9-4940-8D9F-341AEAAB4DEF {
+    SECTION PE32 = Platform/CIX/Sky1/Drivers/RealtekUndi/RtkUndiDxe.efi
+    SECTION UI = "Realtek"
+    SECTION DXE_DEPEX = Platform/CIX/Sky1/Drivers/RealtekLan/RealtekLan.depex
+  }
+  FILE DRIVER = 2367AC97-E2F5-470C-8DE6-C481F2640928 {
+    SECTION PE32 = Platform/CIX/Sky1/Drivers/RealtekLan/RtkUsbUndiDxe.efi
+    SECTION UI = "Realtek-USB-LAN"
+    SECTION DXE_DEPEX = Platform/CIX/Sky1/Drivers/RealtekLan/RealtekLan.depex
+  }
 
   # board-only DXE drivers
   !include $(BOARD_FDF_DXE)

@@ -46,114 +46,24 @@
   DEFINE BOARD_EC_LIB               = Platform/CIX/Library/EcLibNull/EcLibNull.inf   # no EC
   DEFINE BOARD_ACPI_TABLES          = $(BOARD_DIR)/ACPI/AcpiPlatfomTables/AcpiPlatfomTables.inf
   DEFINE BOARD_ACPI_PLATFORM_DXE    = $(BOARD_DIR)/ACPI/AcpiPlatformDxe/AcpiPlatformDxe.inf
-  DEFINE BOARD_DTB_UPDATE_DXE       = FALSE
-  DEFINE BOARD_SETUP_MANAGER_DXE    = TRUE
-  DEFINE BOARD_FDF_DXE_EARLY        = $(BOARD_DIR)/BoardDxeEarly.fdf.inc
-  DEFINE BOARD_FDF_DXE              = $(BOARD_DIR)/BoardDxe.fdf.inc
+  DEFINE BOARD_LOGO_DXE             = $(BOARD_DIR)/Drivers/Logo/LogoDxe.inf
 ##################################################
-# Minisforum MS-R1: features
+# Hardware (features are shared: Sky1Board.dsc.inc)
 ##################################################
-  DEFINE DTB_UPDATE_ENABLE          = FALSE
-  DEFINE SMBIOS_ENABLE              = FALSE
-  DEFINE ACPI_ENABLE                = FALSE
-  DEFINE TOKEN_CONSOLE_PREF_SUPPORT = FALSE
-  DEFINE FW_VERSION_ENABLE          = TRUE
-  DEFINE SOC_PWR_CLK_RST_ENABLE     = TRUE
-  DEFINE WATCH_DOG_ENABLE           = FALSE
-  DEFINE NO_GIC_NO_TIMER            = FALSE
-  DEFINE SOC_I2C_ENABLE             = TRUE
-  DEFINE SOC_XSPI_ENABLE            = TRUE
-  DEFINE I2C_EC_ENABLE              = FALSE
-  DEFINE I2C_HID_ENABLE             = FALSE
-  DEFINE FW_UPDATE_ENABLE           = TRUE
-  DEFINE PCIE_HOST_ENABLE           = TRUE
-  DEFINE SOC_CDNSP_HOST_ENABLE      = TRUE
-  DEFINE PLATFORM_PD_ENABLE         = TRUE
-  DEFINE SOC_GMAC_ENABLE            = FALSE
-  DEFINE TOKEN_SETUP_SUPPORT        = TRUE
-  DEFINE NTFS_DRIVER_SUPPORT        = FALSE
-  DEFINE EXT4_DRIVER_SUPPORT        = FALSE
-  DEFINE AMD_GOP_DRIVER_SUPPORT     = FALSE
-  DEFINE TOKEN_RAM_DISK_SUPPORT     = FALSE
-  DEFINE VARIABLE_SUPPORT           = $(COMPILE_VARIABLE_TYPE)
-  DEFINE STMM_SUPPORT               = $(COMPILE_STMM_SUPPORT)
-  DEFINE REALTEK_LAN_DRIVER_SUPPORT = TRUE
-  DEFINE PM_CONFIG_UPDATE_SUPPORT   = FALSE
-  DEFINE SE_CONFIG_UPDATE_SUPPORT   = TRUE
-  DEFINE DYNAMIC_ACPI_CPU_ENABLE    = TRUE
-  DEFINE SOC_SPI_ENABLE             = TRUE
-  # DEFINE SOC_GPIO_INTR_ENABLE       = TRUE
-  DEFINE FV_SIMPLE_FILE_SUPPORT     = FALSE
-  DEFINE SOC_GOP_ENABLE             = TRUE
-  DEFINE DYNAMIC_GET_MEM_SIZE       = TRUE
-  DEFINE SECURE_BOOT_ENABLE         = TRUE
-  DEFINE DEFAULT_KEYS               = TRUE
-  DEFINE UEFI_FW_STAGE              = Beta2
-  DEFINE BOOT_LOGO_ENABLE           = FALSE
-  DEFINE GLOBAL_WATCHDOG_ENABLE     = FALSE
-  DEFINE FUNC_BOOT_PERF_ENABLE      = TRUE
-  DEFINE CAPSULE_ENABLE             = TRUE
+  DEFINE I2C_EC_ENABLE              = FALSE    # no EC
   DEFINE POWER_BUTTON_ENABLE        = FALSE
   DEFINE GPIO_POWER_BUTTON_ENABLE   = FALSE
-  DEFINE DEBUG_MODE_SUPPORT         = FALSE
-  DEFINE CIX_GPNV_ENABLE            = TRUE
-  DEFINE TOKEN_SETUP_SUPPORT        = FALSE
-  DEFINE BIOS_BACKUP_RECOVERY       = FALSE
-  DEFINE NETWORK_ENABLE             = FALSE
-
+  DEFINE PLATFORM_PD_ENABLE         = TRUE     # USB-C PD controllers (PcdPdDev*)
+  DEFINE SOC_GMAC_ENABLE            = FALSE
   DEFINE SPI_VARIABLE_BASE          = 0x00380000
   DEFINE SPI_VARIABLE_SIZE          = 0x28000
-
   DEFINE LINUX_ACPI_CONFIG_OVERRIDE = TRUE
 
-  DEFINE DTPM_SUPPORT               = FALSE
-  DEFINE FTPM_SUPPORT               = FALSE
-  # Discrete TPM 2.0 on the SPI header (ASUS TPM-SPI / NPCT750), driven by
-  # Tpm2DeviceLibCdnsSpi; independent of CIX's DTPM_SUPPORT/FTPM_SUPPORT,
-  # whose drivers are not in the public tree.
+  # Discrete TPM 2.0 header on SPI1 (ASUS TPM-SPI / NPCT750 tested); bus and
+  # chip select in PcdDTPMSpiBus / PcdDTPMSpiChipSelect below
   DEFINE SPI_TPM_ENABLE             = TRUE
-  DEFINE I2S_MC_SUPPORT             = TRUE
-  DEFINE CAPSULE_ENABLE             = TRUE
-
-  #
-  # Secure Boot defaults: Microsoft's keys (see SecureBootKeys/README.md), so
-  # "Reset Secure Boot Keys" enables Windows and shim-signed Linux.  DBX stays
-  # on the Sky1 default; Windows Update maintains it.
-  #
-  DEFINE MS_KEYS                    = Platform/CIX/Sky1/SecureBootKeys/Microsoft
-  DEFINE PK_DEFAULT_FILE            = $(MS_KEYS)/WindowsOEMDevicesPK.der
-  DEFINE KEK_DEFAULT_FILE1          = $(MS_KEYS)/MicCorKEKCA2011_2011-06-24.der
-  DEFINE KEK_DEFAULT_FILE2          = $(MS_KEYS)/MicCorKEK2kCA2023.der
-  DEFINE DB_DEFAULT_FILE1           = $(MS_KEYS)/MicWinProPCA2011_2011-10-19.der
-  DEFINE DB_DEFAULT_FILE2           = $(MS_KEYS)/WindowsUEFICA2023.der
-  DEFINE DB_DEFAULT_FILE3           = $(MS_KEYS)/MicCorUEFCA2011_2011-06-27.der
-  DEFINE DB_DEFAULT_FILE4           = $(MS_KEYS)/MicUEFICA2023.der
-  DEFINE DB_DEFAULT_FILE5           = $(MS_KEYS)/MicOptionROMUEFICA2023.der
 
 !include Platform/CIX/Sky1/Sky1Board.dsc.inc
-
-[Components.common]
-  Platform/CIX/Sky1/MGP1WSB/Drivers/Logo/LogoDxe.inf
-  Platform/CIX/Sky1/Drivers/PlatformSetupVariableInitDxe/PlatformSetupVariableInitDxe.inf
-  Platform/CIX/Sky1/MGP1WSB/Drivers/SetupManagerDxe/SetupManagerDxe.inf
-  Silicon/CIX/Sky1/Drivers/GenericWatchdogDxe/GlobalWatchdogDxe.inf
-!if $(SPI_TPM_ENABLE) == TRUE
-  SecurityPkg/Tcg/Tcg2Dxe/Tcg2Dxe.inf {
-    <LibraryClasses>
-      Tpm2DeviceLib|Platform/CIX/Sky1/Library/Tpm2DeviceLibCdnsSpi/Tpm2DeviceLibCdnsSpi.inf
-      Tpm2CommandLib|SecurityPkg/Library/Tpm2CommandLib/Tpm2CommandLib.inf
-      HashLib|SecurityPkg/Library/HashLibBaseCryptoRouter/HashLibBaseCryptoRouterDxe.inf
-      NULL|SecurityPkg/Library/HashInstanceLibSha1/HashInstanceLibSha1.inf
-      NULL|SecurityPkg/Library/HashInstanceLibSha256/HashInstanceLibSha256.inf
-      NULL|SecurityPkg/Library/HashInstanceLibSha384/HashInstanceLibSha384.inf
-  }
-  Platform/CIX/Sky1/Drivers/SpiTpmAcpiDxe/SpiTpmAcpiDxe.inf {
-    <LibraryClasses>
-      Tpm2DeviceLib|SecurityPkg/Library/Tpm2DeviceLibTcg2/Tpm2DeviceLibTcg2.inf
-      Tpm2CommandLib|SecurityPkg/Library/Tpm2CommandLib/Tpm2CommandLib.inf
-      TpmPlatformHierarchyLib|SecurityPkg/Library/PeiDxeTpmPlatformHierarchyLib/PeiDxeTpmPlatformHierarchyLib.inf
-  }
-!endif
 
 [PcdsFixedAtBuild.common]
 !if $(TARGET) == RELEASE

@@ -7,10 +7,10 @@
     "upstream": "Platform/Radxa",
     "local": "edk2-project/Platform/Radxa",
     "summary": {
-      "same": 170,
-      "removed": 1,
-      "modified": 5,
-      "added": 4
+      "same": 131,
+      "removed": 38,
+      "added": 6,
+      "modified": 7
     },
     "files": {
       "ACS/acs_waiver.json": {
@@ -39,15 +39,15 @@
       },
       "Drivers/RTL8126/AArch64/RtkUndiDxe.efi": {
         "upstream_blob": "709f7627c93e5572c1665dc18e782d8492c75f8e",
-        "status": "same"
+        "status": "removed"
       },
       "Drivers/RTL8126/License.txt": {
         "upstream_blob": "63a78a220e1a7a50bb3ab1469c1bc9ea805239ce",
-        "status": "same"
+        "status": "removed"
       },
       "Drivers/RTL8126/RtkUndiDxe.inf": {
         "upstream_blob": "bd262b8b3a2206767f1d2eb4c305a8094a5e226b",
-        "status": "same"
+        "status": "removed"
       },
       "Include/Library/Cs32g051EcLib.h": {
         "upstream_blob": "ee9952fd19030b326682d9f1e13a7c72778aefce",
@@ -60,6 +60,10 @@
       "Include/PlatformInfoTypes.h": {
         "upstream_blob": "1619cc2ff1b1b15f0d601952411f83676c89180c",
         "status": "same"
+      },
+      "Include/RadxaSetupVar.h": {
+        "upstream_blob": null,
+        "status": "added"
       },
       "Library/ArmPsciResetSystemLib/ArmPsciResetSystemLib.c": {
         "upstream_blob": "bc41d2b66ae3cc53a0a1660eae3e32b62d0c42f6",
@@ -243,7 +247,7 @@
       },
       "Orion/O6/O6.fdf": {
         "upstream_blob": "ed857c593a722c679a52e6e36a1c35f67f72b5ac",
-        "status": "same"
+        "status": "removed"
       },
       "Orion/O6/mem_config/Makefile": {
         "upstream_blob": "29fdcca85bdc5a5c47230ae4b966f173eb67b33d",
@@ -350,6 +354,10 @@
         "status": "added"
       },
       "Orion/O6/spi_flash_config_ota.json": {
+        "upstream_blob": null,
+        "status": "added"
+      },
+      "Orion/O6N/BoardDxe.fdf.inc": {
         "upstream_blob": null,
         "status": "added"
       },
@@ -479,11 +487,11 @@
       },
       "Orion/O6N/Library/PlatformEnvHookLib/PlatformEnvHookLib.c": {
         "upstream_blob": "54eb5049673b12158c42a1920b20608f7a926783",
-        "status": "same"
+        "status": "modified"
       },
       "Orion/O6N/Library/PlatformEnvHookLib/PlatformEnvHookLib.inf": {
         "upstream_blob": "e1f63db9365a1a1fd98fbfd634b6592d7af1c486",
-        "status": "same"
+        "status": "modified"
       },
       "Orion/O6N/O6N.dsc": {
         "upstream_blob": "256c492f397a7729fefac06e3e71213b932de485",
@@ -491,7 +499,7 @@
       },
       "Orion/O6N/O6N.fdf": {
         "upstream_blob": "d52612ed3291d0bce8bc473871999c056f4d8d72",
-        "status": "same"
+        "status": "removed"
       },
       "Orion/O6N/mem_config/Makefile": {
         "upstream_blob": "9e19c4387ed83293ee123fd9aa8e8e93805c7aae",
@@ -603,135 +611,135 @@
       },
       "Platforms/CIX/Sky1/Drivers/FirmwareConfigUpdateDxe/FirmwareConfigUpdateDxe.c": {
         "upstream_blob": "a7b1d127c2f53edcbccc984a69d47d4321db8133",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/FirmwareConfigUpdateDxe/FirmwareConfigUpdateDxe.h": {
         "upstream_blob": "aeedeba741ced2dc7b9fd348b4761c052d11d0e6",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/FirmwareConfigUpdateDxe/FirmwareConfigUpdateDxe.inf": {
         "upstream_blob": "4fad12b99579c5e3b96593143a0eb4d6a7f025d0",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/PlatformConfigDxe/ComplianceMenu/ComplianceConfig.hfr": {
         "upstream_blob": "d0a2ff6307dad3fa969b88508573894c7517ca2a",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/PlatformConfigDxe/ComplianceMenu/ComplianceConfig.uni": {
         "upstream_blob": "964dfe71b760cd04f4c8242cc4199e96aed82ada",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/PlatformConfigDxe/PlatformConfigDxe.c": {
         "upstream_blob": "8594b12048af9e2f9cf89cc7ce3e722c6d39b854",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/PlatformConfigDxe/PlatformConfigDxe.dec": {
         "upstream_blob": "35121c0eb05c0b5b802b02bf75fb7d8c47c29f11",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/PlatformConfigDxe/PlatformConfigDxe.h": {
         "upstream_blob": "5e50ac1924b0f24789a08ea6ce994bae813c38f4",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/PlatformConfigDxe/PlatformConfigDxe.inf": {
         "upstream_blob": "ab644651aa3611c6056dd2e5dce36eb06c3ad929",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/PlatformConfigDxe/PlatformConfigHii.h": {
         "upstream_blob": "23681701df120d91c709a37129726b6188c7c8bc",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/PlatformConfigDxe/PlatformConfigHii.uni": {
         "upstream_blob": "88b21e36807c40c76eed308a10f20cfc4d7070eb",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/PlatformConfigDxe/PlatformConfigHii.vfr": {
         "upstream_blob": "6acfe6944d8fdd2701c936e91e9fc7469b68748e",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/RadxaSetupVariableInitDxe/RadxaSetupVariableInitDxe.c": {
         "upstream_blob": "1e372aa0b96ef41f8d01472fb3fd5c7889ca1753",
-        "status": "modified"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/RadxaSetupVariableInitDxe/RadxaSetupVariableInitDxe.inf": {
         "upstream_blob": "962ab2e9996d918da57681baaa676f044e58fbf0",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/SeConfigUpdateDxe/SeConfigSetupVar.h": {
         "upstream_blob": "f05c08f4c9d7732e5f82c783c73fa505ec851976",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/SeConfigUpdateDxe/SeConfigUpdateDxe.c": {
         "upstream_blob": "1b978a8f93bfc0d0e4928b678c1bf227a84771a6",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/SeConfigUpdateDxe/SeConfigUpdateDxe.h": {
         "upstream_blob": "e691e7a524a6462a026382c5a24689df7325cd1a",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/SeConfigUpdateDxe/SeConfigUpdateDxe.inf": {
         "upstream_blob": "69e0e82442cb98419b47ce13b426508c6a5a7a7f",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/SeConfigUpdateDxe/SeConfigUpdateHii.uni": {
         "upstream_blob": "91b61aaf747965a7d029696a0f5114a1d7ebae11",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/SeConfigUpdateDxe/SeConfigUpdateHii.vfr": {
         "upstream_blob": "f81c0a7b556e2b484413fa6d8cd98ad630258daf",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/SystemInfoDxe/SystemInfoDxe.c": {
         "upstream_blob": "93786ca16ea191b6ae0a2030411cadf70fc66692",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/SystemInfoDxe/SystemInfoDxe.h": {
         "upstream_blob": "1f7c9cb5f0264b3dc0c7fb8de809469410795b02",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/SystemInfoDxe/SystemInfoDxe.inf": {
         "upstream_blob": "ef928a706307200fb71df60c0063f80abeb1032b",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/SystemInfoDxe/SystemInfoHii.h": {
         "upstream_blob": "d1ced70a757b92368a2a28979665675d0d8a9b10",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/SystemInfoDxe/SystemInfoHii.uni": {
         "upstream_blob": "ed3106601e445a3f4e28e778a0af6ffbe732de6a",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Drivers/SystemInfoDxe/SystemInfoHii.vfr": {
         "upstream_blob": "6bf46175f0cb552f3288ec9a042b4fd63bae585d",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Include/RadxaSetupVar.h": {
         "upstream_blob": "73f4be016d1c04b3afd2af3307d32d1303974643",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Sky1Common.dsc.inc": {
         "upstream_blob": "19fb191506b26535bf2eea5fc83fe7eed2b3f3ed",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Sky1Common.fdf.inc": {
         "upstream_blob": "5fc0ede7ef1664e0453823461d7a87dbd2e276f9",
-        "status": "same"
+        "status": "removed"
       },
       "Platforms/CIX/Sky1/Sky1Define.dsc.inc": {
         "upstream_blob": "94812c5c151c2d46eddf9f3194e159ec0a0340f7",
-        "status": "same"
+        "status": "removed"
       },
       "Radxa.dec": {
         "upstream_blob": "59594e7f32ce00af978b22f530752d7acdc16a2b",
-        "status": "same"
+        "status": "modified"
       },
       "RadxaCommon.dsc.inc": {
         "upstream_blob": "81b2138d8992690c6b1aa4b2a9e87268b47e1dce",
-        "status": "same"
+        "status": "removed"
       },
       "RadxaDefine.dsc.inc": {
         "upstream_blob": "cc2f20925c28335c6b39c80e92b68b09c3e33aaf",
-        "status": "same"
+        "status": "removed"
       }
     }
   },
@@ -743,10 +751,10 @@
     "upstream": "Platform/CIX/Sky1/MGP1WSB",
     "local": "edk2-project/Platform/CIX/Sky1/MGP1WSB",
     "summary": {
-      "same": 85,
-      "modified": 24,
-      "removed": 4,
-      "added": 1
+      "same": 79,
+      "modified": 8,
+      "removed": 26,
+      "added": 19
     },
     "files": {
       "ACPI/AcpiPlatfomTables/AcpiPlatfomTables.inf": {
@@ -887,87 +895,87 @@
       },
       "Drivers/SetupManagerDxe/CpuMenu/CpuConfig.hfr": {
         "upstream_blob": "66f95351c6b41a1715ea281e7529cbf17b82daa0",
-        "status": "modified"
+        "status": "removed"
       },
       "Drivers/SetupManagerDxe/CpuMenu/CpuConfig.uni": {
         "upstream_blob": "af0fe41dda0035bcf94901add6348ba8b42104d2",
-        "status": "modified"
+        "status": "removed"
       },
       "Drivers/SetupManagerDxe/GmacMenu/GmacConfig.hfr": {
         "upstream_blob": "c6e6c8c32f24dc0757a69bbee2ca82647c75aa82",
-        "status": "same"
+        "status": "removed"
       },
       "Drivers/SetupManagerDxe/GmacMenu/GmacConfig.uni": {
         "upstream_blob": "5f46c4adc8c24249331a2fc401286b39b0691b57",
-        "status": "same"
+        "status": "removed"
       },
       "Drivers/SetupManagerDxe/I2cMenu/I2cConfig.hfr": {
         "upstream_blob": "bd520ba325fdf2e1d3c10469cff25729df3c853f",
-        "status": "same"
+        "status": "removed"
       },
       "Drivers/SetupManagerDxe/I2cMenu/I2cConfig.uni": {
         "upstream_blob": "e5b585413718f590347f9ab268b28f444c404bfe",
-        "status": "same"
+        "status": "removed"
       },
       "Drivers/SetupManagerDxe/MemMenu/MemoryConfig.hfr": {
         "upstream_blob": "e04078bdf4dc1f4f26393364ee10ae4b2cab4fc8",
-        "status": "modified"
+        "status": "removed"
       },
       "Drivers/SetupManagerDxe/MemMenu/MemoryConfig.uni": {
         "upstream_blob": "36db336cec5d7f85291e8d7d187a1ec39fb7be00",
-        "status": "modified"
+        "status": "removed"
       },
       "Drivers/SetupManagerDxe/PcieMenu/PcieConfig.hfr": {
         "upstream_blob": "b5b14acdfd3e6157e8c8c4d0f1b36758f880a35b",
-        "status": "modified"
+        "status": "removed"
       },
       "Drivers/SetupManagerDxe/PcieMenu/PcieConfig.uni": {
         "upstream_blob": "c5dec22b7ce3bf56402311ec2bfada21acfd1c54",
-        "status": "modified"
+        "status": "removed"
       },
       "Drivers/SetupManagerDxe/PlatformMenu/Platform.hfr": {
         "upstream_blob": "ca4dade125896cd08df0ccfa2e06bac8a9cb660f",
-        "status": "modified"
+        "status": "removed"
       },
       "Drivers/SetupManagerDxe/PlatformMenu/Platform.uni": {
         "upstream_blob": "87bd754807bb2fac4fc5e49289a717de4f0502fd",
-        "status": "modified"
+        "status": "removed"
       },
       "Drivers/SetupManagerDxe/SetupManager.c": {
         "upstream_blob": "54fe6cae6d2314ec06640272b623bd0fd815a7f0",
-        "status": "modified"
+        "status": "removed"
       },
       "Drivers/SetupManagerDxe/SetupManager.h": {
         "upstream_blob": "b591d15063d9640f16b7027bbdf09eef270e8e40",
-        "status": "modified"
+        "status": "removed"
       },
       "Drivers/SetupManagerDxe/SetupManagerDxe.inf": {
         "upstream_blob": "8f52cded3b051040c3b00208ecd24dd90a0a7c34",
-        "status": "modified"
+        "status": "removed"
       },
       "Drivers/SetupManagerDxe/SetupManagerFormId.h": {
         "upstream_blob": "bdf88ae887d7e095fbae33899d431f002f7b7d07",
-        "status": "same"
+        "status": "removed"
       },
       "Drivers/SetupManagerDxe/SetupManagerStrings.uni": {
         "upstream_blob": "d85c5ec17f55bc2d63f2a8a95a0c14f52ab61dc4",
-        "status": "modified"
+        "status": "removed"
       },
       "Drivers/SetupManagerDxe/SetupManagerUiLib.uni": {
         "upstream_blob": "5217c30f56e280957dfd15de85af72bbd70cf951",
-        "status": "same"
+        "status": "removed"
       },
       "Drivers/SetupManagerDxe/SetupManagerVfr.Vfr": {
         "upstream_blob": "8edceef7712eac2bcb33a497cc6977d7df5498ac",
-        "status": "modified"
+        "status": "removed"
       },
       "Drivers/SetupManagerDxe/UsbMenu/UsbConfig.hfr": {
         "upstream_blob": "f20097c950870aa0c3c75c1eb74b226412f8a107",
-        "status": "modified"
+        "status": "removed"
       },
       "Drivers/SetupManagerDxe/UsbMenu/UsbConfig.uni": {
         "upstream_blob": "3fdf6cb1be21771e36683a4bfad78159da24a056",
-        "status": "modified"
+        "status": "removed"
       },
       "Firmwares/pm_fw_mg_debug.bin": {
         "upstream_blob": "c4716edd0ed776dc21e3b0104da5ecb8a17210c4",
@@ -1055,7 +1063,7 @@
       },
       "MGP1WSB.fdf": {
         "upstream_blob": "fb0062445bcfb68df041b8a64b797531126860be",
-        "status": "modified"
+        "status": "removed"
       },
       "PlatformSmbios/PlatformSmbios.c": {
         "upstream_blob": "6f6ee330c64b46a7ccda536b585074589bbd417d",
@@ -1164,6 +1172,78 @@
       "mem_config/memory_config.bin": {
         "upstream_blob": "6cb0d2e8d1749c71f82f4db18fecc286565147fc",
         "status": "same"
+      },
+      "mem_config_v2/Makefile": {
+        "upstream_blob": null,
+        "status": "added"
+      },
+      "mem_config_v2/MemConfigBinLayout.h": {
+        "upstream_blob": null,
+        "status": "added"
+      },
+      "mem_config_v2/MemConfigBinTool.c": {
+        "upstream_blob": null,
+        "status": "added"
+      },
+      "mem_config_v2/default/BoardIdGetMethod.c": {
+        "upstream_blob": null,
+        "status": "added"
+      },
+      "mem_config_v2/default/GlobalConfig.c": {
+        "upstream_blob": null,
+        "status": "added"
+      },
+      "mem_config_v2/default/MemBiosSetup.c": {
+        "upstream_blob": null,
+        "status": "added"
+      },
+      "mem_config_v2/default/MemDqSwap.c": {
+        "upstream_blob": null,
+        "status": "added"
+      },
+      "mem_config_v2/default/MemFeatures.c": {
+        "upstream_blob": null,
+        "status": "added"
+      },
+      "mem_config_v2/default/MemLpddr5BusCfg.c": {
+        "upstream_blob": null,
+        "status": "added"
+      },
+      "mem_config_v2/default/MemLpddr5BusCfg_x8.c": {
+        "upstream_blob": null,
+        "status": "added"
+      },
+      "mem_config_v2/default/MemPhyPadCfg.c": {
+        "upstream_blob": null,
+        "status": "added"
+      },
+      "mem_config_v2/default/MemPhyPadCfg_x8.c": {
+        "upstream_blob": null,
+        "status": "added"
+      },
+      "mem_config_v2/default/MemTraceLenDiff.c": {
+        "upstream_blob": null,
+        "status": "added"
+      },
+      "mem_config_v2/default/MemTrainOptimize.c": {
+        "upstream_blob": null,
+        "status": "added"
+      },
+      "mem_config_v2/default/QuickConfig.c": {
+        "upstream_blob": null,
+        "status": "added"
+      },
+      "mem_config_v2/include/BoardConfig.h": {
+        "upstream_blob": null,
+        "status": "added"
+      },
+      "mem_config_v2/include/MemConfigBinTool.h": {
+        "upstream_blob": null,
+        "status": "added"
+      },
+      "mem_config_v2/include/MemConfigurationTable.h": {
+        "upstream_blob": null,
+        "status": "added"
       },
       "pm_config/Makefile": {
         "upstream_blob": "4bd043445ac1e39127f38a930d6ec476c5c436d2",
