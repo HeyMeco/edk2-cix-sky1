@@ -531,12 +531,15 @@ def main():
                     help="build BL2, BL31 and OP-TEE from source (bootloader1 re-signed, bootloader2, "
                          "bootloader3 certificates); chain-A boards only (docs/open-firmware.md); the "
                          "image is named <board>_<version>_open.bin")
+    ap.add_argument("--vendor-se", action="store_true",
+                    help="with --open, keep CIX's SE firmware in bootloader1 instead of the one built "
+                         "from firmware/se")
     ap.add_argument("--vendor-stmm", action="store_true",
                     help="with --open, embed CIX's StandaloneMM image from the reference bootloader2 "
                          "instead of the one built from source")
     a = ap.parse_args()
-    if a.vendor_stmm and not a.open:
-        ap.error("--vendor-stmm needs --open")
+    if (a.vendor_stmm or a.vendor_se) and not a.open:
+        ap.error("--vendor-stmm and --vendor-se need --open")
 
     all_boards = boards()
     if a.list:
@@ -577,7 +580,11 @@ def main():
             stmm = None if a.vendor_stmm else stmm_build(a.target, version, commit, a.jobs, outdir / "stmm-build.log")
             bl2, open_info = trusted.build_bootloader2(cfg, a.target, outdir / "open", a.jobs, ref, stmm)
             ref_bl1 = (cix_dir if boot_fw == "cix" else ROOT / cfg["package"] / "Firmwares") / "bootloader1.img"
-            bl1, bl1_info = trusted.build_bootloader1(cfg, ref_bl1, a.target, outdir / "open", a.jobs)
+            se = None
+            if not a.vendor_se:
+                se, se_info = trusted.build_se(outdir / "open", commit)
+                open_info.update(se_info)
+            bl1, bl1_info = trusted.build_bootloader1(cfg, ref_bl1, a.target, outdir / "open", a.jobs, se)
             open_info.update(bl1_info)
             open_info["bootloader3_certificates"] = "cert_create"
             sfh, sfh_info = trusted.build_sfh(outdir / "open")
