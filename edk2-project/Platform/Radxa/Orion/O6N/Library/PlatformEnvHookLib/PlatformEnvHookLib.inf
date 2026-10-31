@@ -59,6 +59,7 @@
 
 [FixedPcd]
   gRadxaTokenSpaceGuid.PcdRtc8563I2cBus
+  gRadxaTokenSpaceGuid.PcdUFSPowerMode
   gArmTokenSpaceGuid.PcdSystemMemorySize
   gCixTokenSpaceGuid.PcdMemInfoBaseAddr
   gCixTokenSpaceGuid.PcdPcieRootPort0PeResetPin

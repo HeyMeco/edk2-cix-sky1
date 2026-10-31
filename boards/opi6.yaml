@@ -26,7 +26,6 @@ acpi_parity:
           \_SB.DP04, \_SB.PRC3, \_SB.PRC1, \_SB.SHM0, \_SB.SHM1,
           \_SB.PCI0, \_SB.PCI1, \_SB.PCI2, \_SB.PCI3, \_SB.PCI4,
           \_SB.PRC0, \_SB.PRC2, \_SB.PRC4]
-capsule: true                        # CIX signed capsule (.cap) for in-OS / ESRT updates
 trusted_key_cert: regenerate            # signed with the OEM key, as in the vendor image
 signing_chain: B                     # keys not public (fused): only BL33 can be rebuilt
 boot_firmware: vendor                # vendor BL1/BL2 (default); "cix": CIX 2026Q3 boot firmware for this chain
