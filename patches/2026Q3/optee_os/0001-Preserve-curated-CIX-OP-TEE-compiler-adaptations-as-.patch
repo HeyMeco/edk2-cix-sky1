@@ -1,0 +1,193 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Orion Unofficial <orion-unofficial@protonmail.com>
+Date: Wed, 14 Oct 2026 10:32:29 +0100
+Subject: [PATCH] Preserve curated CIX OP-TEE compiler adaptations as a
+ component
+
+Extract the eight substantive source adaptations already used by the Unofficial firmware builds. Preserve the public vendor files and modes elsewhere; do not carry incidental monorepo whitespace or executable-mode normalization.
+---
+ core/arch/arm/kernel/boot.c              |  4 ++--
+ core/arch/arm/kernel/link.mk             |  8 ++++++--
+ core/arch/arm/plat-cix/main.c            | 14 ++++++--------
+ core/kernel/tee_ta_manager.c             |  4 ++--
+ lib/libmbedtls/mbedtls/library/entropy.c |  8 ++++++--
+ lib/libutee/tee_api_operations.c         |  2 +-
+ mk/compile.mk                            |  2 +-
+ ta/avb/entry.c                           |  2 +-
+ 8 files changed, 25 insertions(+), 19 deletions(-)
+
+diff --git a/core/arch/arm/kernel/boot.c b/core/arch/arm/kernel/boot.c
+index fb31fb64..75aa5e5c 100644
+--- a/core/arch/arm/kernel/boot.c
++++ b/core/arch/arm/kernel/boot.c
+@@ -1287,7 +1287,7 @@ extern void set_cix_version_str(void);
+ extern int mbedtls_te_selftest(void);
+ #endif
+ 
+-void signed_key_init(void)
++static void signed_key_init(void)
+ {
+ 	void *point_shm = NULL;
+ 	ta_pub_key_info *share_ta_key_info = NULL;
+@@ -1300,7 +1300,7 @@ void signed_key_init(void)
+ 		ta_pub_key_modulus_size = share_ta_key_info->module_size;
+ 		memcpy(ta_pub_key_modulus, share_ta_key_info->key_module, ta_pub_key_modulus_size);
+ 		IMSG("Dump ta public key\n");
+-		IMSG("size: %d; Exponent: %d\n", ta_pub_key_modulus_size, ta_pub_key_exponent);
++		IMSG("size: %zu; Exponent: %u\n", ta_pub_key_modulus_size, ta_pub_key_exponent);
+ 		DHEXDUMP(ta_pub_key_modulus, ta_pub_key_modulus_size);
+ 	}
+ }
+diff --git a/core/arch/arm/kernel/link.mk b/core/arch/arm/kernel/link.mk
+index 56803f86..449e29fc 100644
+--- a/core/arch/arm/kernel/link.mk
++++ b/core/arch/arm/kernel/link.mk
+@@ -31,6 +31,7 @@ link-ldflags += -T $(link-script-pp) -Map=$(link-out-dir)/tee.map
+ link-ldflags += --sort-section=alignment
+ link-ldflags += --fatal-warnings
+ link-ldflags += --gc-sections
++link-ldflags += $(call ld-option,--no-warn-rwx-segments)
+ 
+ link-ldadd  = $(LDADD)
+ link-ldadd += $(ldflags-external)
+@@ -55,6 +56,7 @@ link-script-cppflags := \
+ 		$(cppflagscore))
+ 
+ ldargs-all_objs := -T $(link-script-dummy) --no-check-sections \
++		   $(call ld-option,--no-warn-rwx-segments) \
+ 		   $(link-objs) $(link-ldadd) $(libgcccore)
+ cleanfiles += $(link-out-dir)/all_objs.o
+ $(link-out-dir)/all_objs.o: $(objs) $(libdeps) $(MAKEFILE_LIST)
+@@ -67,7 +69,8 @@ $(link-out-dir)/unpaged_entries.txt: $(link-out-dir)/all_objs.o
+ 	$(q)$(NMcore) $< | \
+ 		$(AWK) '/ ____keep_pager/ { printf "-u%s ", $$3 }' > $@
+ 
+-unpaged-ldargs = -T $(link-script-dummy) --no-check-sections --gc-sections
++unpaged-ldargs = -T $(link-script-dummy) --no-check-sections --gc-sections \
++		 $(call ld-option,--no-warn-rwx-segments)
+ unpaged-ldadd := $(objs) $(link-ldadd) $(libgcccore)
+ cleanfiles += $(link-out-dir)/unpaged.o
+ $(link-out-dir)/unpaged.o: $(link-out-dir)/unpaged_entries.txt
+@@ -95,7 +98,8 @@ $(link-out-dir)/init_entries.txt: $(link-out-dir)/all_objs.o
+ 	$(q)$(NMcore) $< | \
+ 		$(AWK) '/ ____keep_init/ { printf "-u%s ", $$3 }' > $@
+ 
+-init-ldargs := -T $(link-script-dummy) --no-check-sections --gc-sections
++init-ldargs := -T $(link-script-dummy) --no-check-sections --gc-sections \
++	       $(call ld-option,--no-warn-rwx-segments)
+ init-ldadd := $(link-objs-init) $(link-out-dir)/version.o  $(link-ldadd) \
+ 	      $(libgcccore)
+ cleanfiles += $(link-out-dir)/init.o
+diff --git a/core/arch/arm/plat-cix/main.c b/core/arch/arm/plat-cix/main.c
+index 7d28bc64..74daf965 100644
+--- a/core/arch/arm/plat-cix/main.c
++++ b/core/arch/arm/plat-cix/main.c
+@@ -123,9 +123,6 @@ void set_cix_version_str(void)
+ TEE_Result tee_otp_get_hw_unique_key(struct tee_hw_unique_key *hwkey)
+ {
+ 	uint32_t len = 0U;
+-	uint32_t ta_flag = 0U;
+-	uint8_t key_data[32] = {0};
+-	uint32_t key_len = 32;
+ 	cix_get_key_info(KEY_ID_DEVICE_KEY, KM_DEVICE_KEY_SIZE, hwkey->data, &len);
+ 
+ 	return TEE_SUCCESS;
+@@ -187,15 +184,16 @@ void platform_get_te_configs(void **base, int *irq, int *host)
+ TEE_Result tee_otp_get_ta_enc_key(uint32_t key_type __maybe_unused,
+ 					 uint8_t *buffer, size_t len)
+ {
+-	size_t key_len = 32;
++	uint32_t key_len = 32U;
++	uint32_t rsp_len = 0U;
+ 	TEE_Result ret;
+ 
+-	ret = cix_get_key_info(KEY_ID_MODEL_KEY, key_len, buffer, &len);
+-	EMSG_RAW("Cix_en_key: %d\n", key_len);
++	(void)len;
++	ret = cix_get_key_info(KEY_ID_MODEL_KEY, key_len, buffer, &rsp_len);
++	EMSG_RAW("Cix_en_key: %u\n", key_len);
+ 	DHEXDUMP(buffer, 32);
+ 
+-	return TEE_SUCCESS;
++	return ret;
+ }
+ 
+ 
+-
+diff --git a/core/kernel/tee_ta_manager.c b/core/kernel/tee_ta_manager.c
+index 041a2771..0d144a58 100644
+--- a/core/kernel/tee_ta_manager.c
++++ b/core/kernel/tee_ta_manager.c
+@@ -985,7 +985,8 @@ static uint32_t se_ta_enc_flag = 0U;
+ TEE_Result boot_ta_type_init(void)
+ {
+ 	uint32_t rsp_len = 0U;
+-	cix_get_key_info(KEY_ID_TA_CONFIG_ENABLE, 4U, &se_ta_enc_flag, &rsp_len);
++	cix_get_key_info(KEY_ID_TA_CONFIG_ENABLE, 4U,
++			 (uint8_t *)&se_ta_enc_flag, &rsp_len);
+ 
+ 	return TEE_SUCCESS;
+ }
+@@ -994,4 +995,3 @@ uint32_t get_ta_configuration(void)
+ {
+ 	return se_ta_enc_flag;
+ }
+-
+diff --git a/lib/libmbedtls/mbedtls/library/entropy.c b/lib/libmbedtls/mbedtls/library/entropy.c
+index f6f0c4b9..24d6da43 100644
+--- a/lib/libmbedtls/mbedtls/library/entropy.c
++++ b/lib/libmbedtls/mbedtls/library/entropy.c
+@@ -63,8 +63,12 @@ static unsigned long int next = 1;
+ 
+ int rand(void)
+ {
+-	int rc, olen;
+-	mbedtls_hardware_poll(NULL, &rc, sizeof(rc), &olen);
++	int rc = 0;
++	size_t olen = 0;
++	unsigned char rc_buf[sizeof(rc)] = { 0 };
++
++	mbedtls_hardware_poll(NULL, rc_buf, sizeof(rc_buf), &olen);
++	memcpy(&rc, rc_buf, olen < sizeof(rc) ? olen : sizeof(rc));
+ 	return rc;
+ }
+ 
+diff --git a/lib/libutee/tee_api_operations.c b/lib/libutee/tee_api_operations.c
+index 03387740..108bfa3f 100644
+--- a/lib/libutee/tee_api_operations.c
++++ b/lib/libutee/tee_api_operations.c
+@@ -1052,7 +1052,7 @@ void TEE_GetOperationBufferOffs(TEE_OperationHandle operation,size_t* buffer_off
+                 TEE_Panic(0);
+ 
+         __utee_check_out_annotation(operation, sizeof(*operation));
+-	buffer_offs = operation->buffer_offs;
++	*buffer_offs = operation->buffer_offs;
+ }
+ 
+ 
+diff --git a/mk/compile.mk b/mk/compile.mk
+index f80793af..45351cc5 100644
+--- a/mk/compile.mk
++++ b/mk/compile.mk
+@@ -36,7 +36,7 @@ comp-cflags-warns-high = \
+ 	-Wshadow -Wstrict-prototypes -Wswitch-default \
+ 	-Wwrite-strings \
+ 	-Wno-missing-field-initializers -Wno-format-zero-length \
+-	-Wno-c2x-extensions
++	$(call cc-option,-Wno-c2x-extensions)
+ ifeq ($(CFG_WARN_DECL_AFTER_STATEMENT),y)
+ comp-cflags-warns-high += $(call cc-option,-Wdeclaration-after-statement)
+ endif
+diff --git a/ta/avb/entry.c b/ta/avb/entry.c
+index 4496eda7..dbc53bbd 100644
+--- a/ta/avb/entry.c
++++ b/ta/avb/entry.c
+@@ -411,7 +411,7 @@ static TEE_Result read_vbmeta_public_key(uint32_t pt,
+ 	TEE_ObjectHandle h = TEE_HANDLE_NULL;
+ 	uint32_t value_sz = 0;
+ 	char *value = NULL;
+-	size_t count = 0;
++	uint32_t count = 0;
+ 
+ 	if (pt != exp_pt)
+ 		return TEE_ERROR_BAD_PARAMETERS;

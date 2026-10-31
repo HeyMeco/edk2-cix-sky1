@@ -57,6 +57,11 @@ on top of the CIX 2026Q3 BSP and booting operating systems through **ACPI**.
   capsule updates (MS-R1, Orange Pi 6, Orange Pi 6 Plus).
 * **Scripts** that fetch and verify vendor binaries, build, sign, package and
   check the images ([scripts/](scripts)).
+* **Open boot firmware** (work in progress, [docs/open-firmware.md](docs/open-firmware.md)):
+  TF-A and OP-TEE as pinned submodules; `--open` builds `bootloader2`
+  (BL31 + OP-TEE) from source and signs it with CIX's published keys for the
+  Orion O6/O6N (not boot-tested yet); an open SPI image packer, FIP
+  verifier and bootloader1 re-signing tool ([scripts/open](scripts/open)).
 
 Vendor binaries come from three places, all verified against the SHA-256
 hashes in [manifests/blobs](manifests/blobs):
@@ -103,7 +108,8 @@ the unpadded image, the BL33-only OTA image, the signed UEFI capsules (MS-R1,
 Orange Pi), the raw FD and `manifest.json`. Intermediate files and the build
 log stay in `output/<board>/RELEASE/`.
 
-Options: `--target DEBUG`, `--version 2026Q3-2`, `--extras`, `--jobs N`. On Apple Silicon
+Options: `--target DEBUG`, `--version 2026Q3-2`, `--extras`, `--jobs N`,
+`--open` (O6/O6N: bootloader2 from source, written as `<board>_<version>_open.bin`). On Apple Silicon
 the container runs natively (arm64) and takes about two minutes per board.
 
 ### Orange Pi vendor images

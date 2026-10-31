@@ -1,0 +1,66 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Orion Unofficial <orion-unofficial@protonmail.com>
+Date: Wed, 14 Oct 2026 15:20:37 +0100
+Subject: [PATCH] Fix CIX key-return and hardware-entropy error paths
+
+Resolve the defects reported in ODP issues #86 and #87. Return the selected key retrieval result. The CIX rand adapter has no error channel, so panic in the core or abort in a user TA if hardware entropy fails or returns anything other than the requested length. Preserve the valid-read result.
+---
+ core/drivers/ipc.c                       |  1 +
+ lib/libmbedtls/mbedtls/library/entropy.c | 19 ++++++++++++++-----
+ 2 files changed, 15 insertions(+), 5 deletions(-)
+
+diff --git a/core/drivers/ipc.c b/core/drivers/ipc.c
+index e2988b8f..4cb4e062 100644
+--- a/core/drivers/ipc.c
++++ b/core/drivers/ipc.c
+@@ -153,6 +153,7 @@ TEE_Result cix_get_key_info(csec_meta_key_id_t id, uint32_t req_len, uint8_t* ou
+ 		EMSG("Invalid key_id\n");
+ 		break;
+ 	}
++	return ret;
+ }
+ 
+ TEE_Result cix_get_efuse(uint32_t offset, uint32_t len, uint8_t* fuse_data, uint32_t* fuse_len)
+diff --git a/lib/libmbedtls/mbedtls/library/entropy.c b/lib/libmbedtls/mbedtls/library/entropy.c
+index b6d953dd..3f934e82 100644
+--- a/lib/libmbedtls/mbedtls/library/entropy.c
++++ b/lib/libmbedtls/mbedtls/library/entropy.c
+@@ -33,6 +33,10 @@
+ #include "mbedtls/error.h"
+ 
+ #include <string.h>
++#include <stdlib.h>
++#ifdef __KERNEL__
++#include <kernel/panic.h>
++#endif
+ 
+ #if defined(MBEDTLS_FS_IO)
+ #include <stdio.h>
+@@ -57,17 +61,22 @@
+ 
+ #define ENTROPY_MAX_LOOP    256     /**< Maximum amount to loop before error */
+ 
+-/* Return next random integer */
+-int rand(void);
+-
++/* The CIX self-test rand() adapter has no error-return channel. */
+ int rand(void)
+ {
+ 	int rc = 0;
+ 	size_t olen = 0;
+ 	unsigned char rc_buf[sizeof(rc)] = { 0 };
+ 
+-	mbedtls_hardware_poll(NULL, rc_buf, sizeof(rc_buf), &olen);
+-	memcpy(&rc, rc_buf, olen < sizeof(rc) ? olen : sizeof(rc));
++	if (mbedtls_hardware_poll(NULL, rc_buf, sizeof(rc_buf), &olen) ||
++	    olen != sizeof(rc_buf)) {
++#ifdef __KERNEL__
++		panic("CIX rand: hardware entropy failed or returned a short read");
++#else
++		abort();
++#endif
++	}
++	memcpy(&rc, rc_buf, sizeof(rc));
+ 	return rc;
+ }
+ 

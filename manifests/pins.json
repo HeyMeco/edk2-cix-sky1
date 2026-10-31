@@ -8,7 +8,9 @@
   "submodules": {
     "edk2": "9212cf3996ef8d134e8af38e5ab2c78a52d7b65c",
     "edk2-platforms": "e5cb70f632756654672c66e0c2628d501feffa2c",
-    "edk2-non-osi": "e725a1d3fed47cdc7656d1cb4d77120951ce2eb5"
+    "edk2-non-osi": "e725a1d3fed47cdc7656d1cb4d77120951ce2eb5",
+    "arm-trusted-firmware": "114fb20577bcc4038025de4e12bca60e04dd5212",
+    "optee_os": "cc66640f3815da4defc50f72b66ae3bac97cd48a"
   },
   "imports": {
     "radxa-edk2-platforms": "14cf7bdcfe1d0e8635a16a25d4209b6e28b18fca",

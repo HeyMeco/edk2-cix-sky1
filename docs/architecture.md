@@ -7,6 +7,8 @@
 | EDK2 core | `edk2/` | CIX fork, 2026Q2 RC4 (`9212cf39`) + `patches/2026Q3/edk2/` |
 | SoC and CIX boards | `edk2-platforms/` | CIX 2026Q3 RC2.3 (`e5cb70f6`) + `patches/2026Q3/edk2-platforms/` |
 | Binary modules, packaging tools, keys | `edk2-non-osi/` | CIX 2026Q3 RC2.3 (`e725a1d3`) |
+| TF-A (BL31, `cert_create`, `fiptool`) | `arm-trusted-firmware/` | CIX `cix_p1_k6.6_2025q3_tfa_open_dev` (`114fb205`) + `patches/2026Q3/arm-trusted-firmware/` |
+| OP-TEE (BL32) | `optee_os/` | CIX `cix_p1_k6.6_2025q3_tfa_open_dev` (`cc66640f`) + `patches/2026Q3/optee_os/` |
 | Board packages | `edk2-project/` | this repository |
 
 `PACKAGES_PATH` is
@@ -190,9 +192,12 @@ git checkout --detach <pinned-commit>
    `mem_config`/`pm_config`/`trustzone_config` built from source when the
    package has them, board `Firmwares/` overrides, PackageTool binaries for the
    host architecture, keys, board flash layouts.
-5. Signing: `cert_uefi_create_rsa` and `fiptool create` → `bootloader3.img`;
-   `cix_package_tool` → `cix_flash_all.bin` and `cix_flash_ota.bin`, with the
-   CIX tools for the host architecture. The AArch64 certificate tools in
+5. Signing: `cert_uefi_create_rsa` and `fiptool create` → `bootloader3.img`,
+   with the CIX tools for the host architecture; the SPI images
+   `cix_flash_all.bin` and `cix_flash_ota.bin` with the open packer
+   `scripts/open/cixfw.py` (byte-identical to `cix_package_tool`). With
+   `--open`, `bootloader2.img` is built from TF-A and OP-TEE first
+   ([open firmware](open-firmware.md)). The AArch64 certificate tools in
    `edk2-non-osi` were compiled against OpenSSL 1.1 headers but link
    `libcrypto.so.3`: their `EVP_PKEY_CTX_set_rsa_pss_saltlen()` call carries
    the 1.1 operation bits, OpenSSL 3 rejects it for a `DigestSign` context,

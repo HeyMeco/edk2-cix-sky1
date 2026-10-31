@@ -1,0 +1,90 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Orion Unofficial <orion-unofficial@protonmail.com>
+Date: Wed, 14 Oct 2026 10:32:52 +0100
+Subject: [PATCH] Complete the applicable ODP compiler and output-buffer fixes
+
+Port outstanding changes from OpenDevicePartnership/odp-platform-radxa-orion-o6 PR 85 (merge 587147c1f7ccdf5bdb5cca38782cd47f8a2a493b). Retain the existing initialized entropy buffer rather than introducing the uninitialized-buffer variant. Check the size_t narrowing before forwarding the TA key buffer capacity. The separately reported entropy and missing-return defects remain separate work.
+---
+ core/arch/arm/plat-cix/main.c            | 16 +++++++++++-----
+ lib/libmbedtls/mbedtls/library/entropy.c |  3 +--
+ lib/libutee/tee_api_operations.c         |  2 +-
+ ta/avb/entry.c                           |  1 -
+ 4 files changed, 13 insertions(+), 9 deletions(-)
+
+diff --git a/core/arch/arm/plat-cix/main.c b/core/arch/arm/plat-cix/main.c
+index 74daf965..c56d6d6e 100644
+--- a/core/arch/arm/plat-cix/main.c
++++ b/core/arch/arm/plat-cix/main.c
+@@ -57,6 +57,10 @@ void main_init_gic(void);
+ void main_secondary_init_gic(void);
+ #endif
+ 
++#if defined(CFG_TE_DRIVER)
++void platform_get_te_configs(void **base, int *irq, int *host);
++#endif
++
+ /*
+  *******************************************************************************
+  *                          VARIABLES SUPPLIED BY THIS MODULE
+@@ -184,14 +188,16 @@ void platform_get_te_configs(void **base, int *irq, int *host)
+ TEE_Result tee_otp_get_ta_enc_key(uint32_t key_type __maybe_unused,
+ 					 uint8_t *buffer, size_t len)
+ {
+-	uint32_t key_len = 32U;
+ 	uint32_t rsp_len = 0U;
+ 	TEE_Result ret;
+ 
+-	(void)len;
+-	ret = cix_get_key_info(KEY_ID_MODEL_KEY, key_len, buffer, &rsp_len);
+-	EMSG_RAW("Cix_en_key: %u\n", key_len);
+-	DHEXDUMP(buffer, 32);
++	if (len > UINT32_MAX)
++		return TEE_ERROR_BAD_PARAMETERS;
++
++	ret = cix_get_key_info(KEY_ID_MODEL_KEY, (uint32_t)len, buffer,
++			       &rsp_len);
++	EMSG_RAW("Cix_en_key: %u\n", rsp_len);
++	DHEXDUMP(buffer, rsp_len);
+ 
+ 	return ret;
+ }
+diff --git a/lib/libmbedtls/mbedtls/library/entropy.c b/lib/libmbedtls/mbedtls/library/entropy.c
+index 24d6da43..b6d953dd 100644
+--- a/lib/libmbedtls/mbedtls/library/entropy.c
++++ b/lib/libmbedtls/mbedtls/library/entropy.c
+@@ -57,9 +57,8 @@
+ 
+ #define ENTROPY_MAX_LOOP    256     /**< Maximum amount to loop before error */
+ 
+-static unsigned long int next = 1;
+-
+ /* Return next random integer */
++int rand(void);
+ 
+ int rand(void)
+ {
+diff --git a/lib/libutee/tee_api_operations.c b/lib/libutee/tee_api_operations.c
+index 108bfa3f..06962c56 100644
+--- a/lib/libutee/tee_api_operations.c
++++ b/lib/libutee/tee_api_operations.c
+@@ -1051,7 +1051,7 @@ void TEE_GetOperationBufferOffs(TEE_OperationHandle operation,size_t* buffer_off
+ 	if (operation == TEE_HANDLE_NULL)
+                 TEE_Panic(0);
+ 
+-        __utee_check_out_annotation(operation, sizeof(*operation));
++        __utee_check_out_annotation(buffer_offs, sizeof(*buffer_offs));
+ 	*buffer_offs = operation->buffer_offs;
+ }
+ 
+diff --git a/ta/avb/entry.c b/ta/avb/entry.c
+index dbc53bbd..7dca68b3 100644
+--- a/ta/avb/entry.c
++++ b/ta/avb/entry.c
+@@ -392,7 +392,6 @@ static TEE_Result write_vbmeta_public_key(uint32_t pt,
+                 EMSG("Can't create vbmeta public key, res = 0x%x", res);
+ 
+         TEE_CloseObject(h);
+-out:
+         TEE_Free(value);
+ 
+         return res;

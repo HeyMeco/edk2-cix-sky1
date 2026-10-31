@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: BSD-2-Clause-Patent
 #
 # Reusable job: build one board in the build container and upload
-# dist/<board>_<version>.bin (full SPI image padded to 8 MiB) as an artifact.
+# dist/<board>_<version>[_open].bin (full SPI image padded to 8 MiB) as an
+# artifact.
 
 name: Build board
 
@@ -20,10 +21,14 @@ on:
       runner:
         type: string
         default: ubuntu-24.04-arm
+      open:
+        description: build bootloader2 (TF-A + OP-TEE) from source (--open)
+        type: boolean
+        default: false
 
 jobs:
   build:
-    name: ${{ inputs.board }}
+    name: ${{ inputs.board }}${{ inputs.open && ' (open)' || '' }}
     runs-on: ${{ inputs.runner }}
     steps:
       - uses: actions/checkout@v7
@@ -50,22 +55,22 @@ jobs:
         uses: actions/cache@v6
         with:
           path: blobs-cache/git
-          key: blobs-${{ hashFiles('manifests/blobs/*.json') }}
+          key: blobs-${{ hashFiles('manifests/blobs/*.json', 'manifests/cix-keys.json') }}
 
       - name: Build
         run: |
           ./build.sh "${{ inputs.board }}" --target "${{ inputs.target }}" \
-            --version "${{ inputs.version }}"
+            --version "${{ inputs.version }}" ${{ inputs.open && '--open' || '' }}
 
       - uses: actions/upload-artifact@v7
         with:
-          name: firmware-${{ inputs.board }}
+          name: firmware-${{ inputs.board }}${{ inputs.open && '-open' || '' }}
           path: dist/*.bin
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: log-${{ inputs.board }}
+          name: log-${{ inputs.board }}${{ inputs.open && '-open' || '' }}
           path: output/${{ inputs.board }}/*/build.log
           if-no-files-found: ignore
