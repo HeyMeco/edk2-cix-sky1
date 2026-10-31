@@ -39,6 +39,7 @@ static inline uint32_t ccount(void)
 }
 
 void arch_idle(void);
+void udelay_cycles(uint32_t cycles);	/* busy-wait on CCOUNT */
 
 void *memcpy(void *dst, const void *src, size_t n);
 void *memmove(void *dst, const void *src, size_t n);
