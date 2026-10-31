@@ -168,6 +168,20 @@ fewest functions upstream lacks and upstream has the fewest CIX lacks,
 of v2.9 to v2.14); CIX changed `fwk_core.c` to run inside FreeRTOS and
 added `ipc_arbiter` and `iotunnel` for the mailbox transport.
 
+### What CIX's image does before it idles
+
+From `pm_emu` with a backtrace on every device write (registers written,
+in order; the shared-memory ones counted by 4 KiB page):
+
+| Phase | What | Registers |
+|---|---|---|
+| `main`, `ss_por_enter` (overlay) | core clock, AxPROT, local watchdog off, mailbox reset, debug UART, I2C masters, handshake `0x5c5a` | ~15 |
+| `sky1_rtt_init`, `RTT_Init` | TLB window from the hub to DRAM, RTT block | ~40 |
+| `rlog_init`, `md_version_broadcast` | RAM log in shared memory, version | 3 pages |
+| `ss_init_enter` | boot reason; clock tree (`clk_nodes_init`, 33 registers); perf streams (`perf_stream_init`: 755 CI-700/NI-700 PMU registers); DVFS sustained levels (PMIC voltages over I2C, PLLs, 83 registers) | ~870 |
+| `ss_run_enter` | data board; perf streams restored; PVT sensors (41); counters; interrupt aggregator; the ten mailboxes cleared and routed (406); PCC tables for the AP (shared memory); GPIO | ~480 |
+| SCP-firmware task (`scp_fw_main`) | `fwk_arch_init` (77 registers), module init, clock-PLL jobs (6) | ~85 |
+
 ## Plan
 
 | Step | State |

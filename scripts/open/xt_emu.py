@@ -239,7 +239,7 @@ class Xtensa:
         pc = self.pc if pc is None else pc
         win = getattr(self, "overlay_window", None)
         if win and win[0] <= pc < win[1] and "_ovly_id" in self.byname:
-            n = self.read(self.byname["_ovly_id"], 4)
+            n = self.read(self.byname["_ovly_id"], 4) & 0xffff    # high half: 0xffff in CIX's image
             v = self.overlay_syms.get(n, [])
             j = bisect_right([a for a, _ in v], pc) - 1
             if j >= 0:
