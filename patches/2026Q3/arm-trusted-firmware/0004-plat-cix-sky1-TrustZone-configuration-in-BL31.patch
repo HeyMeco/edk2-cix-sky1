@@ -1,0 +1,811 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mecid <mecidi.cc@gmail.com>
+Date: Sat, 31 Oct 2026 12:43:57 +0100
+Subject: [PATCH] plat/cix: sky1: TrustZone configuration in BL31
+
+The CIX BL31 reads trustzone_config.bin (firmware header image type 9,
+written by the CIX trustzone_config tool) between bl31_platform_setup()
+and the runtime services, and the public tree lacks that code.  Add it
+as the CIX BL31 behaves (v2.7 release Beta 2.1.5):
+
+* sky1_tz_config.c: read the configuration through spi_nor.c, check the
+  TZCF signature, version 1.0 and the tool's double checksum over the
+  `length` bytes; use the defaults (SPE on, no secure storage, no
+  bootloader3 recovery) when it is missing or invalid.  Both the 40-byte
+  files of the current tool and the 36-byte file of the older tool
+  Radxa ships for the Orion O6 are accepted.  The 11 data bytes go to
+  0x80400000 (mapped secure, as in the CIX BL31) for the secure OS.
+* SPE for the Non-secure world follows spe_feature_en: a weak
+  plat_spe_for_ns_enabled() hook in manage_extensions_nonsecure(), where
+  the CIX BL31 calls spe_enable() or spe_disable().
+* A secure storage region that overlaps the flash header or an image it
+  lists is dropped with a warning.  The Radxa O6 configuration places it
+  at 6 MiB, inside a bootloader3 larger than 1.9 MiB; the secure OS would
+  write its NOR file system over UEFI.  The CIX BL31 does not check.
+* cix_spi_nor.c: plat_get_nor_data() (bootloader1 flash table) and the
+  firmware header lookup move out of the BL2 io storage code so that
+  BL31 can use them.
+---
+ bl31/bl31_main.c                       |   3 +
+ include/plat/common/platform.h         |   4 +
+ lib/el3_runtime/aarch64/context_mgmt.c |  14 +-
+ plat/cix/common/cix_common.mk          |   1 +
+ plat/cix/common/cix_io_storage.c       | 147 ++----------------
+ plat/cix/common/cix_spi_nor.c          | 195 ++++++++++++++++++++++++
+ plat/cix/common/include/plat_cix.h     |   7 +
+ plat/cix/sky1/include/platform_def.h   |   4 +
+ plat/cix/sky1/platform.mk              |   5 +-
+ plat/cix/sky1/sky1_bl31_setup.c        |   2 +
+ plat/cix/sky1/sky1_tz_config.c         | 200 +++++++++++++++++++++++++
+ 11 files changed, 444 insertions(+), 138 deletions(-)
+ create mode 100644 plat/cix/common/cix_spi_nor.c
+ create mode 100644 plat/cix/sky1/sky1_tz_config.c
+
+diff --git a/bl31/bl31_main.c b/bl31/bl31_main.c
+index 85974e7ad..c9bef4d13 100644
+--- a/bl31/bl31_main.c
++++ b/bl31/bl31_main.c
+@@ -138,6 +138,7 @@ void bl31_setup(u_register_t arg0, u_register_t arg1, u_register_t arg2,
+ }
+ 
+ int cdns_xspi_init(void);
++void sky1_tz_config_setup(void);
+ 
+ int cix_qspi_init(){
+         uint32_t i = 0;
+@@ -190,6 +191,8 @@ void bl31_main(void)
+ 
+ #ifdef BOOT_SPI_NOR
+ 	cix_qspi_init();
++	/* Before BL32 and BL33 start: SPE for BL33, data for the secure OS */
++	sky1_tz_config_setup();
+ #endif
+ 
+ 	/* Initialise helper libraries */
+diff --git a/include/plat/common/platform.h b/include/plat/common/platform.h
+index b62a63158..36f43ce87 100644
+--- a/include/plat/common/platform.h
++++ b/include/plat/common/platform.h
+@@ -7,6 +7,7 @@
+ #ifndef PLATFORM_H
+ #define PLATFORM_H
+ 
++#include <stdbool.h>
+ #include <stdint.h>
+ 
+ #include <lib/psci/psci.h>
+@@ -166,6 +167,9 @@ void plat_default_ea_handler(unsigned int ea_reason, uint64_t syndrome, void *co
+ void plat_ea_handler(unsigned int ea_reason, uint64_t syndrome, void *cookie,
+ 		void *handle, uint64_t flags);
+ 
++/* Whether the Non-secure world gets SPE (ENABLE_SPE_FOR_LOWER_ELS) */
++bool plat_spe_for_ns_enabled(void);
++
+ /*
+  * The following function is mandatory when the
+  * firmware update feature is used.
+diff --git a/lib/el3_runtime/aarch64/context_mgmt.c b/lib/el3_runtime/aarch64/context_mgmt.c
+index e393493a2..867eda630 100644
+--- a/lib/el3_runtime/aarch64/context_mgmt.c
++++ b/lib/el3_runtime/aarch64/context_mgmt.c
+@@ -29,6 +29,7 @@
+ #include <lib/extensions/trbe.h>
+ #include <lib/extensions/trf.h>
+ #include <lib/utils.h>
++#include <plat/common/platform.h>
+ 
+ #if ENABLE_FEAT_TWED
+ /* Make sure delay value fits within the range(0-15) */
+@@ -441,6 +442,13 @@ void cm_setup_context(cpu_context_t *ctx, const entry_point_info_t *ep)
+ 	}
+ }
+ 
++/* Platforms may keep SPE from the Non-secure world */
++#pragma weak plat_spe_for_ns_enabled
++bool plat_spe_for_ns_enabled(void)
++{
++	return true;
++}
++
+ /*******************************************************************************
+  * Enable architecture extensions on first entry to Non-secure world.
+  * When EL2 is implemented but unused `el2_unused` is non-zero, otherwise
+@@ -450,7 +458,11 @@ static void manage_extensions_nonsecure(bool el2_unused, cpu_context_t *ctx)
+ {
+ #if IMAGE_BL31
+ #if ENABLE_SPE_FOR_LOWER_ELS
+-	spe_enable(el2_unused);
++	if (plat_spe_for_ns_enabled()) {
++		spe_enable(el2_unused);
++	} else {
++		spe_disable();
++	}
+ #endif
+ 
+ #if ENABLE_AMU
+diff --git a/plat/cix/common/cix_common.mk b/plat/cix/common/cix_common.mk
+index 8509dad53..ecee2f41c 100644
+--- a/plat/cix/common/cix_common.mk
++++ b/plat/cix/common/cix_common.mk
+@@ -169,6 +169,7 @@ endif
+ endif
+ 
+ CIX_IO_SOURCES		+=	plat/cix/common/cix_io_storage.c		\
++				plat/cix/common/cix_spi_nor.c
+ 
+ ifeq (${SPD},spmd)
+     ifeq (${BL2_ENABLE_SP_LOAD},1)
+diff --git a/plat/cix/common/cix_io_storage.c b/plat/cix/common/cix_io_storage.c
+index f1b13c10d..88cf7a3ef 100644
+--- a/plat/cix/common/cix_io_storage.c
++++ b/plat/cix/common/cix_io_storage.c
+@@ -10,8 +10,7 @@
+  * The flash holds two FIPs: bootloader2 (BL31, BL32 and their certificates)
+  * and bootloader3 (BL33 and its certificates, including the CIX
+  * NON_TRUSTED_KEY_CERT_ID trusted key certificate).  Their offsets come from
+- * the firmware header that cix_package_tool writes at 1 MiB (2 MiB when the
+- * boot ROM reports the second copy), with the CIX defaults as a fallback.
++ * the firmware header (cix_spi_nor.c), with the CIX defaults as a fallback.
+  */
+ 
+ #include <assert.h>
+@@ -22,7 +21,6 @@
+ #include <drivers/io/io_fip.h>
+ #include <drivers/io/io_mtd.h>
+ #include <drivers/io/io_storage.h>
+-#include <drivers/spi_mem.h>
+ #include <drivers/spi_nor.h>
+ #include <lib/mmio.h>
+ #include <lib/utils.h>
+@@ -32,46 +30,17 @@
+ #include <plat_cix.h>
+ #include <platform_def.h>
+ 
+-/* Firmware header (cix_package_tool) */
+-#define CIX_FW_HEADER_MAGIC		0x55AA55AAU
+-#define CIX_FW_HEADER_BASE		0x100000U
+-#define CIX_FW_HEADER_BASE_ALT		0x200000U
+-#define CIX_FW_HEADER_MAX_ENTRIES	256U
+-#define CIX_FW_TYPE_BOOTLOADER2		2U
+-#define CIX_FW_TYPE_BOOTLOADER3		7U
+-/* Bit 0: the boot ROM booted from the copy whose header is at 2 MiB */
+-#define CIX_BOOT_COPY_STATUS_REG	0x05040060U
+-
+-/* Supported SPI flash table in bootloader1, read by the boot ROM as well */
+-#define CIX_BL1_FLASH_TABLE		0x188800U
+-#define CIX_BL1_FLASH_TABLE_ENTRY	16U
+-#define CIX_BL1_FLASH_TABLE_MAX		64U
+-
+ /* xSPI pads: switch the IOMUX to the FCH xSPI controller */
+ #define CIX_IOMUX_S5_XSPI_PADS		0x160070F0U
+ #define CIX_IOMUX_S5_XSPI_PAD_CNT	6U
+ #define CIX_IOMUX_S5_XSPI_FUNC		0xDCU
+ 
+-#define SKY1_SPI_NOR_SIZE		0x1000000U
++/* Firmware header image types */
++#define CIX_FW_TYPE_BOOTLOADER2		2U
++#define CIX_FW_TYPE_BOOTLOADER3		7U
+ 
+ /* Cadence xSPI driver (drivers/cadence/xspi/xspi.c) */
+ int cdns_xspi_init(void);
+-void set_xspi_bus_clock(uint8_t xspi_clk_index);
+-
+-typedef struct {
+-	uint32_t magic;
+-	uint32_t version;
+-	uint32_t count;
+-	uint32_t reserved;
+-	struct {
+-		uint32_t type;
+-		uint32_t address;
+-		uint32_t length;
+-		uint32_t reserved;
+-	} entry[CIX_FW_HEADER_MAX_ENTRIES];
+-} cix_fw_header_t;
+-
+-static cix_fw_header_t fw_header;
+ 
+ static const io_dev_connector_t *fip_dev_con;
+ static uintptr_t fip_dev_handle;
+@@ -233,76 +202,6 @@ static int open_mtd(const uintptr_t spec)
+ 	return result;
+ }
+ 
+-/*
+- * Read command for the SPI NOR from the bootloader1 flash table, as the CIX
+- * BL2 does: each 16-byte entry holds the JEDEC ID (byte-reversed in bytes
+- * 0-2), the xSPI clock index (byte 4), the data bus mode (byte 5, 2: quad)
+- * and the dummy cycles (byte 6).  Flashes not in the table use single-line
+- * reads at the default clock.
+- */
+-int plat_get_nor_data(struct nor_device *device)
+-{
+-	uint8_t id[3] = { 0 };
+-	uint8_t table[CIX_BL1_FLASH_TABLE_ENTRY * CIX_BL1_FLASH_TABLE_MAX];
+-	uint8_t count = 0;
+-	struct spi_mem_op op;
+-	uint8_t clk_index = 0;
+-	unsigned int i;
+-	int ret;
+-
+-	device->size = SKY1_SPI_NOR_SIZE;
+-
+-	zeromem(&op, sizeof(op));
+-	op.cmd.opcode = SPI_NOR_OP_READ_ID;
+-	op.cmd.buswidth = SPI_MEM_BUSWIDTH_1_LINE;
+-	op.data.buswidth = SPI_MEM_BUSWIDTH_1_LINE;
+-	op.data.dir = SPI_MEM_DATA_IN;
+-	op.data.nbytes = sizeof(id);
+-	op.data.buf = id;
+-	ret = spi_mem_exec_op(&op);
+-
+-	zeromem(&op, sizeof(op));
+-	op.cmd.opcode = SPI_NOR_OP_READ;
+-	op.cmd.buswidth = SPI_MEM_BUSWIDTH_1_LINE;
+-	op.addr.nbytes = 3U;
+-	op.addr.buswidth = SPI_MEM_BUSWIDTH_1_LINE;
+-	op.addr.val = CIX_BL1_FLASH_TABLE;
+-	op.data.buswidth = SPI_MEM_BUSWIDTH_1_LINE;
+-	op.data.dir = SPI_MEM_DATA_IN;
+-	op.data.nbytes = 1U;
+-	op.data.buf = &count;
+-	if ((ret == 0) && (spi_mem_exec_op(&op) == 0) && (count != 0U)) {
+-		if (count > CIX_BL1_FLASH_TABLE_MAX) {
+-			count = CIX_BL1_FLASH_TABLE_MAX;
+-		}
+-		op.addr.val = CIX_BL1_FLASH_TABLE + 4U;
+-		op.data.nbytes = count * CIX_BL1_FLASH_TABLE_ENTRY;
+-		op.data.buf = table;
+-		if (spi_mem_exec_op(&op) == 0) {
+-			for (i = 0U; i < count; i++) {
+-				const uint8_t *e = &table[i * CIX_BL1_FLASH_TABLE_ENTRY];
+-
+-				if ((e[2] != id[0]) || (e[1] != id[1]) ||
+-				    (e[0] != id[2])) {
+-					continue;
+-				}
+-				clk_index = e[4];
+-				if (e[5] == 2U) {
+-					device->read_op.data.buswidth =
+-						SPI_MEM_BUSWIDTH_4_LINE;
+-				}
+-				device->read_op.dummy.nbytes = e[6] >> 3;
+-				INFO("SPI NOR %02x%02x%02x: clock %u, mode %u, %u dummy cycles\n",
+-				     id[0], id[1], id[2], e[4], e[5], e[6]);
+-				break;
+-			}
+-		}
+-	}
+-
+-	set_xspi_bus_clock(clk_index);
+-	return 0;
+-}
+-
+ static int cix_xspi_init(void)
+ {
+ 	unsigned int i;
+@@ -319,37 +218,13 @@ static int cix_xspi_init(void)
+ 	return ret;
+ }
+ 
+-static int cix_fw_header_find(uint32_t type, io_block_spec_t *spec)
+-{
+-	unsigned int i;
+-
+-	for (i = 0U; i < fw_header.count && i < CIX_FW_HEADER_MAX_ENTRIES; i++) {
+-		if (fw_header.entry[i].type == type) {
+-			spec->offset = fw_header.entry[i].address;
+-			spec->length = fw_header.entry[i].length;
+-			return 0;
+-		}
+-	}
+-	return -1;
+-}
+-
+-static int cix_read_fw_header(void)
++static int cix_find_fips(void)
+ {
+-	uint32_t base = CIX_FW_HEADER_BASE;
+-	size_t length = 0U;
+-	int ret;
+-
+-	if ((mmio_read_32(CIX_BOOT_COPY_STATUS_REG) & 1U) != 0U) {
+-		base = CIX_FW_HEADER_BASE_ALT;
+-	}
+-	ret = spi_nor_read(base, (uintptr_t)&fw_header, sizeof(fw_header),
+-			   &length);
+-	if ((ret != 0) || (length != sizeof(fw_header)) ||
+-	    (fw_header.magic != CIX_FW_HEADER_MAGIC)) {
+-		return -1;
+-	}
+-	if ((cix_fw_header_find(CIX_FW_TYPE_BOOTLOADER2, &fip_block_spec) != 0) ||
+-	    (cix_fw_header_find(CIX_FW_TYPE_BOOTLOADER3, &fip_uefi_block_spec) != 0)) {
++	if ((cix_fw_header_find(CIX_FW_TYPE_BOOTLOADER2, &fip_block_spec.offset,
++				&fip_block_spec.length) != 0) ||
++	    (cix_fw_header_find(CIX_FW_TYPE_BOOTLOADER3,
++				&fip_uefi_block_spec.offset,
++				&fip_uefi_block_spec.length) != 0)) {
+ 		return -1;
+ 	}
+ 	return 0;
+@@ -387,7 +262,7 @@ int cix_io_setup(void)
+ 		return io_result;
+ 	}
+ 
+-	if (cix_read_fw_header() != 0) {
++	if (cix_find_fips() != 0) {
+ 		WARN("get bootloader address from cix_flash_all.bin header fail, use deault value\n");
+ 		fip_block_spec.offset = PLAT_CIX_SPI_NOR_FIP_IMAGE_BASE;
+ 		fip_block_spec.length = PLAT_CIX_SPI_NOR_FLASH_IMAGE_MAX_SIZE;
+diff --git a/plat/cix/common/cix_spi_nor.c b/plat/cix/common/cix_spi_nor.c
+new file mode 100644
+index 000000000..f0c43fe68
+--- /dev/null
++++ b/plat/cix/common/cix_spi_nor.c
+@@ -0,0 +1,195 @@
++/*
++ * Copyright (c) 2015-2022, ARM Limited and Contributors. All rights reserved.
++ *
++ * SPDX-License-Identifier: BSD-3-Clause
++ */
++
++/*
++ * The Sky1 boot flash: a SPI NOR behind the Cadence xSPI controller, read by
++ * BL2 (the FIPs) and BL31 (the TrustZone configuration) through spi_nor.c.
++ * What is where comes from the firmware header that cix_package_tool writes
++ * at 1 MiB (2 MiB when the boot ROM reports the second copy).
++ */
++
++#include <string.h>
++
++#include <common/debug.h>
++#include <drivers/spi_mem.h>
++#include <drivers/spi_nor.h>
++#include <lib/mmio.h>
++#include <lib/utils.h>
++
++#include <plat_cix.h>
++
++/* Firmware header (cix_package_tool) */
++#define CIX_FW_HEADER_MAGIC		0x55AA55AAU
++#define CIX_FW_HEADER_BASE		0x100000U
++#define CIX_FW_HEADER_BASE_ALT		0x200000U
++#define CIX_FW_HEADER_MAX_ENTRIES	256U
++/* Bit 0: the boot ROM booted from the copy whose header is at 2 MiB */
++#define CIX_BOOT_COPY_STATUS_REG	0x05040060U
++
++/* Supported SPI flash table in bootloader1, read by the boot ROM as well */
++#define CIX_BL1_FLASH_TABLE		0x188800U
++#define CIX_BL1_FLASH_TABLE_ENTRY	16U
++#define CIX_BL1_FLASH_TABLE_MAX		64U
++
++#define SKY1_SPI_NOR_SIZE		0x1000000U
++
++/* Cadence xSPI driver (drivers/cadence/xspi/xspi.c) */
++void set_xspi_bus_clock(uint8_t xspi_clk_index);
++
++typedef struct {
++	uint32_t magic;
++	uint32_t version;
++	uint32_t count;
++	uint32_t reserved;
++	struct {
++		uint32_t type;
++		uint32_t address;
++		uint32_t length;
++		uint32_t reserved;
++	} entry[CIX_FW_HEADER_MAX_ENTRIES];
++} cix_fw_header_t;
++
++static cix_fw_header_t fw_header;
++static uint32_t fw_header_base;
++static bool fw_header_valid;
++
++/*
++ * Read command for the SPI NOR from the bootloader1 flash table, as the CIX
++ * BL2 and BL31 do: each 16-byte entry holds the JEDEC ID (byte-reversed in
++ * bytes 0-2), the xSPI clock index (byte 4), the data bus mode (byte 5,
++ * 2: quad) and the dummy cycles (byte 6).  Flashes not in the table use
++ * single-line reads at the default clock.
++ */
++int plat_get_nor_data(struct nor_device *device)
++{
++	uint8_t id[3] = { 0 };
++	uint8_t table[CIX_BL1_FLASH_TABLE_ENTRY * CIX_BL1_FLASH_TABLE_MAX];
++	uint8_t count = 0;
++	struct spi_mem_op op;
++	uint8_t clk_index = 0;
++	unsigned int i;
++	int ret;
++
++	device->size = SKY1_SPI_NOR_SIZE;
++
++	zeromem(&op, sizeof(op));
++	op.cmd.opcode = SPI_NOR_OP_READ_ID;
++	op.cmd.buswidth = SPI_MEM_BUSWIDTH_1_LINE;
++	op.data.buswidth = SPI_MEM_BUSWIDTH_1_LINE;
++	op.data.dir = SPI_MEM_DATA_IN;
++	op.data.nbytes = sizeof(id);
++	op.data.buf = id;
++	ret = spi_mem_exec_op(&op);
++
++	zeromem(&op, sizeof(op));
++	op.cmd.opcode = SPI_NOR_OP_READ;
++	op.cmd.buswidth = SPI_MEM_BUSWIDTH_1_LINE;
++	op.addr.nbytes = 3U;
++	op.addr.buswidth = SPI_MEM_BUSWIDTH_1_LINE;
++	op.addr.val = CIX_BL1_FLASH_TABLE;
++	op.data.buswidth = SPI_MEM_BUSWIDTH_1_LINE;
++	op.data.dir = SPI_MEM_DATA_IN;
++	op.data.nbytes = 1U;
++	op.data.buf = &count;
++	if ((ret == 0) && (spi_mem_exec_op(&op) == 0) && (count != 0U)) {
++		if (count > CIX_BL1_FLASH_TABLE_MAX) {
++			count = CIX_BL1_FLASH_TABLE_MAX;
++		}
++		op.addr.val = CIX_BL1_FLASH_TABLE + 4U;
++		op.data.nbytes = count * CIX_BL1_FLASH_TABLE_ENTRY;
++		op.data.buf = table;
++		if (spi_mem_exec_op(&op) == 0) {
++			for (i = 0U; i < count; i++) {
++				const uint8_t *e = &table[i * CIX_BL1_FLASH_TABLE_ENTRY];
++
++				if ((e[2] != id[0]) || (e[1] != id[1]) ||
++				    (e[0] != id[2])) {
++					continue;
++				}
++				clk_index = e[4];
++				if (e[5] == 2U) {
++					device->read_op.data.buswidth =
++						SPI_MEM_BUSWIDTH_4_LINE;
++				}
++				device->read_op.dummy.nbytes = e[6] >> 3;
++				INFO("SPI NOR %02x%02x%02x: clock %u, mode %u, %u dummy cycles\n",
++				     id[0], id[1], id[2], e[4], e[5], e[6]);
++				break;
++			}
++		}
++	}
++
++	set_xspi_bus_clock(clk_index);
++	return 0;
++}
++
++/* Needs spi_nor_init() done */
++static int cix_read_fw_header(void)
++{
++	uint32_t base = CIX_FW_HEADER_BASE;
++	size_t length = 0U;
++	int ret;
++
++	if ((mmio_read_32(CIX_BOOT_COPY_STATUS_REG) & 1U) != 0U) {
++		base = CIX_FW_HEADER_BASE_ALT;
++	}
++	ret = spi_nor_read(base, (uintptr_t)&fw_header, sizeof(fw_header),
++			   &length);
++	if ((ret != 0) || (length != sizeof(fw_header)) ||
++	    (fw_header.magic != CIX_FW_HEADER_MAGIC)) {
++		return -1;
++	}
++	fw_header_base = base;
++	fw_header_valid = true;
++	return 0;
++}
++
++/* Flash offset and length of the image of the given type */
++int cix_fw_header_find(uint32_t type, size_t *offset, size_t *length)
++{
++	unsigned int i;
++
++	if (!fw_header_valid && (cix_read_fw_header() != 0)) {
++		return -1;
++	}
++	for (i = 0U; i < fw_header.count && i < CIX_FW_HEADER_MAX_ENTRIES; i++) {
++		if (fw_header.entry[i].type == type) {
++			*offset = fw_header.entry[i].address;
++			*length = fw_header.entry[i].length;
++			return 0;
++		}
++	}
++	return -1;
++}
++
++static bool ranges_overlap(size_t a, size_t a_len, size_t b, size_t b_len)
++{
++	return (a < b + b_len) && (b < a + a_len);
++}
++
++/*
++ * Whether [offset, offset + length) touches the boot firmware: everything up
++ * to the end of the firmware header, or an image the header lists.
++ */
++bool cix_fw_header_overlaps(size_t offset, size_t length)
++{
++	unsigned int i;
++
++	if (!fw_header_valid && (cix_read_fw_header() != 0)) {
++		return true;
++	}
++	if (ranges_overlap(offset, length, 0U,
++			   fw_header_base + sizeof(fw_header))) {
++		return true;
++	}
++	for (i = 0U; i < fw_header.count && i < CIX_FW_HEADER_MAX_ENTRIES; i++) {
++		if (ranges_overlap(offset, length, fw_header.entry[i].address,
++				   fw_header.entry[i].length)) {
++			return true;
++		}
++	}
++	return false;
++}
+diff --git a/plat/cix/common/include/plat_cix.h b/plat/cix/common/include/plat_cix.h
+index 8a32541f4..12b776baf 100644
+--- a/plat/cix/common/include/plat_cix.h
++++ b/plat/cix/common/include/plat_cix.h
+@@ -204,6 +204,13 @@ int sdei_tee_exception_handler(uint32_t data_len);
+ 
+ uint32_t btcfg_get_value(void *base, char *item, uint32_t *value);
+ 
++/* Boot flash (cix_spi_nor.c): image location from the firmware header */
++int cix_fw_header_find(uint32_t type, size_t *offset, size_t *length);
++bool cix_fw_header_overlaps(size_t offset, size_t length);
++
++/* TrustZone configuration from the boot flash (BL31) */
++void sky1_tz_config_setup(void);
++
+ void cix_set_reboot_reason(uint32_t reason);
+ uint32_t cix_get_reboot_reason(void);
+ 
+diff --git a/plat/cix/sky1/include/platform_def.h b/plat/cix/sky1/include/platform_def.h
+index 327f04da5..dbcca962f 100644
+--- a/plat/cix/sky1/include/platform_def.h
++++ b/plat/cix/sky1/include/platform_def.h
+@@ -74,6 +74,10 @@
+ 
+ #define SKY1_TEE_OS_BASE		ULL(0x80500000)
+ 
++/* TrustZone configuration BL31 leaves for the secure OS (sky1_tz_config.c) */
++#define SKY1_TZ_CONFIG_SHM_BASE		ULL(0x80400000)
++#define SKY1_TZ_CONFIG_SHM_SIZE		0x1000
++
+ /*RCSU mapping*/
+ #define AUDIO_RCSU_BASE_REG	ULL(0x07000000)
+ #define AUDIO_RCSU_PD_REG	ULL(0x07000020)
+diff --git a/plat/cix/sky1/platform.mk b/plat/cix/sky1/platform.mk
+index de79f2086..59d69c557 100644
+--- a/plat/cix/sky1/platform.mk
++++ b/plat/cix/sky1/platform.mk
+@@ -167,7 +167,10 @@ BL31_SOURCES		+=	${ENT_GIC_SOURCES}			\
+ 				${SKY1_BASE}/sky1_ddrlp.c \
+ 				drivers/arm/tzc/tzc400.c		\
+ 				plat/cix/common/cix_tzc400.c	\
+-				${SKY1_BASE}/drivers/watchdog/watchdog.c
++				${SKY1_BASE}/drivers/watchdog/watchdog.c \
++				drivers/mtd/nor/spi_nor.c		\
++				plat/cix/common/cix_spi_nor.c		\
++				${SKY1_BASE}/sky1_tz_config.c
+ 
+ include ${SKY1_BASE}/dst/dst.mk
+ include ${SKY1_BASE}/ras/ras.mk
+diff --git a/plat/cix/sky1/sky1_bl31_setup.c b/plat/cix/sky1/sky1_bl31_setup.c
+index 7f7b7452b..f91ca47d0 100644
+--- a/plat/cix/sky1/sky1_bl31_setup.c
++++ b/plat/cix/sky1/sky1_bl31_setup.c
+@@ -227,6 +227,8 @@ void __init bl31_plat_arch_setup(void)
+ 				MT_MEMORY | MT_RW | MT_NS),
+ 		MAP_REGION_FLAT(SKY1_ATF_TEE_SHM_BASE, SKY1_ATF_TEE_SHM_SIZE,
+ 			MT_MEMORY | MT_RW | MT_SECURE),
++		MAP_REGION_FLAT(SKY1_TZ_CONFIG_SHM_BASE, SKY1_TZ_CONFIG_SHM_SIZE,
++			MT_MEMORY | MT_RW | MT_SECURE),
+ 		{0},
+ 	};
+ 
+diff --git a/plat/cix/sky1/sky1_tz_config.c b/plat/cix/sky1/sky1_tz_config.c
+new file mode 100644
+index 000000000..5e045c18d
+--- /dev/null
++++ b/plat/cix/sky1/sky1_tz_config.c
+@@ -0,0 +1,200 @@
++/*
++ * Copyright (c) 2026, edk2-cix contributors. All rights reserved.
++ *
++ * SPDX-License-Identifier: BSD-3-Clause
++ */
++
++/*
++ * TrustZone configuration on Sky1: trustzone_config.bin, written by the CIX
++ * trustzone_config tool (edk2-non-osi PackageTool/trustzone_config) and
++ * placed in the boot flash as firmware header image type 9.  BL31 reads it
++ * once, falls back to the defaults when it is missing or invalid, keeps SPE
++ * from the non-secure world when it says so, and leaves the data bytes at
++ * SKY1_TZ_CONFIG_SHM_BASE for the secure OS (secure storage location,
++ * bootloader3 recovery), as the CIX BL31 does.
++ */
++
++#include <errno.h>
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++#include <string.h>
++
++#include <common/debug.h>
++#include <drivers/spi_nor.h>
++#include <lib/utils.h>
++#include <lib/utils_def.h>
++#include <plat/common/platform.h>
++
++#include <plat_cix.h>
++#include <platform_def.h>
++
++#define TZ_CONFIG_FW_TYPE		9U
++#define TZ_CONFIG_SIGNATURE		0x46435A54U	/* "TZCF" */
++#define TZ_CONFIG_VERSION_MAJOR		1U
++#define TZ_CONFIG_VERSION_MINOR		0U
++
++#define SEC_STORAGE_TYPE_NOF_DISABLED	0x00U
++#define SEC_STORAGE_TYPE_NOF_ENABLED	0x01U
++
++/* trustzone_export_config.h */
++typedef struct {
++	uint8_t spe_feature_en;
++	uint8_t secure_storage_type;
++	uint32_t secure_storage_addr;
++	uint32_t secure_storage_size;
++	uint8_t bl3_backup_recovery_en;
++} __packed tz_config_data_t;
++
++typedef struct {
++	uint16_t version_major;
++	uint16_t version_minor;
++	uint32_t timestamp;
++	uint32_t length;		/* checksummed bytes, from version_major */
++	uint32_t signature;
++	uint32_t crc1;
++	uint32_t crc2;
++	uint8_t version_id;
++	uint8_t config_length;		/* version_id to the end of data */
++	tz_config_data_t data;
++} __packed tz_config_t;
++
++CASSERT(sizeof(tz_config_data_t) == 11U, assert_tz_config_data_size);
++
++/*
++ * The CIX tool writes 40 bytes (13 bytes of configuration).  The Radxa
++ * Orion O6 file comes from an older tool without bl3_backup_recovery_en:
++ * 36 bytes, 12 of configuration.  The CIX BL31 checks the first `length`
++ * bytes either way.
++ */
++#define TZ_CONFIG_MIN_DATA	offsetof(tz_config_data_t, bl3_backup_recovery_en)
++#define TZ_CONFIG_MIN_LENGTH	(offsetof(tz_config_t, data) + TZ_CONFIG_MIN_DATA)
++#define TZ_CONFIG_MAX_LENGTH	64U
++
++/* Used when the flash has none: SPE on, no secure storage, no recovery */
++static tz_config_data_t tz_config = {
++	.spe_feature_en = 1U,
++};
++
++/*
++ * Fletcher-style sums over 32-bit words with both checksum fields zero, as
++ * the trustzone_config tool computes them.
++ */
++static bool tz_config_checksum_ok(const uint32_t *raw, uint32_t length)
++{
++	const tz_config_t *cfg = (const void *)raw;
++	unsigned int crc1 = offsetof(tz_config_t, crc1) / sizeof(uint32_t);
++	unsigned int crc2 = offsetof(tz_config_t, crc2) / sizeof(uint32_t);
++	uint32_t a = 0U, b = 0U;
++	unsigned int i;
++
++	for (i = 0U; i < length / sizeof(uint32_t); i++) {
++		a += ((i == crc1) || (i == crc2)) ? 0U : raw[i];
++		b += a;
++	}
++	return (a == cfg->crc1) && (b == cfg->crc2);
++}
++
++static int tz_config_read(tz_config_data_t *data)
++{
++	uint32_t raw[TZ_CONFIG_MAX_LENGTH / sizeof(uint32_t)];
++	const tz_config_t *cfg = (const void *)raw;
++	size_t offset, length, read = 0U;
++	size_t data_len;
++
++	/* Only the Orion O6/O6N layouts have one */
++	if (cix_fw_header_find(TZ_CONFIG_FW_TYPE, &offset, &length) != 0) {
++		INFO("TrustZone: no configuration in the flash, using the defaults\n");
++		return -ENOENT;
++	}
++	if ((length < sizeof(raw)) ||
++	    (spi_nor_read(offset, (uintptr_t)raw, sizeof(raw), &read) != 0) ||
++	    (read != sizeof(raw))) {
++		ERROR("TrustZone: cannot read the configuration at 0x%zx\n",
++		      offset);
++		return -1;
++	}
++	if (cfg->signature != TZ_CONFIG_SIGNATURE) {
++		ERROR("TrustZone: invalid signature 0x%08x\n", cfg->signature);
++		return -1;
++	}
++	if ((cfg->version_major != TZ_CONFIG_VERSION_MAJOR) ||
++	    (cfg->version_minor != TZ_CONFIG_VERSION_MINOR) ||
++	    (cfg->version_id != TZ_CONFIG_VERSION_MAJOR)) {
++		ERROR("TrustZone: unsupported version %u.%u/%u\n",
++		      cfg->version_major, cfg->version_minor, cfg->version_id);
++		return -1;
++	}
++	if ((cfg->length < TZ_CONFIG_MIN_LENGTH) ||
++	    (cfg->length > sizeof(raw)) || ((cfg->length % 4U) != 0U) ||
++	    !tz_config_checksum_ok(raw, cfg->length)) {
++		ERROR("TrustZone: checksum failed\n");
++		return -1;
++	}
++
++	/* version_id and config_length count; fields the file lacks stay 0 */
++	if (cfg->config_length < 2U + TZ_CONFIG_MIN_DATA) {
++		ERROR("TrustZone: configuration length %u\n", cfg->config_length);
++		return -1;
++	}
++	data_len = MIN((size_t)cfg->config_length - 2U, sizeof(*data));
++	if (offsetof(tz_config_t, data) + data_len > cfg->length) {
++		ERROR("TrustZone: configuration length %u\n", cfg->config_length);
++		return -1;
++	}
++	zeromem(data, sizeof(*data));
++	memcpy(data, &cfg->data, data_len);
++	return 0;
++}
++
++/* Needs the boot flash (cix_qspi_init) */
++void sky1_tz_config_setup(void)
++{
++	unsigned long long size;
++	unsigned int erase_size;
++	tz_config_data_t data;
++	int ret = -EIO;
++
++	if (spi_nor_init(&size, &erase_size) == 0) {
++		ret = tz_config_read(&data);
++	}
++	if (ret == 0) {
++		tz_config = data;
++	} else if (ret != -ENOENT) {
++		WARN("TrustZone: flash configuration invalid, using the defaults\n");
++	}
++
++	/*
++	 * The secure OS writes its NOR file system there: never over the boot
++	 * firmware.  (The Radxa O6 configuration puts it at 6 MiB, where a
++	 * bootloader3 larger than 1.9 MiB already is.)
++	 */
++	if ((tz_config.secure_storage_type == SEC_STORAGE_TYPE_NOF_ENABLED) &&
++	    ((tz_config.secure_storage_size == 0U) ||
++	     cix_fw_header_overlaps(tz_config.secure_storage_addr,
++				    tz_config.secure_storage_size))) {
++		WARN("TrustZone: secure storage at 0x%x+0x%x overlaps the boot firmware, disabled\n",
++		     tz_config.secure_storage_addr,
++		     tz_config.secure_storage_size);
++		tz_config.secure_storage_type = SEC_STORAGE_TYPE_NOF_DISABLED;
++		tz_config.secure_storage_addr = 0U;
++		tz_config.secure_storage_size = 0U;
++	}
++
++	INFO("TrustZone: SPE %s, secure storage %u at 0x%x+0x%x, bootloader3 recovery %u\n",
++	     plat_spe_for_ns_enabled() ? "on" : "off",
++	     tz_config.secure_storage_type, tz_config.secure_storage_addr,
++	     tz_config.secure_storage_size, tz_config.bl3_backup_recovery_en);
++
++	/* For the secure OS */
++	memcpy((void *)SKY1_TZ_CONFIG_SHM_BASE, &tz_config, sizeof(tz_config));
++}
++
++/*
++ * 0x01 is on; 0x00 and 0xff are off (trustzone_export_config.h).  The CIX
++ * BL31 takes any non-zero value as on; its tool never writes 0xff.
++ */
++bool plat_spe_for_ns_enabled(void)
++{
++	return tz_config.spe_feature_en == 1U;
++}
+-- 
+2.56.0
+

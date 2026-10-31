@@ -233,8 +233,9 @@ git checkout --detach <pinned-commit>
    with the CIX tools for the host architecture; the SPI images
    `cix_flash_all.bin` and `cix_flash_ota.bin` with the open packer
    `scripts/open/cixfw.py` (byte-identical to `cix_package_tool`). With
-   `--open`, `bootloader2.img` is built from TF-A and OP-TEE first
-   ([open firmware](open-firmware.md)). The AArch64 certificate tools in
+   `--open`, `bootloader2.img` is built from TF-A and OP-TEE first, BL2 is
+   built and re-signed into `bootloader1.img`, and the BL33 certificates
+   come from TF-A `cert_create` ([open firmware](open-firmware.md)). The AArch64 certificate tools in
    `edk2-non-osi` were compiled against OpenSSL 1.1 headers but link
    `libcrypto.so.3`: their `EVP_PKEY_CTX_set_rsa_pss_saltlen()` call carries
    the 1.1 operation bits, OpenSSL 3 rejects it for a `DigestSign` context,

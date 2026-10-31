@@ -1,0 +1,127 @@
+From d014f250275846e01cbec50511c9d247537e8bac Mon Sep 17 00:00:00 2001
+From: Mecid <mecidi.cc@gmail.com>
+Date: Sat, 31 Oct 2026 12:47:21 +0100
+Subject: [PATCH] plat/cix: sky1: audio domain and resume marker after system
+ suspend
+
+The CIX BL31 has two steps on the first core back from system suspend
+that the public tree lacks (it runs them in psci_warmboot_entrypoint(),
+before the platform's suspend_finish handler):
+
+* when the audio PGFSM register (AUDIO_RCSU_PD_REG) has bit 23 set, it
+  powers the audio domain up with its clocks, clears and masks the audio
+  mailbox block's interrupts and leaves 0x12345678 in its register 0x60
+  if the block reports ID 0x20220000, then restores the domain and its
+  clocks ("POWER ON AUDIO FAILED." when the domain does not come up);
+* it writes 0xBB to the top byte of SW_USED_REG1.
+
+Do both at the start of the system-level restore in
+sky1_pwr_domain_suspend_finish(), with the CIX BL31's register sequence.
+---
+ plat/cix/sky1/sky1_pm.c | 76 +++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 76 insertions(+)
+
+diff --git a/plat/cix/sky1/sky1_pm.c b/plat/cix/sky1/sky1_pm.c
+index 3332ffde9..e57db3eb2 100644
+--- a/plat/cix/sky1/sky1_pm.c
++++ b/plat/cix/sky1/sky1_pm.c
+@@ -13,6 +13,7 @@
+ #include <plat_cix.h>
+ #include "plat_pwrc.h"
+ #include <drivers/delay_timer.h>
++#include <lib/mmio.h>
+ #include <plat/common/platform.h>
+ #include <drivers/arm/css/scmi.h>
+ #include <sky1_plat.h>
+@@ -538,6 +539,77 @@ void sky1_pwr_domain_on_finish(const psci_power_state_t *target_state)
+ 	sky1_boot_cpu_save(core);
+ }
+ 
++/*
++ * Audio domain after system suspend, as the CIX BL31 handles it on the first
++ * core back (in its psci_warmboot_entrypoint()).  When the audio PGFSM
++ * register reports bit 23, the domain is powered up with its clocks; if the
++ * audio mailbox block answers with its ID, its interrupts are cleared and
++ * masked and 0x12345678 is left in its register 0x60; then the domain and
++ * its clocks return to the state they were in.  CIX does not document the
++ * registers; the sequence is the CIX BL31's.
++ */
++#define AUDIO_PGFSM_PU		0xfffU
++#define AUDIO_PGFSM_STATUS(v)	(((v) >> 12) & 3U)
++#define AUDIO_PGFSM_ON		3U
++#define AUDIO_RESUME_PENDING	BIT(23)
++#define AUDIO_RCSU_REG34	(AUDIO_RCSU_BASE_REG + 0x34)
++#define AUDIO_MBOX_BASE		0x07110000UL
++#define AUDIO_MBOX_ID		0x20220000U
++#define SKY1_S5_CTRL_800	0x16000800UL
++#define SKY1_S5_AUDIO_CLK	0x16000404UL
++#define SKY1_AUDIO_ISO		0x0657211cUL
++#define SKY1_RESUME_MARK	0xbb000000U
++
++static void sky1_audio_pd_off(void)
++{
++	mmio_clrbits_32(AUDIO_RCSU_PD_REG, BIT(0));
++	udelay(20);
++	mmio_clrbits_32(SKY1_S5_AUDIO_CLK, 3U);
++	udelay(5);
++	mmio_clrbits_32(SKY1_AUDIO_ISO, BIT(16));
++}
++
++static void sky1_audio_resume(void)
++{
++	uint32_t pd, clk, val;
++	int tries;
++
++	mmio_setbits_32(SKY1_S5_CTRL_800, BIT(0));
++	if ((mmio_read_32(AUDIO_RCSU_PD_REG) & AUDIO_RESUME_PENDING) == 0U)
++		return;
++
++	clk = mmio_read_32(SKY1_S5_AUDIO_CLK) & 3U;
++	pd = mmio_read_32(AUDIO_RCSU_PD_REG);
++	sky1_audio_pd_off();
++
++	mmio_setbits_32(SKY1_AUDIO_ISO, BIT(16));
++	udelay(5);
++	mmio_setbits_32(SKY1_S5_AUDIO_CLK, 3U);
++	udelay(20);
++	mmio_setbits_32(AUDIO_RCSU_PD_REG, AUDIO_PGFSM_PU);
++	for (tries = 10; tries > 0; tries--) {
++		val = mmio_read_32(AUDIO_RCSU_PD_REG);
++		if (AUDIO_PGFSM_STATUS(val) == AUDIO_PGFSM_ON)
++			break;
++		udelay(5);
++	}
++	if (tries == 0)
++		ERROR("POWER ON AUDIO FAILED.\n");
++
++	mmio_write_32(AUDIO_RCSU_REG34, 0x20000000U);
++	if (mmio_read_32(AUDIO_MBOX_BASE + 0x4) != AUDIO_MBOX_ID)
++		return;
++	mmio_write_32(AUDIO_MBOX_BASE + 0x10, 0x1ffffU);
++	mmio_write_32(AUDIO_MBOX_BASE + 0x78, 0xffffU);
++	mmio_write_32(AUDIO_MBOX_BASE + 0x60, 0x12345678U);
++
++	sky1_audio_pd_off();
++	mmio_write_32(AUDIO_RCSU_PD_REG, pd);
++	udelay(50);
++	mmio_clrsetbits_32(SKY1_S5_AUDIO_CLK, 3U, clk);
++	udelay(5);
++}
++
+ /*******************************************************************************
+  * Sky1 Handler called when a power domain has just been powered on after
+  * having been suspended earlier. The target_state encodes the low power state
+@@ -564,6 +636,10 @@ void sky1_pwr_domain_suspend_finish(const psci_power_state_t *target_state)
+ 	assert(CORE_PWR_STATE(target_state) == CIX_LOCAL_STATE_OFF);
+ 	/* Perform system domain restore if woken up from system suspend */
+ 	if (SYSTEM_PWR_STATE(target_state) == CIX_LOCAL_STATE_OFF) {
++		sky1_audio_resume();
++		/* Resume marker in the top byte, as the CIX BL31 sets it */
++		mmio_clrsetbits_32(SW_USED_REG1, 0xff000000U, SKY1_RESUME_MARK);
++
+ 		/* Initialize the console */
+ 		cix_console_runtime_init();
+ 		/* Assert system power domain is available on the platform */
+-- 
+2.56.0
+

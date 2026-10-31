@@ -13,11 +13,11 @@ prove identical code, and nothing here has been built or boot-tested.
 |---|---|---|---|
 | `bootloader1.img` #1 | SE firmware (Cortex-M) | none | no |
 | `bootloader1.img` #2 | CSU_PM firmware (Xtensa, Arm SCP-firmware based) | SCP-firmware framework only | only with large reverse engineering |
-| `bootloader1.img` #3 | TF-A BL2 | cixtech TF-A, 5 platform files missing | after those are written; O6/O6N BL1 can be re-signed ([open firmware](open-firmware.md#bl2)) |
+| `bootloader1.img` #3 | TF-A BL2 | cixtech TF-A, 5 platform files missing | **built** for O6/O6N with `--open` (patch 0002), re-signed into bootloader1 ([open firmware](open-firmware.md#bl2)) |
 | `bootloader2.img` | TF-A FIP: BL31 + OP-TEE BL32 (with StandaloneMM) | cixtech TF-A and OP-TEE, with gaps | **built** for O6/O6N with `--open` (StMM still binary) |
 | `csu_pm_config.bin` | PM configuration | `pm_config` generator | yes, byte-identical for both Orange Pi boards |
 | `memory_config.bin` | DRAM configuration | `mem_config` generator | Radxa/Minisforum: built; Orange Pi: not yet decoded |
-| `trustzone_config.bin` | TZC configuration | `trustzone_config` generator | yes |
+| `trustzone_config.bin` | SPE, NOR secure storage and bootloader3 recovery settings for BL2, BL31 and OP-TEE | `trustzone_config` generator | yes; the CIX stock file on every board ([open firmware](open-firmware.md#trustzone-configuration)) |
 | `se_config.bin` | `CIXSECONFIG` header, otherwise zero | format known from `SeConfigUpdateDxe` | yes |
 | `sfh_fw.bin` | 17 KB Cortex-M image (vectors at `0x2007fff0`, mailbox) | none | no counterpart; small enough to clean-room |
 | `ec_fw.bin` | ITE 8051 EC firmware (`ITE EC-V00.1`, `EC V1.13`) | none | no |
@@ -51,8 +51,8 @@ Both payloads are plaintext. Missing from the public trees:
 * BL31 (about 29 of 128 log strings):
   * the TrustZone configuration loader (`TrustZone: CRC check failed`,
     `Failed to get config address from flash header, use default`). This is
-    the code that reads `trustzone_config.bin` at `0xF0000`; a BL31 built from
-    the public tree ignores that region.
+    the code that reads `trustzone_config.bin` at `0xF0000`; written for the
+    open BL31 (TF-A patch 0004).
   * SPI-NOR erase/write in BL31 (`spi_nor_erase_sector`,
     `write failure when override flash`).
   * RAS event forwarding for IDM and TZC400.
@@ -271,7 +271,7 @@ layout, but its bus and pad entries do not and were not decoded.
 |---|---|---|---|---|
 | `sfh_fw.bin` | CIX stock `80a2cb58…` | same | same | same |
 | `se_config.bin` | CIX stock `7bb9621a…` (3856 B) | Minisforum `30b25c64…` (144 B) | CIX stock | CIX stock |
-| `trustzone_config.bin` | Radxa `818bd96d…`, flashed at `0xF0000` | CIX stock `7b35f99a…`, staged but not in the flash layout | same as MS-R1 | same as MS-R1 |
+| `trustzone_config.bin` | CIX stock `7b35f99a…`, flashed at `0xF0000` (Radxa's `818bd96d…` put NOR secure storage over bootloader3, see [open firmware](open-firmware.md#trustzone-configuration)) | CIX stock, staged but not in the flash layout | same as MS-R1 | same as MS-R1 |
 | `certs/trusted_key_no.crt` | Radxa pregenerated `2a25ee2b…` | same | regenerated with the OEM key (`trusted_key_cert: regenerate`), 1602 B | Radxa pregenerated |
 | `certs/nt_fw_*.crt` | generated per build | same | same | same |
 

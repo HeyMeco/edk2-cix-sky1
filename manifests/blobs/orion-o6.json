@@ -26,18 +26,6 @@
       }
     },
     {
-      "dest": "Firmwares/trustzone_config.bin",
-      "size": 4096,
-      "sha256": "818bd96d7c8ad4dd6682bdff7130b42235e206e013fe90ead695cc951776cd45",
-      "license": "Radxa edk2-non-osi (vendor binary)",
-      "source": {
-        "type": "git",
-        "url": "https://github.com/radxa/edk2-non-osi",
-        "commit": "4e99786e4caaf531bb9b04f097a018917463ae81",
-        "path": "Platform/CIX/Sky1/PackageTool/Firmwares/trustzone_config.bin"
-      }
-    },
-    {
       "dest": "Firmwares/ec_fw.bin",
       "size": 131072,
       "sha256": "84cbdc21603a28bb2b5bb7e22ab0d32035c277294e675fecea552caaeff355b6",

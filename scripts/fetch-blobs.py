@@ -187,7 +187,22 @@ def fetch_board(name, images, from_vendor=False):
             die(f"unknown blob source type {src['type']}")
         verify(dest, b["size"], b["sha256"], b["dest"])
         log(f"{name}: staged {b['dest']}")
+    prune_staged(name, pkg, manifest)
     log(f"{name}: {len(manifest['blobs'])} blob(s) verified")
+
+
+def prune_staged(name, pkg, manifest):
+    """Remove files a blob directory holds but the manifest no longer lists,
+    so the build does not pick up a blob that was dropped."""
+    wanted = {(pkg / b["dest"]).resolve() for b in manifest["blobs"]}
+    for d in {w.parent for w in wanted}:
+        ignore = d / ".gitignore"
+        if not (ignore.exists() and "Staged by scripts/fetch-blobs.py" in ignore.read_text()):
+            continue
+        for f in d.iterdir():
+            if f.is_file() and f.name != ".gitignore" and f.resolve() not in wanted:
+                f.unlink()
+                log(f"{name}: removed {f.relative_to(pkg)} (no longer in the manifest)")
 
 
 def main():
