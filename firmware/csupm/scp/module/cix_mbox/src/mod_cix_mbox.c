@@ -108,6 +108,20 @@ static int cix_mbox_process_bind_request(fwk_id_t source_id, fwk_id_t target_id,
 	return FWK_SUCCESS;
 }
 
+/*
+ * A p2a mailbox starts free for the PM to send in, as CIX's ipc_arbiter
+ * leaves it (the transport module initialises only the a2p ones, from
+ * the agent's side of the protocol): SMT header words reserved, status
+ * (free), reserved, flags, length, message header, all zero but status.
+ */
+static void init_p2a(unsigned int m)
+{
+	REG32(MBOX_DATA(m, 0)) = 0;
+	REG32(MBOX_DATA(m, 1)) = 1;
+	for (unsigned int w = 2; w < 8; w++)
+		REG32(MBOX_DATA(m, w)) = 0;
+}
+
 /* Once every element is started: route the a2p mailboxes to the PM */
 static int cix_mbox_start(fwk_id_t id)
 {
@@ -117,8 +131,12 @@ static int cix_mbox_start(fwk_id_t id)
 	if (!fwk_id_is_type(id, FWK_ID_TYPE_MODULE))
 		return FWK_SUCCESS;
 	for (unsigned int i = 0; i < cix_mbox.count; i++) {
-		if (cix_mbox.ctx[i].bound && cix_mbox.ctx[i].config->from_ap)
+		if (!cix_mbox.ctx[i].bound)
+			continue;
+		if (cix_mbox.ctx[i].config->from_ap)
 			sources |= BIT(cix_mbox.ctx[i].config->mailbox);
+		else
+			init_p2a(cix_mbox.ctx[i].config->mailbox);
 	}
 	status = fwk_interrupt_set_isr(IRQ_MBOX, mbox_isr);
 	if (status != FWK_SUCCESS)

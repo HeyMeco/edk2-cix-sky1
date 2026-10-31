@@ -168,6 +168,16 @@ void pll_policy_dump_settings(uint32_t pll_idx);
 uint32_t pll_policy_num_to_base(uint32_t pll_num);
 uint32_t pll_policy_num_to_enum_idx(uint32_t pll_num);
 const char * pll_policy_num_to_name(uint32_t pll_num);
+/* functions CIX's DWARF does not describe */
+uint32_t clk_tree_nodes_num(void);		/* clk_tree.c */
+uint32_t pll_ctrl_get_state(void *pll_base);	/* clk_port.c: 1 if enabled */
+bool is_smn_space(uint32_t addr);
+bool tolerance_equal(uint32_t a, uint32_t b);
+uint32_t get_c_count(void);
+
+/* PLLs go through the PLL policy (pll_policy.c); off while clk_nodes_init runs */
+extern bool g_enable_pll_policy;
+
 /* --- what the clock code uses from elsewhere ----------------------------- */
 
 /* SoC registers by PM address (CIX's soc_reg_access.c) */
@@ -205,6 +215,7 @@ typedef enum {
 	HMS_ST_MAX = 6,
 } SS_HSM_STATE;
 SS_HSM_STATE ss_hsm_get(void);
+extern SS_HSM_STATE pm_ss_state;	/* main moves it through the phases */
 
 /* Hooks into other parts of the PM (no-ops until those parts are here) */
 bool perf_soc_idle_switch_get_enable(void);

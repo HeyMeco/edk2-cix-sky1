@@ -76,7 +76,11 @@ bool tolerance_equal(uint32_t a, uint32_t b)
 
 uint8_t u_misc_u32BitCount(uint32_t d)
 {
-	return (uint8_t)__builtin_popcount(d);
+	uint8_t n = 0;
+
+	for (; d; d &= d - 1)
+		n++;
+	return n;
 }
 
 uint8_t u_misc_u64BitCount(uint64_t d)
@@ -90,7 +94,11 @@ uint8_t u_misc_u32lowestOneBit(uint32_t d, uint32_t startPos)
 	d >>= startPos;
 	if (d == 0)
 		return 128;
-	return (uint8_t)(__builtin_ctz(d) + startPos);
+	while (!(d & 1)) {
+		d >>= 1;
+		startPos++;
+	}
+	return (uint8_t)startPos;
 }
 
 /* --- trees (u_tree.c) ------------------------------------------------------ */

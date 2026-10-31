@@ -28,10 +28,17 @@ void *memmove(void *dst, const void *src, size_t n)
 	return dst;
 }
 
+/* Word stores where it can: the SCMI shared memory is mailbox registers */
 void *memset(void *dst, int c, size_t n)
 {
 	uint8_t *d = dst;
 
+	if (((uintptr_t)d & 3) == 0) {
+		uint32_t w = (uint8_t)c * 0x01010101u;
+
+		for (; n >= 4; n -= 4, d += 4)
+			*(volatile uint32_t *)d = w;
+	}
 	while (n--)
 		*d++ = (uint8_t)c;
 	return dst;
