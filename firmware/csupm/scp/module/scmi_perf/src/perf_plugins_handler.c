@@ -96,9 +96,10 @@ fwk_id_t perf_plugins_get_dependency_id(unsigned int dom_idx)
     return perf_plugins_ctx.dep_id_table[dom_idx];
 }
 
+/* CSU_PM (CIX): equal limits are valid (upstream: max > min) */
 static inline bool are_limits_valid(uint32_t min, uint32_t max)
 {
-    return (max > min);
+    return (max >= min);
 }
 
 static int plugin_set_limits(struct plugin_limits_req *data)
@@ -234,6 +235,9 @@ static void plugins_policy_sync_level_limits(
             if (adj_max_lim_full_table[i] < dev_ctx->lmax) {
                 dev_ctx->lmax = adj_max_lim_full_table[i];
             }
+
+            /* CSU_PM (CIX): and the level the plugin left */
+            dev_ctx->max = perf_plugins_ctx.full_perf_table.level[i];
 
             write_back_adj_values(dev_ctx, i);
         }
@@ -407,7 +411,12 @@ static void store_and_aggregate(struct fc_perf_update *fc_update)
     }
 }
 
-void perf_plugins_handler_update(
+/*
+ * CSU_PM (CIX): the first plugin that does not answer FWK_SUCCESS ends the
+ * update, its status returned (FWK_PENDING: the plugin applies the levels
+ * itself); upstream goes on with the next plugin.
+ */
+int perf_plugins_handler_update(
     unsigned int perf_dom_idx,
     struct fc_perf_update *fc_update)
 {
@@ -452,15 +461,20 @@ void perf_plugins_handler_update(
             api = perf_plugins_ctx.plugins_api_table[i];
             status = api->update(&perf_snapshot);
             if (status != FWK_SUCCESS) {
-                FWK_LOG_TRACE(
-                    "[P-Handler] Update: Plugin%u returned error %i",
-                    i,
-                    status);
+                if (status != FWK_PENDING) {
+                    FWK_LOG_TRACE(
+                        "[P-Handler] Update: Plugin%u returned error %i",
+                        i,
+                        status);
+                }
+                return status;
             }
 
             plugins_policy_sync_level_limits(dev_ctx, dom_type);
         }
     }
+
+    return FWK_SUCCESS;
 }
 
 void perf_plugins_handler_get(

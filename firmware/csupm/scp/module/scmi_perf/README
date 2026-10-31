@@ -1,3 +1,30 @@
-SCP-firmware v2.11.0's scmi_perf module with CIX's changes to it (in progress:
-see the CSU_PM README).  Upstream's licence: BSD-3-Clause
-(../../../SCP-firmware/license.md).
+SCP-firmware v2.11.0's scmi_perf module (with its fast channels and
+plugins handler) and CIX's changes to it:
+- protocol version 3.0; fast-channel rate limit at least 1 ms;
+- configuration: perf_doms_enabled, the domains SCMI drives (a level set
+  on another is answered SUCCESS and ignored), and tdp_opp_run, per DxS
+  domain the frequency the DPM allows under the TDP;
+- perf_set_level: a level locked by locked_perf is set as it is; otherwise
+  it is capped to the highest OPP within the TDP frequency
+  (find_opp_for_freq) and checked against the locked limits if any; the
+  level set is written to the domain's level-get fast channel;
+- the fast-channel pass (fast_channels_process): domains from the third on
+  among those SCMI drives, with or without fast channels; a plugin that
+  does not answer FWK_SUCCESS ends it (sky1soc_perf answers FWK_PENDING
+  and applies the CPU levels itself); levels set go to the level-get fast
+  channels; one pass is scheduled at a time unless forced
+  (fast_channel_callback), sky1soc_perf can schedule one;
+- on_fast_channel_interrupt (CIX's mailbox handler calls it when the AP
+  writes a fast channel): the GPU's level is applied at once, both GPU
+  clocks from CIX's frequency pairs (search_for_freq), then a pass;
+- on_tdp_notify and the TDP_NOTIFICATION event: domains whose TDP
+  frequency changed are set again;
+- sky1soc_perf may bind the DVFS update API; a missing sustained OPP
+  (dvfs: FWK_E_RANGE) leaves level 0 in the fast channels;
+- the plugins handler: equal limits are valid, the full-view sync takes
+  the plugin's level, and update returns the first plugin status that is
+  not FWK_SUCCESS (and stops there).
+Upstream's fast-channel pass for builds without the plugins handler is
+left out (CIX's build has the handler).
+Everything else is upstream's (BSD-3-Clause, see
+../../../SCP-firmware/license.md).

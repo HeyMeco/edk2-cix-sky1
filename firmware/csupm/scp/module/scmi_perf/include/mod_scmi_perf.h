@@ -14,6 +14,7 @@
 #include <fwk_id.h>
 #include <fwk_macros.h>
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -568,6 +569,27 @@ struct perf_plugins_handler_api {
      */
     int (*plugin_set_limits)(struct plugin_limits_req *data);
 };
+
+/*!
+ * \brief CSU_PM (CIX): the AP wrote a fast channel (the mailbox doorbell's
+ *      fast-channel bits on CIX's ipc_arbiter): the GPU's level is applied at
+ *      once, the others on the fast-channel pass this schedules.
+ *
+ * \param force_event Schedule a pass even if one is pending.
+ */
+void on_fast_channel_interrupt(bool force_event);
+
+/*!
+ * \brief CSU_PM (CIX): the DPM changed the TDP frequencies of the DVFS
+ *      domains in the bitmap: their levels are set again, capped.
+ */
+void on_tdp_notify(uint32_t dvfs_elem_bitmap);
+
+/*!
+ * \brief CSU_PM (CIX's config_scmi_perf.c): the performance domains SCMI
+ *      exposes (mod_scmi_perf_config.perf_doms_enabled).
+ */
+void override_config_scmi_perf(uint32_t perf_doms_enabled);
 
 /*!
  * \}

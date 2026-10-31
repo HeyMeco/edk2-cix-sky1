@@ -1,0 +1,6 @@
+SCP-firmware v2.11.0's psu module with CIX's change to it: while an
+element is busy setting its state or voltage, a request for the same
+setting succeeds at once and a get returns the value being set (CIX's
+mod_psu_element_ctx.busy_with and target_state); upstream answers
+FWK_E_BUSY.  Everything else is upstream's (BSD-3-Clause, see
+../../../SCP-firmware/license.md).

@@ -26,12 +26,14 @@ SCP		:= SCP-firmware
 SCP_GEN		:= $(O)/scp/gen
 SCP_MODULES	:= xt_timer timer cix_mbox transport scmi rcsu power_domain scmi_power_domain \
 		   scmi_system_power soc_sensor sensor scmi_sensor \
-		   resource_perms clkpll clock scmi_clock
+		   resource_perms clkpll clock dvfs psu pmic sky1soc_perf locked_perf \
+		   scmi_clock scmi_perf
 SCP_FWK		:= fwk_arch fwk_core fwk_delayed_resp fwk_dlist fwk_id fwk_interrupt \
 		   fwk_io fwk_log fwk_mm fwk_module fwk_notification fwk_ring fwk_slist \
 		   fwk_status fwk_string fwk_time assert
 SCP_DEFS	:= -DBUILD_HAS_SUB_SYSTEM_MODE -DBUILD_HAS_NOTIFICATION -DBUILD_HAS_SCMI_NOTIFICATIONS \
-		   -DBUILD_HAS_BASE_PROTOCOL -DFWK_LOG_LEVEL=FWK_LOG_LEVEL_CRIT \
+		   -DBUILD_HAS_BASE_PROTOCOL -DBUILD_HAS_SCMI_PERF_FAST_CHANNELS \
+		   -DBUILD_HAS_SCMI_PERF_PLUGIN_HANDLER -DFWK_LOG_LEVEL=FWK_LOG_LEVEL_CRIT \
 		   '-DBUILD_VERSION_DESCRIBE_STRING="SCP-firmware v2.11.0"' \
 		   -DBUILD_VERSION_MAJOR=2 -DBUILD_VERSION_MINOR=11 -DBUILD_VERSION_PATCH=0 \
 		   $(foreach m,$(SCP_MODULES),-DBUILD_HAS_MOD_$(shell echo $(m) | tr a-z A-Z)=1)
@@ -51,10 +53,11 @@ SCP_CFLAGS := $(filter-out -Wextra -Werror,$(CFLAGS)) -Os -Iinclude -Isrc $(SCP_
 # upstream modules kept with a change (scp/module/*/README) build as upstream's
 $(O)/scp/module/scmi_clock/%: FW_CFLAGS = $(SCP_CFLAGS)
 $(O)/scp/module/dvfs/%: FW_CFLAGS = $(SCP_CFLAGS)
+$(O)/scp/module/psu/%: FW_CFLAGS = $(SCP_CFLAGS)
 $(O)/scp/module/scmi_perf/%: FW_CFLAGS = $(SCP_CFLAGS)
 
 SRCS	:= arch/vectors.S src/main.c src/lcru.c src/uart.c src/i2c.c src/pmic.c src/soc.c \
-	   src/pmu.c src/mbox.c src/power.c src/pvt.c src/plat.c $(wildcard src/clk/*.c) lib/string.c lib/malloc.c lib/printf.c lib/libgcc.c $(SCP_SRCS)
+	   src/pmu.c src/mbox.c src/power.c src/pvt.c src/plat.c $(wildcard src/clk/*.c) $(wildcard src/dpm/*.c) lib/string.c lib/malloc.c lib/printf.c lib/libgcc.c $(SCP_SRCS)
 OBJS	:= $(patsubst %,$(O)/%.o,$(SRCS)) $(SCP_GEN)/fwk_module_list.c.o
 
 all: $(O)/csupm.xbin
@@ -69,7 +72,7 @@ $(SCP_GEN)/fwk_module_idx.h $(SCP_GEN)/fwk_module_list.c: scp/modules.py Makefil
 	@mkdir -p $(SCP_GEN)
 	@python3 scp/modules.py $(SCP_GEN) $(SCP_MODULES)
 
-$(O)/%.c.o: %.c $(CORE) $(wildcard include/*.h scp/include/*.h src/clk/*.h scp/module/*/include/*.h scp/module/*/include/*/*.h) $(SCP_GEN)/fwk_module_idx.h Makefile
+$(O)/%.c.o: %.c $(CORE) $(wildcard include/*.h scp/include/*.h src/clk/*.h src/dpm/*.h scp/module/*/include/*.h scp/module/*/include/*/*.h) $(SCP_GEN)/fwk_module_idx.h Makefile
 	@mkdir -p $(dir $@)
 	@echo "  CC      $<"
 	@$(CC) $(FW_CFLAGS) -c -o $@ $<

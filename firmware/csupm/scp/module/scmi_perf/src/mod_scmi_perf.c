@@ -11,6 +11,7 @@
 #include <internal/scmi_perf.h>
 
 #include <mod_dvfs.h>
+#include <mod_locked_perf.h>
 #include <mod_scmi.h>
 #include <mod_scmi_perf.h>
 #ifdef BUILD_HAS_SCMI_PERF_PLUGIN_HANDLER
@@ -32,6 +33,9 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+
+#include "clk/clk.h"
+#include "scp_dpm.h"
 
 #ifdef BUILD_HAS_MOD_RESOURCE_PERMS
 #    include <mod_resource_perms.h>
@@ -229,8 +233,16 @@ enum scmi_perf_event_idx {
 #ifdef BUILD_HAS_SCMI_PERF_FAST_CHANNELS
     SCMI_PERF_EVENT_IDX_FAST_CHANNELS_PROCESS,
 #endif
+    /* CSU_PM (CIX): TDP frequencies changed (on_tdp_notify) */
+    SCMI_PERF_EVENT_IDX_TDP_NOTIFICATION,
     SCMI_PERF_EVENT_IDX_COUNT,
 };
+
+/* CSU_PM (CIX): a fast-channel pass is scheduled */
+static volatile bool fc_event_sched;
+
+/* CSU_PM (CIX): DVFS domains whose TDP frequency changed, to set again */
+static volatile uint32_t tdp_sched_domain;
 
 struct scmi_perf_event_parameters {
     fwk_id_t domain_id;
@@ -351,28 +363,105 @@ static int find_opp_for_level(
     return FWK_E_RANGE;
 }
 
+/*
+ * CSU_PM (CIX): the level of the highest OPP whose frequency (kHz) is at or
+ * below freq, or of the lowest OPP if none is.
+ */
+static int find_opp_for_freq(
+    struct scmi_perf_domain_ctx *domain_ctx,
+    uint32_t freq,
+    uint32_t *level)
+{
+    struct perf_opp_table *opp_table = domain_ctx->opp_table;
+    size_t i;
+
+    for (i = 0; i < opp_table->opp_count; i++) {
+        if (opp_table->opps[i].frequency >= freq) {
+            break;
+        }
+    }
+
+    if (i < opp_table->opp_count) {
+        if (opp_table->opps[i].frequency == freq) {
+            i++;
+        } else if (i == 0) {
+            i = 1;
+        }
+    }
+
+    *level = opp_table->opps[i - 1].level;
+
+    return FWK_SUCCESS;
+}
+
+/*
+ * CSU_PM (CIX): a locked level (locked_perf) is set as it is; otherwise the
+ * level is capped by the DPM's TDP frequency and checked against the
+ * locked limits, or the domain's.  The level set is written to the
+ * domain's level-get fast channel.
+ */
 static int perf_set_level(
     fwk_id_t domain_id,
     unsigned int agent_id,
     uint32_t perf_level)
 {
     struct scmi_perf_domain_ctx *domain_ctx;
+    struct mod_locked_perf_domain locked = { 0 };
+    const struct mod_scmi_perf_domain_config *domain;
+    unsigned int idx = fwk_id_get_element_idx(domain_id);
+    uint32_t min, max, tdp_freq, tdp_level;
+    bool is_locked;
     int status;
 
-    domain_ctx = get_ctx(domain_id);
+    is_locked = mod_locked_perf_get(idx, &locked);
+    if (!is_locked || (locked.level == 0)) {
+        domain_ctx = &scmi_perf_ctx.domain_ctx_table[idx];
 
-    status = find_opp_for_level(
-        domain_ctx, &perf_level, scmi_perf_ctx.config->approximate_level);
-    if (status != FWK_SUCCESS) {
-        return status;
+        status = find_opp_for_level(
+            domain_ctx, &perf_level, scmi_perf_ctx.config->approximate_level);
+        if (status != FWK_SUCCESS) {
+            return status;
+        }
+
+        if (is_locked && (locked.min_limit != 0) && (locked.max_limit != 0)) {
+            min = locked.min_limit;
+            max = locked.max_limit;
+        } else {
+            min = domain_ctx->level_limits.minimum;
+            max = domain_ctx->level_limits.maximum;
+        }
+
+        if (idx < FWK_ARRAY_SIZE(dpm_dvfs_elem_to_dxs_map)) {
+            tdp_freq = scmi_perf_ctx.config
+                           ->tdp_opp_run[dpm_dvfs_elem_to_dxs_map[idx]];
+            if (tdp_freq != 0) {
+                find_opp_for_freq(domain_ctx, tdp_freq, &tdp_level);
+                if (tdp_level < perf_level) {
+                    perf_level = tdp_level;
+                }
+            }
+        }
+
+        if ((perf_level > max) || (perf_level < min)) {
+            return FWK_E_RANGE;
+        }
+    } else {
+        perf_level = locked.level;
     }
 
-    if ((perf_level < domain_ctx->level_limits.minimum) ||
-        (perf_level > domain_ctx->level_limits.maximum)) {
-        return FWK_E_RANGE;
+    status = scmi_perf_ctx.dvfs_api->set_level(domain_id, agent_id, perf_level);
+    if ((status == FWK_SUCCESS) || (status == FWK_PENDING)) {
+        fwk_assert(idx < scmi_perf_ctx.domain_count);
+        domain = &(*scmi_perf_ctx.config->domains)[idx];
+        if ((domain->fast_channels_addr_scp != NULL) &&
+            (domain->fast_channels_addr_scp
+                 [MOD_SCMI_PERF_FAST_CHANNEL_LEVEL_GET] != 0)) {
+            *(volatile uint32_t *)(uintptr_t)domain->fast_channels_addr_scp
+                [MOD_SCMI_PERF_FAST_CHANNEL_LEVEL_GET] = perf_level;
+        }
     }
 
-    return scmi_perf_ctx.dvfs_api->set_level(domain_id, agent_id, perf_level);
+    return status;
 }
 
 static int validate_new_limits(
@@ -989,6 +1078,15 @@ static int scmi_perf_level_set_handler(fwk_id_t service_id,
         goto exit;
     }
 
+    /* CSU_PM (CIX): a domain SCMI does not drive takes any level, unchanged */
+    if ((scmi_perf_ctx.config->perf_doms_enabled &
+         (UINT32_C(1) << (parameters->domain_id & 31))) == 0) {
+        status = FWK_SUCCESS;
+        return_values.status = (int32_t)SCMI_SUCCESS;
+
+        goto exit;
+    }
+
     status = scmi_perf_ctx.scmi_api->get_agent_id(service_id, &agent_id);
     if (status != FWK_SUCCESS) {
         goto exit;
@@ -1337,6 +1435,9 @@ exit:
 
 /*
  * Fast Channel Polling
+ *
+ * CSU_PM (CIX): one pass scheduled at a time (fc_event_sched, cleared when
+ * it runs) unless param (force) asks for another.
  */
 static void fast_channel_callback(uintptr_t param)
 {
@@ -1349,145 +1450,217 @@ static void fast_channel_callback(uintptr_t param)
         .target_id = FWK_ID_MODULE_INIT(FWK_MODULE_IDX_SCMI_PERF),
     };
 
+    if ((param == 0) && fc_event_sched) {
+        return;
+    }
+
     status = fwk_put_event(&event);
     if (status != FWK_SUCCESS) {
         FWK_LOG_TRACE("[SCMI-PERF] Error creating FC process event.");
+        return;
     }
+
+    fc_event_sched = true;
+}
+
+/*
+ * CSU_PM (CIX): the AP wrote a fast channel.  The GPU (core and top
+ * domains) is not left to the pass: its level, from the core's level-set
+ * fast channel, is applied at once, both clocks from CIX's table of
+ * frequency pairs, unless a pass of this is already running.
+ */
+void on_fast_channel_interrupt(bool force_event)
+{
+    static bool gpu_dfs_lock;
+    static uint32_t applied_opp_level;
+    /* the GPU core's domain (the first) */
+    const struct mod_scmi_perf_domain_config *gpu =
+        &(*scmi_perf_ctx.config->domains)[0];
+    uint32_t specific_khz, specific_mv, level;
+    uint32_t core_freq = 0, top_level = 0, top_freq = 0;
+    bool specific, found, core_ok, top_ok;
+
+    if (gpu->fast_channels_addr_scp == NULL) {
+        fast_channel_callback((uintptr_t)force_event);
+        return;
+    }
+
+    specific = get_specific_operating_point(&specific_khz, &specific_mv);
+    level = *(volatile uint32_t *)(uintptr_t)gpu->fast_channels_addr_scp
+        [MOD_SCMI_PERF_FAST_CHANNEL_LEVEL_SET];
+
+    if ((specific || (level != applied_opp_level)) && !gpu_dfs_lock) {
+        gpu_dfs_lock = true;
+        found = search_for_freq(level, &core_freq, &top_level, &top_freq);
+        if (specific || found) {
+            if (specific) {
+                core_freq = specific_khz / 1000;
+                top_freq = core_freq;
+            }
+            core_ok = clk_api_set_freq(
+                &((CLK_TREE_STRUCT *)clk_nodes_get(CLK_TREE_GPU_CORE_CLK))
+                     ->clk_tree_node,
+                core_freq * 1000000);
+            top_ok = clk_api_set_freq(
+                &((CLK_TREE_STRUCT *)clk_nodes_get(CLK_TREE_GPU_TOP_CLK))
+                     ->clk_tree_node,
+                top_freq * 1000000);
+            if (core_ok && top_ok) {
+                applied_opp_level = specific ? specific_khz : level;
+                *(volatile uint32_t *)(uintptr_t)gpu->fast_channels_addr_scp
+                    [MOD_SCMI_PERF_FAST_CHANNEL_LEVEL_GET] = level;
+                pwr_notify_gpu_level(level);
+            }
+        }
+        gpu_dfs_lock = false;
+    }
+
+    fast_channel_callback((uintptr_t)force_event);
+}
+
+/*
+ * CSU_PM (CIX): the DPM changed the TDP frequencies of these DVFS domains;
+ * one event sets them again (scmi_perf_process_tdp).
+ */
+void on_tdp_notify(uint32_t dvfs_elem_bitmap)
+{
+    static struct fwk_event event = {
+        .source_id = FWK_ID_MODULE_INIT(FWK_MODULE_IDX_SCMI_PERF),
+        .target_id = FWK_ID_MODULE_INIT(FWK_MODULE_IDX_SCMI_PERF),
+        .id = FWK_ID_EVENT_INIT(
+            FWK_MODULE_IDX_SCMI_PERF, SCMI_PERF_EVENT_IDX_TDP_NOTIFICATION),
+    };
+
+    if ((tdp_sched_domain == 0) && (fwk_put_event(&event) != FWK_SUCCESS)) {
+        return;
+    }
+
+    tdp_sched_domain |= dvfs_elem_bitmap;
+}
+
+/*
+ * CSU_PM (CIX): the domains whose TDP frequency changed go to their current
+ * level again, capped to it (perf_set_level).
+ */
+static void scmi_perf_process_tdp(void)
+{
+    uint32_t pending = tdp_sched_domain;
+    uint32_t freq, level = 0;
+    fwk_id_t dep_id;
+    unsigned int i;
+
+    tdp_sched_domain = 0;
+
+    for (i = 0; (i < FWK_ARRAY_SIZE(dpm_dvfs_elem_to_dxs_map)) && (pending != 0);
+         i++, pending >>= 1) {
+        if ((pending & 1) == 0) {
+            continue;
+        }
+
+        freq = scmi_perf_ctx.config->tdp_opp_run[dpm_dvfs_elem_to_dxs_map[i]];
+        if (freq == 0) {
+            continue;
+        }
+
+        dep_id = get_dependency_id(i);
+        find_opp_for_freq(
+            &scmi_perf_ctx.domain_ctx_table[fwk_id_get_element_idx(dep_id)],
+            freq,
+            &level);
+        (void)perf_set_level(dep_id, 0, level);
+    }
+}
+
+/*
+ * CSU_PM (CIX): only domains from the third on (the GPU's are applied by
+ * on_fast_channel_interrupt) and among those SCMI drives (perf_doms_enabled)
+ * take part, with or without fast channels; a plugin that fails or answers
+ * FWK_PENDING (sky1soc_perf: it applies the levels itself) ends the pass;
+ * a level set goes to the domain's level-get fast channel.
+ */
+static bool fast_channel_domain(unsigned int i)
+{
+    return (i >= 2) &&
+        ((scmi_perf_ctx.config->perf_doms_enabled & (UINT32_C(1) << i)) != 0);
+}
+
+static void fast_channel_read(unsigned int i, struct fc_perf_update *update)
+{
+    const struct mod_scmi_perf_domain_config *domain =
+        &(*scmi_perf_ctx.config->domains)[i];
+    struct scmi_perf_domain_ctx *domain_ctx = &scmi_perf_ctx.domain_ctx_table[i];
+    struct mod_scmi_perf_fast_channel_limit *set_limit = NULL;
+    uint32_t *set_level = NULL;
+
+    if (domain->fast_channels_addr_scp != NULL) {
+        set_limit = get_fc_set_limit_addr(domain);
+        set_level = get_fc_set_level_addr(domain);
+    }
+
+    *update = (struct fc_perf_update){
+        .domain_id = get_dependency_id(i),
+        .level = (set_level != NULL) ? *set_level : domain_ctx->curr_level,
+        .max_limit = (set_limit != NULL) ? set_limit->range_max :
+                                           domain_ctx->level_limits.maximum,
+        .min_limit = (set_limit != NULL) ? set_limit->range_min :
+                                           domain_ctx->level_limits.minimum,
+    };
 }
 
 static void fast_channels_process(void)
 {
     const struct mod_scmi_perf_domain_config *domain;
-    struct mod_scmi_perf_fast_channel_limit *set_limit;
-    struct scmi_perf_domain_ctx *domain_ctx;
-    uint32_t *set_level;
-    uint32_t tlevel, tmax, tmin;
+    struct fc_perf_update update;
+    uint32_t tlevel;
     unsigned int i;
     int status;
 
-#    ifdef BUILD_HAS_SCMI_PERF_PLUGIN_HANDLER
-    struct fc_perf_update update;
+    fc_event_sched = false;
 
     for (i = 0; i < scmi_perf_ctx.domain_count; i++) {
-        domain = &(*scmi_perf_ctx.config->domains)[i];
-        if (domain->fast_channels_addr_scp != NULL) {
-            set_limit = get_fc_set_limit_addr(domain);
-            set_level = get_fc_set_level_addr(domain);
+        if (!fast_channel_domain(i)) {
+            continue;
+        }
 
-            domain_ctx = &scmi_perf_ctx.domain_ctx_table[i];
+        fast_channel_read(i, &update);
 
-            if (set_limit != NULL) {
-                tmax = set_limit->range_max;
-                tmin = set_limit->range_min;
-            } else {
-                tmax = domain_ctx->level_limits.maximum;
-                tmin = domain_ctx->level_limits.minimum;
-            }
-
-            tlevel = (set_level != NULL) ? *set_level : domain_ctx->curr_level;
-
-            update = (struct fc_perf_update){
-                .domain_id = get_dependency_id(i),
-                .level = tlevel,
-                .max_limit = tmax,
-                .min_limit = tmin,
-            };
-
-            perf_plugins_handler_update(i, &update);
+        if (perf_plugins_handler_update(i, &update) != FWK_SUCCESS) {
+            return;
         }
     }
 
     for (i = 0; i < scmi_perf_ctx.domain_count; i++) {
+        if (!fast_channel_domain(i)) {
+            continue;
+        }
+
+        fast_channel_read(i, &update);
+
+        perf_plugins_handler_get(i, &update);
+
+        tlevel = update.level;
+
+        perf_eval_performance(
+            FWK_ID_ELEMENT(FWK_MODULE_IDX_SCMI_PERF, i),
+            &((struct mod_scmi_perf_level_limits){
+                .minimum = update.adj_min_limit,
+                .maximum = update.adj_max_limit,
+            }),
+            &tlevel);
+
+        status = scmi_perf_ctx.dvfs_api->set_level(
+            get_dependency_id(i), 0, tlevel);
+        if (status != FWK_SUCCESS) {
+            FWK_LOG_TRACE("[SCMI-PERF] %s @%d", __func__, __LINE__);
+            continue;
+        }
+
         domain = &(*scmi_perf_ctx.config->domains)[i];
-        if (domain->fast_channels_addr_scp != NULL) {
-            set_limit = get_fc_set_limit_addr(domain);
-            set_level = get_fc_set_level_addr(domain);
-
-            domain_ctx = &scmi_perf_ctx.domain_ctx_table[i];
-
-            if (set_limit != NULL) {
-                tmax = set_limit->range_max;
-                tmin = set_limit->range_min;
-            } else {
-                tmax = domain_ctx->level_limits.maximum;
-                tmin = domain_ctx->level_limits.minimum;
-            }
-
-            tlevel = (set_level != NULL) ? *set_level : domain_ctx->curr_level;
-
-            update = (struct fc_perf_update){
-                .domain_id = get_dependency_id(i),
-                .level = tlevel,
-                .max_limit = tmax,
-                .min_limit = tmin,
-            };
-
-            perf_plugins_handler_get(i, &update);
-
-            tlevel = update.level;
-            tmax = update.adj_max_limit;
-            tmin = update.adj_min_limit;
-
-            perf_eval_performance(
-                FWK_ID_ELEMENT(FWK_MODULE_IDX_SCMI_PERF, i),
-                &((struct mod_scmi_perf_level_limits){
-                    .minimum = tmin,
-                    .maximum = tmax,
-                }),
-                &tlevel);
-
-            status = scmi_perf_ctx.dvfs_api->set_level(
-                get_dependency_id(i), 0, tlevel);
-            if (status != FWK_SUCCESS) {
-                FWK_LOG_TRACE("[SCMI-PERF] %s @%d", __func__, __LINE__);
-            }
-
-#    else
-
-    for (i = 0; i < scmi_perf_ctx.domain_count; i++) {
-        domain = &(*scmi_perf_ctx.config->domains)[i];
-        if (domain->fast_channels_addr_scp != NULL) {
-            set_limit = get_fc_set_limit_addr(domain);
-            set_level = get_fc_set_level_addr(domain);
-
-            domain_ctx = &scmi_perf_ctx.domain_ctx_table[i];
-
-            if (set_limit != NULL) {
-                tmax = set_limit->range_max;
-                tmin = set_limit->range_min;
-            } else {
-                tmax = domain_ctx->level_limits.maximum;
-                tmin = domain_ctx->level_limits.minimum;
-            }
-
-            tlevel = (set_level != NULL) ? *set_level : domain_ctx->curr_level;
-
-            /*
-             * Check for set_level
-             */
-            if (set_level != NULL && tlevel > 0) {
-                status = perf_set_level(get_dependency_id(i), 0, tlevel);
-                if (status != FWK_SUCCESS) {
-                    FWK_LOG_TRACE("[SCMI-PERF] %s @%d", __func__, __LINE__);
-                }
-            }
-            if (set_limit != NULL) {
-                if ((tmax == 0) && (tmin == 0)) {
-                    continue;
-                }
-                status = perf_set_limits(
-                    get_dependency_id(i),
-                    0,
-                    &((struct mod_scmi_perf_level_limits){
-                        .minimum = tmin,
-                        .maximum = tmax,
-                    }));
-                if (status != FWK_SUCCESS) {
-                    FWK_LOG_TRACE("[SCMI-PERF] %s @%d", __func__, __LINE__);
-                }
-            }
-
-#    endif
+        if ((domain->fast_channels_addr_scp != NULL) &&
+            (domain->fast_channels_addr_scp
+                 [MOD_SCMI_PERF_FAST_CHANNEL_LEVEL_GET] != 0)) {
+            *(volatile uint32_t *)(uintptr_t)domain->fast_channels_addr_scp
+                [MOD_SCMI_PERF_FAST_CHANNEL_LEVEL_GET] = tlevel;
         }
     }
 }
@@ -1943,8 +2116,12 @@ static int scmi_perf_process_bind_request(fwk_id_t source_id,
         break;
 
     case MOD_SCMI_PERF_DVFS_UPDATE_API:
-        if (!fwk_id_is_equal(source_id, fwk_module_id_dvfs)) {
-            /* Only DVFS can use this API */
+        /* CSU_PM (CIX): DVFS and sky1soc_perf can use this API */
+        if (!fwk_id_is_equal(source_id, fwk_module_id_dvfs)
+#ifdef BUILD_HAS_MOD_SKY1SOC_PERF
+            && !fwk_id_is_equal(source_id, fwk_module_id_sky1soc_perf)
+#endif
+        ) {
             return FWK_E_ACCESS;
         }
 
@@ -2145,7 +2322,10 @@ static int scmi_perf_start(fwk_id_t id)
                         (j == MOD_SCMI_PERF_FAST_CHANNEL_LEVEL_GET)) {
                         status = scmi_perf_ctx.dvfs_api->get_sustained_opp(
                             get_dependency_id(i), &opp);
-                        if (status != FWK_SUCCESS) {
+                        /* CSU_PM (CIX): no sustained OPP, level 0 */
+                        if (status == FWK_E_RANGE) {
+                            opp.level = 0;
+                        } else if (status != FWK_SUCCESS) {
                             return status;
                         }
 
@@ -2290,6 +2470,10 @@ static int process_internal_event(const struct fwk_event *event)
         status = FWK_SUCCESS;
         break;
 #endif
+    case SCMI_PERF_EVENT_IDX_TDP_NOTIFICATION:
+        scmi_perf_process_tdp();
+        status = FWK_SUCCESS;
+        break;
     default:
         status = FWK_E_PARAM;
         break;
@@ -2318,6 +2502,19 @@ static int scmi_perf_process_event(const struct fwk_event *event,
         fwk_id_get_module_idx(fwk_module_id_scmi_perf)) {
         return process_internal_event(event);
     }
+
+#ifdef BUILD_HAS_MOD_SKY1SOC_PERF
+    /* CSU_PM (CIX): a fast-channel pass scheduled by sky1soc_perf */
+    if ((fwk_id_get_module_idx(event->source_id) ==
+         fwk_id_get_module_idx(fwk_module_id_sky1soc_perf)) &&
+        (fwk_id_get_module_idx(event->target_id) ==
+         fwk_id_get_module_idx(fwk_module_id_scmi_perf)) &&
+        (fwk_id_get_event_idx(event->id) ==
+         SCMI_PERF_EVENT_IDX_FAST_CHANNELS_PROCESS)) {
+        fast_channels_process();
+        return FWK_SUCCESS;
+    }
+#endif
 
     return FWK_E_PARAM;
 }

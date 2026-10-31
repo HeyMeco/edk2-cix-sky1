@@ -13,7 +13,13 @@ assertion.  Compared:
 * the final contents of the shared memory it writes (the hub window at
   0x60000000: PCC tables, logs);
 * with --scmi, the answers to the same SCMI commands on every channel
-  (base protocol discovery, then each protocol's attributes and its domains).
+  (base protocol discovery, then each protocol's attributes and its domains),
+  then performance levels and limits set on the OS's channel and read back
+  (each set followed by the same number of instructions run on both), and
+  levels written to the OS's performance fast channels (a write raises the
+  channel's bit in the mailbox status), the level-get channel read back;
+  and the I2C transfers and clock generator writes (PMIC voltages, PLLs)
+  the SCMI commands lead to.
 
 With CIX's image alone it prints what CIX's firmware does: the reference.
 The open image is asked the questions CIX's answers led to.  CIX's run is
@@ -40,9 +46,15 @@ CHANNELS = (0, 2, 4, 6)               # AP -> PM mailboxes with an SMT channel
 IGNORE_BLOCKS = {0xa0030000, 0xa0010000, 0xa0011000, 0xa0012000, 0xa0013000}
 IGNORE_RANGES = []
 MAX_DOMAINS = 8                       # per protocol, to keep the run short
+PERF_SET_DOMAINS = (0, 2, 3, 7)       # GPU core, little, big 0, DSU
+SETTLE = 400_000                      # instructions run after a level or limits set
+# the OS's performance fast channels: domain, offset in mailbox 0 (level
+# set) and mailbox 1 (level get); a write to channel c sets status bit 9 + c
+PERF_FC = ((0, 0x8c), (2, 0x94), (3, 0x98))
 # shared memory, compared by its final contents: the hub window
 # (CIX's _memmap_mem_sram_hub, DRAM and SRAM seen through a window)
 MEMORY = [(0x60000000, 0xa0000000, "hub window")]
+CGC = (0xa0060000, 0xa0070000)        # clock generator: PLLs, compared during SCMI
 
 
 def is_memory(addr):
@@ -79,6 +91,17 @@ def memory(soc):
 
 
 def ask(cpu, soc, chan, proto, msg, args=()):
+    if proto is None:                 # not a command
+        base = pm_emu.MBOX + chan * 0x10000
+        if msg == "fc":               # the AP writes a fast channel
+            off, value = args
+            soc.mem.write(base + off, 4, value)
+            soc.mbox[chan].ring(1 << (9 + (off - 0x8c) // 4))
+            return ("written", [])
+        if msg == "read":             # the AP reads a word of a mailbox
+            return (0, [soc.mem.read(pm_emu.MBOX + args[0], 4)])
+        cpu.run(msg)                  # let the PM run (a set completing)
+        return ("settled", [])
     try:
         return pm_emu.scmi(cpu, soc, proto, msg, args, mbox=chan, budget=3_000_000)
     except pm_emu.ScmiError as e:
@@ -119,6 +142,28 @@ def scmi_suite(cpu, soc):
                     q(chan, p, 6, (d,))
             elif p == 0x15:                             # sensor: descriptions
                 q(chan, p, 3, (0,))
+    # performance levels set on the OS's channel, from its first and last
+    # level, and read back; limits (CIX lets the OS set none) likewise
+    levels = {qn[3][0]: a[1] for qn, a in out
+              if qn[:3] == (0, 0x13, 4) and isinstance(a[0], int) and a[0] == 0 and a[1]}
+    for d in PERF_SET_DOMAINS:
+        w = levels.get(d, [])
+        lv = [w[1 + 3 * k] for k in range(min(w[0] & 0xfff, (len(w) - 1) // 3))] if w else []
+        for level in (lv[:1] + lv[-1:]) if lv else (1,):
+            q(0, 0x13, 7, (d, level))
+            q(0, None, SETTLE)
+            q(0, 0x13, 8, (d,))
+        if lv:
+            q(0, 0x13, 5, (d, lv[-1], lv[0]))
+            q(0, None, SETTLE)
+            q(0, 0x13, 6, (d,))
+    for d, off in PERF_FC:
+        w = levels.get(d, [])
+        lv = [w[1 + 3 * k] for k in range(min(w[0] & 0xfff, (len(w) - 1) // 3))] if w else []
+        for level in lv[:1] + lv[-1:]:
+            q(0, None, "fc", (off, level))
+            q(0, None, SETTLE)
+            q(0, None, "read", (0x10000 + off,))
     return out
 
 
@@ -129,11 +174,14 @@ def run(elf, questions=None, suite=False):
     r = {"name": Path(elf).name, "why": why, "insns": cpu.insns, "se": list(soc.se.log),
          "regs": dict(regs), "i2c": [w for _, w in soc.i2c_log], "memory": memory(soc),
          "backtrace": " < ".join(cpu.func(pc) for pc in cpu.backtrace(8)), "scmi": None}
+    n_i2c, n_writes = len(soc.i2c_log), len(cpu.writes)
     if questions is not None:
         r["scmi"] = [(qn, ask(cpu, soc, *qn[:3], qn[3]) if why == "idle" else None)
                      for qn, _ in questions]
     elif suite and why == "idle":
         r["scmi"] = scmi_suite(cpu, soc)
+    r["i2c_scmi"] = [w for _, w in soc.i2c_log[n_i2c:]]
+    r["cgc_scmi"] = [(a, v) for _, a, _, v in cpu.writes[n_writes:] if CGC[0] <= a < CGC[1]]
     return r
 
 
@@ -201,7 +249,12 @@ def main():
         same_n = 0
         for i, (qn, ans) in enumerate(answers[0]):
             chan, proto, msg, args = qn
-            line = f"ch{chan} {proto:#04x}/{msg}{list(args) if args else ''}: {fmt(ans)}"
+            if proto is None and msg != "read":
+                continue
+            if proto is None:
+                line = f"ch{chan} read {pm_emu.MBOX + args[0]:#x}: {fmt(ans)}"
+            else:
+                line = f"ch{chan} {proto:#04x}/{msg}{list(args) if args else ''}: {fmt(ans)}"
             if len(answers) == 2:
                 other = answers[1][i][1]
                 same = other == ans
@@ -211,10 +264,15 @@ def main():
                     print(f"{'ok  ' if same else 'FAIL'} {line}" + ("" if same else f" (open {fmt(other)})"))
             else:
                 print(line)
+        n = sum(qn[1] is not None or qn[2] == "read" for qn, _ in answers[0])
         if len(answers) == 2:
-            print(f"{same_n} of {len(answers[0])} SCMI answers the same")
+            print(f"{same_n} of {n} SCMI answers the same")
+            for key, what in (("i2c_scmi", "I2C transfers"), ("cgc_scmi", "clock generator writes")):
+                xa, xb = runs[0].get(key), runs[1].get(key)
+                print(f"{what} during SCMI: {'same' if xa == xb else 'differ'} ({len(xa or [])})")
+                bad += xa != xb
         else:
-            print(f"{len(answers[0])} SCMI commands")
+            print(f"{n} SCMI commands")
     if len(runs) == 2 or bad:
         print(f"{bad} differences" if len(runs) == 2 else "CIX's image did not boot in the model")
     sys.exit(1 if bad else 0)

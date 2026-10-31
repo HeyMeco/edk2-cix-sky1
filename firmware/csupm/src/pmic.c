@@ -11,6 +11,7 @@
 #include "i2c.h"
 #include "lcru.h"
 #include "pmic.h"
+#include "dpm/dvfs_cfg.h"
 
 /* Register layout of an MP5475 buck: VOUT at 0x13 + 8 * buck, 2 mV a step,
  * written high byte first */
@@ -134,13 +135,78 @@ static bool mp5475_set(const struct rail *r, uint32_t mv)
 	return false;
 }
 
-bool pmic_set_mv(unsigned domain, uint32_t mv)
+/*
+ * CIX's dev_pmic_setVoltage for a rail: the write (dev_pmic_mp5475_setVoltage),
+ * then the time the regulator takes, 1 us a mV (dev_pmic_mp5475_wait_4_pmic_ready
+ * gives it in ns, CIX's delay converts it to core cycles as here).  Other
+ * regulators (MP2845, the Alcor layout's) are not driven yet.
+ */
+static bool dev_pmic_setVoltage(const struct rail *r, uint16_t old_mv, uint16_t new_mv)
 {
-	const struct rail *r = &rails[domain];
+	uint32_t ns;
 
-	if (r->type != PMIC_MP5475)
-		return false;			/* other regulators: not yet */
-	return mp5475_set(r, mv + r->offset_mv);
+	if (r->type != PMIC_MP5475 || !mp5475_set(r, new_mv))
+		return false;
+	ns = 1000u * (new_mv > old_mv ? new_mv - old_mv : old_mv - new_mv);
+	udelay_cycles(ns * 100 / 125 / (800000000u / core_hz));
+	return true;
+}
+
+/*
+ * CIX's dpm_edp_set_voltage (dpm_dashboard.c) and pwr_rail_setVoltage: the
+ * board's offset added, at most 980 mV, written when it changes.  CIX's
+ * pwr_rail_bind lets two domains share a buck (the higher voltage wins);
+ * none of the built-in layouts does, only a BIOS-configured one could, and
+ * that configuration is not read yet.
+ */
+#define EDP_MV_MAX		980
+
+static uint16_t volt_without_gb[EDP_N];	/* asked for */
+static uint16_t volt_set[EDP_N];	/* at the regulator */
+
+bool dpm_edp_set_voltage(DPM_EDP_DOMAIN edp_id, uint32_t vol_mV)
+{
+	const struct rail *r;
+	uint32_t mv;
+
+	if (edp_id >= EDP_N)
+		return false;
+	volt_without_gb[edp_id] = (uint16_t)vol_mV;
+	r = &rails[edp_id];
+	if (r->type == PMIC_NONE)
+		return true;
+	mv = vol_mV + r->offset_mv;
+	if (mv > EDP_MV_MAX)
+		mv = EDP_MV_MAX;
+	if (mv == volt_set[edp_id])
+		return true;
+	if (!dev_pmic_setVoltage(r, volt_set[edp_id], (uint16_t)mv))
+		return false;
+	volt_set[edp_id] = (uint16_t)mv;
+	return true;
+}
+
+bool dpm_edp_get_voltage(DPM_EDP_DOMAIN edp_id, uint16_t *pVol_mV)
+{
+	const struct rail *r;
+
+	if (edp_id >= EDP_N)
+		return false;
+	r = &rails[edp_id];
+	if (pVol_mV)
+		*pVol_mV = r->type != PMIC_NONE ? volt_set[edp_id] : r->boot_mv;
+	return true;
+}
+
+/* CIX's dpm_edp_get_pwr_rail_config (cfg_dpm.c) */
+const struct rail *dpm_edp_get_pwr_rail_config(DPM_EDP_DOMAIN edp_id)
+{
+	return edp_id < EDP_N ? &rails[edp_id] : NULL;
+}
+
+enum pmic_preset pmic_get_preset(void)
+{
+	return (enum pmic_preset)preset;
 }
 
 /* The address of the PMIC on a bus, from the layout */
@@ -179,8 +245,11 @@ void pmic_init(void)
 		if (rails[d].type)
 			rail_register(&rails[d]);
 	}
-	for (unsigned d = 0; d < EDP_N; d++)
-		pmic_set_mv(d, rails[d].boot_mv);
+	/* pmic_profile_setup: the rails with a regulator at their boot voltage */
+	for (unsigned d = 0; d < EDP_N; d++) {
+		if (rails[d].type)
+			dpm_edp_set_voltage(d, rails[d].boot_mv);
+	}
 }
 
 void pmic_check(void)

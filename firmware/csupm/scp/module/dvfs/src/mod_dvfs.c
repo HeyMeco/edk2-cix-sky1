@@ -7,6 +7,9 @@
 
 #include <mod_clock.h>
 #include <mod_dvfs.h>
+#ifdef BUILD_HAS_MOD_SKY1SOC_PERF
+#    include <mod_sky1soc_perf.h>
+#endif
 #include <mod_psu.h>
 #include <mod_scmi_perf.h>
 #include <mod_timer.h>
@@ -390,8 +393,9 @@ static int dvfs_get_sustained_opp(fwk_id_t domain_id, struct mod_dvfs_opp *opp)
         return FWK_E_PARAM;
     }
 
+    /* CSU_PM (CIX): FWK_E_RANGE, which dvfs_start takes as "none" */
     if (ctx->config->sustained_idx >= ctx->opp_count) {
-        return FWK_E_PARAM;
+        return FWK_E_RANGE;
     }
 
     *opp = ctx->config->opps[ctx->config->sustained_idx];
@@ -640,6 +644,7 @@ static int dvfs_complete(
     int req_status)
 {
     int status;
+    uintptr_t cookie = ctx->request.cookie;
 
     if (ctx->request.response_required) {
         /*
@@ -674,10 +679,11 @@ static int dvfs_complete(
      * note that we do not set the state to DOMAIN_STATE_IDLE
      * here to prevent another request being processed ahead of this one.
      */
+    status = req_status;
     if (ctx->request_pending) {
-        status = dvfs_handle_pending_request(ctx);
-        if (status != FWK_SUCCESS) {
-            return status;
+        int pending_status = dvfs_handle_pending_request(ctx);
+        if (pending_status != FWK_SUCCESS) {
+            status = pending_status;
         }
     } else {
         /*
@@ -687,7 +693,26 @@ static int dvfs_complete(
         dvfs_cleanup_request(ctx);
     }
 
-    return req_status;
+    /*
+     * CSU_PM (CIX): a request whose cookie is sky1soc_perf's module
+     * identifier is reported to that module when it completes.
+     */
+#ifdef BUILD_HAS_MOD_SKY1SOC_PERF
+    if (cookie == FWK_ID_MODULE(FWK_MODULE_IDX_SKY1SOC_PERF).value) {
+        struct fwk_event event = {
+            .source_id = FWK_ID_MODULE_INIT(FWK_MODULE_IDX_SKY1SOC_PERF),
+            .target_id = FWK_ID_MODULE_INIT(FWK_MODULE_IDX_SKY1SOC_PERF),
+            .id = FWK_ID_EVENT_INIT(
+                FWK_MODULE_IDX_SKY1SOC_PERF, MOD_SKY1SOC_PERF_EVENT_IDX_DVFS_DONE),
+        };
+
+        (void)fwk_put_event(&event);
+    }
+#else
+    (void)cookie;
+#endif
+
+    return status;
 }
 
 /*
@@ -756,11 +781,11 @@ static int dvfs_handle_set_opp(
             ctx->state = DVFS_DOMAIN_SET_OPP_DONE;
             return status;
         }
-    } else if (ctx->current_opp.frequency == 0) {
+    } else {
         /*
-         * At startup the voltage may be set without the frequency having
-         * been set. In this case we must set the frequency regardless of
-         * the voltage.
+         * CSU_PM (CIX): the voltage stays, the frequency is set whether or
+         * not one has been set before (upstream: only at startup, when the
+         * current frequency is still 0).
          */
         status = ctx->apis.clock->set_rate(
             ctx->config->clock_id,
@@ -1062,6 +1087,10 @@ static int dvfs_start(fwk_id_t id)
         ctx = get_domain_ctx(id);
         ctx->request.set_source_id = true;
         status = dvfs_set_level_start(ctx, 0, &sustained_opp, true, 0);
+    } else if (status == FWK_E_RANGE) {
+        /* CSU_PM (CIX): a domain without a sustained OPP is left as it is */
+        FWK_LOG_INFO("[DVFS] %s: no sustained OPP", FWK_ID_STR(id));
+        status = FWK_SUCCESS;
     }
 
     return status;
@@ -1097,8 +1126,11 @@ static int dvfs_element_init(
     fwk_assert(ctx->config->opps != NULL);
 
     /* Initialize the context */
+    /*
+     * CSU_PM (CIX): no check that the table has an OPP; on some parts (strap
+     * profile 0xc, Phecda) the fuses leave GB0 and GM1 with none.
+     */
     ctx->opp_count = count_opps(ctx->config->opps);
-    fwk_assert(ctx->opp_count > 0);
 
     return FWK_SUCCESS;
 }
