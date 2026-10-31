@@ -23,13 +23,14 @@ from collections import Counter
 
 from elftools.elf.elffile import ELFFile
 from elftools.elf.sections import SymbolTableSection
-from unicorn import (UC_ARCH_ARM, UC_HOOK_BLOCK, UC_HOOK_MEM_READ, UC_HOOK_MEM_UNMAPPED,
+from unicorn import (UC_ARCH_ARM, UC_HOOK_BLOCK, UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_HOOK_MEM_UNMAPPED,
                      UC_HOOK_MEM_WRITE, UC_MODE_MCLASS, UC_MODE_THUMB, Uc, UcError)
 from unicorn.arm_const import (UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_ARM_REG_R1,
                                UC_ARM_REG_R2, UC_ARM_REG_R3, UC_ARM_REG_SP,
                                UC_CPU_ARM_CORTEX_M33)
 
 SRAM, SRAM_SIZE = 0x20000000, 0x80000
+IRQ_RETURN = 0x2007c000          # fake return address for injected interrupts
 PAGE = 0x10000
 
 
@@ -112,6 +113,7 @@ class SkySoc(Soc):
         self.pm_magic = []
         self.rng = 0x12345678
         self.ppu = {}
+        self.mbox_pending = None
 
     def reset_state(self, uc):
         # the boot ROM leaves the bootloader1 header in SRAM
@@ -205,6 +207,8 @@ class SkySoc(Soc):
             return (self.mem(addr) & ~0xf0) | 0xe
         if addr == 0x46610090:
             return self.pm_magic[0] if self.pm_magic else self.mem(addr)
+        if addr in (0xa00500c8, 0xa00700c8):
+            return 1 if self.mbox_pending == addr - 0xc8 else 0
         return None
 
     def write(self, addr, size, value):
@@ -229,6 +233,7 @@ class SkySoc(Soc):
 class Se:
     def __init__(self, elf_path, soc=None, stubs=None, stop=(), trace=False):
         self.elf = Elf(elf_path)
+        self.elf_path = elf_path
         self.soc = soc or Soc()
         self.soc.attach(self)
         self.uc = uc = Uc(UC_ARCH_ARM, UC_MODE_THUMB | UC_MODE_MCLASS)
@@ -249,11 +254,20 @@ class Se:
         self.entries = {a: name for a, _, name in self.elf.funcs}
         self.stopped = None
         self.poll = None
+        self.stop_write = None
+        self.wfi = 0
+        self.wfi_seen = set()
+        self.wfi_hook = None
         uc.hook_add(UC_HOOK_MEM_UNMAPPED, self.on_unmapped)
         for lo, hi in ((0, SRAM - 1), (SRAM + SRAM_SIZE, 0xFFFFFFFF)):
             uc.hook_add(UC_HOOK_MEM_READ, self.on_read, begin=lo, end=hi)
             uc.hook_add(UC_HOOK_MEM_WRITE, self.on_write, begin=lo, end=hi)
         uc.hook_add(UC_HOOK_BLOCK, self.on_block)
+        # WFI: the wake-up interrupt comes at once (Unicorn would halt for good)
+        for addr, data in self.elf.segments:
+            for off in range(0, len(data) - 1, 2):
+                if data[off:off + 2] == b"\x30\xbf":
+                    uc.hook_add(UC_HOOK_CODE, self.on_wfi, begin=addr + off, end=addr + off)
 
     # memory ---------------------------------------------------------------
     def on_unmapped(self, uc, access, addr, size, value, user):
@@ -277,6 +291,9 @@ class Se:
         value &= (1 << (8 * size)) - 1
         self.writes.append((self.pc_func(), addr, size, value))
         self.soc.write(addr, size, value)
+        if (addr, value) == self.stop_write:
+            self.stopped = f"write {value:#x} to {addr:#x}"
+            uc.emu_stop()
 
     # execution --------------------------------------------------------------
     def on_block(self, uc, addr, size, user):
@@ -296,6 +313,33 @@ class Se:
             self.poll = (self.elf.func_at(addr), addr, getattr(self, "last_read", None))
             uc.emu_stop()
 
+    def on_wfi(self, uc, addr, size, user):
+        self.wfi += 1
+        if self.wfi_hook:
+            self.wfi_hook(self)
+        uc.reg_write(UC_ARM_REG_PC, (addr + 2) | 1)
+
+    def irq(self, n, count=20_000_000):
+        """Take external interrupt n: run the vector-table handler with IPSR
+        set, on a scratch stack, until it returns."""
+        from unicorn.arm_const import UC_ARM_REG_IPSR
+        handler = self.read32(SRAM + (16 + n) * 4)
+        saved = self.uc.context_save()
+        self.uc.reg_write(UC_ARM_REG_IPSR, 16 + n)
+        self.uc.reg_write(UC_ARM_REG_SP, 0x2006f000)
+        self.uc.reg_write(UC_ARM_REG_LR, IRQ_RETURN | 1)
+        self.stops[IRQ_RETURN] = "irq return"
+        self.stopped = None
+        try:
+            self.uc.emu_start(handler | 1, 0xFFFFFFFF, count=count)
+        except UcError as e:
+            pc = self.uc.reg_read(UC_ARM_REG_PC)
+            raise SystemExit(f"emulation error at {pc:#x} ({self.elf.func_at(pc)}): {e}")
+        finally:
+            del self.stops[IRQ_RETURN]
+            self.uc.context_restore(saved)
+        return self.stopped == "irq return"
+
     def arg(self, n):
         return self.uc.reg_read((UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3)[n])
 
@@ -312,6 +356,13 @@ class Se:
         sp, pc = self.read32(SRAM), self.read32(SRAM + 4)
         self.uc.reg_write(UC_ARM_REG_SP, sp)
         return pc
+
+    def resume(self, count=50_000_000):
+        """Carry on from where the last run stopped."""
+        self.stopped = None
+        self.poll = None
+        self.blocks.clear()
+        return self.run(self.uc.reg_read(UC_ARM_REG_PC), count)
 
     def run(self, pc=None, count=50_000_000):
         pc = self.reset() if pc is None else pc

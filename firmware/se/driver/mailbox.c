@@ -153,10 +153,10 @@ static void mbox_free_channel(mbox_chan_id chan)
 	if (chan >= MBOX_CHN_MAX || s_mbox_table[chan].cl == NULL)
 		return;
 	c = &s_mbox_table[chan];
-	if (c->dir == MBOX_DIR_TX) {
+	if (c->dir == MBOX_DIR_TX)
 		REG(c, MBOX_TX_INT_EN) = 0;
+	else
 		REG(c, MBOX_RX_INT_EN) = 0;
-	}
 	memset(c->cl, 0, sizeof(*c->cl));
 	c->cl = NULL;
 	c->tx_ack = false;

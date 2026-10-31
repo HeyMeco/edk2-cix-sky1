@@ -84,6 +84,35 @@ def run(elf, flash, life_cycle):
     return se, stopped, regs, mem
 
 
+# Requests the AP makes at run time: (name, channel, function ID, parameter words)
+REQUESTS = [
+    ("firmware version", 0, 0x8200000f, [0]),
+    ("serial number and chip ID", 0, 0x82000002, [0, 0x240, 0]),
+    ("OPN fuses", 0, 0x82000002, [1, 0x4dc, 8]),
+    ("fuse field", 0, 0x8200000e, [0x155, 0, 8]),
+    ("OEM key hash state", 0, 0x8200001b, [0]),
+    ("MTE setting", 0, 0x82000020, [0]),
+    ("random bytes", 2, 0x82000010, [16]),
+    ("memory repair data", 0, 0x82000006, [3, 0]),
+    ("unknown function", 0, 0x82000099, [0]),
+]
+MBOX = {0: 0xa0050000, 2: 0xa0070000}
+MBOX_IRQ = {0: 43, 2: 41}
+
+
+def request(se, chan, fid, words):
+    """Put a request in an AP->SE register channel, take its interrupt, read the answer."""
+    base = MBOX[chan]
+    msg = [8 + 4 * len(words), fid] + words
+    for i, w in enumerate(msg):
+        se.write(base + 4 * i, w.to_bytes(4, "little"))
+    se.soc.mbox_pending = base
+    ok = se.irq(MBOX_IRQ[chan])
+    se.soc.mbox_pending = None
+    n = ((se.read32(base) & 0x7f) + 3) // 4
+    return ok, [se.read32(base + 4 * i) for i in range(min(n, 32))]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("open_elf")
@@ -91,15 +120,18 @@ def main():
     ap.add_argument("--cix")
     ap.add_argument("--life-cycle", type=int, default=4)
     ap.add_argument("-v", action="store_true")
+    ap.add_argument("--services", action="store_true", help="then compare answers to run-time requests")
+    ap.add_argument("--suspend", action="store_true", help="then compare a suspend and resume")
     a = ap.parse_args()
     cix_elf = a.cix
     if cix_elf is None:
         from cix_debug import fetch
         cix_elf = fetch()
     flash = open(a.flash, "rb").read()
-    results = []
+    results, sessions = [], []
     for elf in (cix_elf, a.open_elf):
         se, stopped, regs, mem = run(elf, flash, a.life_cycle)
+        sessions.append(se)
         where = stopped or (f"polling in {se.poll[0]}" if se.poll else se.pc_func())
         print(f"{Path(elf).name}: {len(se.writes)} writes, stopped at {where}")
         results.append((regs, mem))
@@ -117,7 +149,38 @@ def main():
             diff = [i for i in range(0x10000) if pa[i] != pb[i]]
             bad += 1
             print(f"  memory {page:#010x}: {len(diff)} bytes differ, first at {page + diff[0]:#x}")
-    print(f"{len(set(ra) | set(rb))} registers compared, {bad} differences")
+    print(f"{len(set(ra) | set(rb))} registers compared")
+    if a.services:
+        for name, chan, fid, words in REQUESTS:
+            got = [request(se, chan, fid, list(words)) for se in sessions]
+            same = got[0] == got[1]
+            bad += not same
+            print(f"{'ok  ' if same else 'FAIL'} {name}: {[hex(w) for w in got[1][1]]}"
+                  + ("" if same else f" (CIX {[hex(w) for w in got[0][1]]})"))
+    if a.suspend:
+        regs = []
+        for se in sessions:
+            request(se, 0, 0x82000007, [0])            # AP: suspend
+            se.stops.pop(se.elf.addr("service_debug_entry"), None)
+            se.stops.pop(se.elf.addr("service_idle_entry"), None)
+            se.stop_write = (0x4661008c, 1)             # SE -> PM: resumed
+            mark = len(se.writes)
+            se.resume(count=100_000_000)
+            print(f"{Path(se.elf_path).name}: suspend and resume, {len(se.writes) - mark} writes, "
+                  f"stopped at {se.stopped or se.poll}")
+            per = defaultdict(list)
+            for fn, addr, size, value in se.writes[mark:]:
+                if addr not in IGNORE and not is_memory(addr) and \
+                        not any(lo <= addr < hi for lo, hi in IGNORE_RANGES):
+                    per[addr].append(value)
+            regs.append(per)
+        ra, rb = regs
+        diffs = [r for r in sorted(set(ra) | set(rb)) if ra.get(r) != rb.get(r)]
+        for r in diffs[:40]:
+            print(f"  {r:#010x}: CIX {[hex(v) for v in ra.get(r, [])][:6]} open {[hex(v) for v in rb.get(r, [])][:6]}")
+        print(f"suspend/resume: {len(set(ra) | set(rb))} registers compared, {len(diffs)} differ")
+        bad += len(diffs)
+    print(f"{bad} differences")
     sys.exit(1 if bad else 0)
 
 
