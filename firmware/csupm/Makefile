@@ -17,11 +17,36 @@ OBJDUMP		:= $(CROSS_COMPILE)objdump
 
 CFLAGS	:= -mlongcalls -ffp-contract=off -g -std=gnu11 -ffreestanding -fno-builtin \
 	   -ffunction-sections -fdata-sections -Wall -Wextra -Werror
-FW_CFLAGS := $(CFLAGS) -Os -Iinclude -Wvla
 LDFLAGS	:= -nostdlib -T pm.ld -Wl,--gc-sections -Wl,-Map=$(O)/csupm.map
 
-SRCS	:= arch/vectors.S src/main.c src/lcru.c src/uart.c src/i2c.c src/pmic.c src/soc.c src/pmu.c src/mbox.c lib/string.c
-OBJS	:= $(patsubst %,$(O)/%.o,$(SRCS))
+# SCP-firmware (v2.11.0, submodule): the framework, the modules in
+# SCP_MODULES (upstream ones from SCP-firmware/module, ours from
+# scp/module) and their configurations in scp/config
+SCP		:= SCP-firmware
+SCP_GEN		:= $(O)/scp/gen
+SCP_MODULES	:= cix_mbox transport scmi
+SCP_FWK		:= fwk_arch fwk_core fwk_delayed_resp fwk_dlist fwk_id fwk_interrupt \
+		   fwk_io fwk_log fwk_mm fwk_module fwk_notification fwk_ring fwk_slist \
+		   fwk_status fwk_string fwk_time assert
+SCP_DEFS	:= -DBUILD_HAS_SUB_SYSTEM_MODE -DBUILD_HAS_NOTIFICATION \
+		   -DBUILD_HAS_BASE_PROTOCOL -DFWK_LOG_LEVEL=FWK_LOG_LEVEL_CRIT \
+		   '-DBUILD_VERSION_DESCRIBE_STRING="SCP-firmware v2.11.0"' \
+		   -DBUILD_VERSION_MAJOR=2 -DBUILD_VERSION_MINOR=11 -DBUILD_VERSION_PATCH=0 \
+		   $(foreach m,$(SCP_MODULES),-DBUILD_HAS_MOD_$(shell echo $(m) | tr a-z A-Z)=1)
+mod_dir		= $(if $(wildcard scp/module/$(1)),scp/module/$(1),$(SCP)/module/$(1))
+SCP_INC		:= -I$(SCP_GEN) -Iscp/include -I$(SCP)/framework/include \
+		   $(foreach m,$(SCP_MODULES),-I$(call mod_dir,$(m))/include)
+SCP_SRCS	:= $(patsubst %,$(SCP)/framework/src/%.c,$(SCP_FWK)) \
+		   $(foreach m,$(SCP_MODULES),$(wildcard $(call mod_dir,$(m))/src/*.c)) \
+		   $(wildcard scp/src/*.c) $(patsubst %,scp/config/config_%.c,$(SCP_MODULES))
+
+FW_CFLAGS := $(CFLAGS) -Os -Iinclude -Wvla $(SCP_DEFS) $(SCP_INC)
+# upstream code builds without -Wextra -Werror
+SCP_CFLAGS := $(filter-out -Wextra -Werror,$(CFLAGS)) -Os -Iinclude $(SCP_DEFS) $(SCP_INC)
+
+SRCS	:= arch/vectors.S src/main.c src/lcru.c src/uart.c src/i2c.c src/pmic.c src/soc.c \
+	   src/pmu.c src/mbox.c lib/string.c lib/malloc.c lib/printf.c lib/libgcc.c $(SCP_SRCS)
+OBJS	:= $(patsubst %,$(O)/%.o,$(SRCS)) $(SCP_GEN)/fwk_module_list.c.o
 
 all: $(O)/csupm.xbin
 
@@ -31,19 +56,32 @@ $(CORE): core/pm_core_v1.json $(ROOT)/scripts/open/xtensa_core.py
 	@python3 $(ROOT)/scripts/open/xtensa_core.py $@ --config core/pm_core_v1.json \
 		--overlays $(XTENSA_DIR)/overlays --dynconfig $(XTENSA_DIR)/dynconfig
 
-$(O)/%.c.o: %.c $(CORE) $(wildcard include/*.h)
+$(SCP_GEN)/fwk_module_idx.h $(SCP_GEN)/fwk_module_list.c: scp/modules.py Makefile
+	@mkdir -p $(SCP_GEN)
+	@python3 scp/modules.py $(SCP_GEN) $(SCP_MODULES)
+
+$(O)/%.c.o: %.c $(CORE) $(wildcard include/*.h) $(SCP_GEN)/fwk_module_idx.h
 	@mkdir -p $(dir $@)
 	@echo "  CC      $<"
 	@$(CC) $(FW_CFLAGS) -c -o $@ $<
 
-$(O)/%.S.o: %.S $(CORE)
+$(O)/$(SCP)/%.c.o: $(SCP)/%.c $(CORE) $(SCP_GEN)/fwk_module_idx.h
+	@mkdir -p $(dir $@)
+	@echo "  CC      $<"
+	@$(CC) $(SCP_CFLAGS) -c -o $@ $<
+
+$(SCP_GEN)/fwk_module_list.c.o: $(SCP_GEN)/fwk_module_list.c $(CORE)
+	@echo "  CC      $<"
+	@$(CC) $(SCP_CFLAGS) -c -o $@ $<
+
+$(O)/%.S.o: %.S $(CORE) $(wildcard include/*.h)
 	@mkdir -p $(dir $@)
 	@echo "  AS      $<"
 	@$(CC) $(FW_CFLAGS) -c -o $@ $<
 
 $(O)/csupm.elf: $(OBJS) pm.ld
 	@echo "  LD      $@"
-	@$(CC) $(FW_CFLAGS) $(LDFLAGS) -o $@ $(OBJS) -lgcc
+	@$(CC) $(FW_CFLAGS) $(LDFLAGS) -o $@ $(OBJS)
 
 $(O)/csupm.xbin: $(O)/csupm.elf $(ROOT)/scripts/open/xbin.py
 	@echo "  XBIN    $@"

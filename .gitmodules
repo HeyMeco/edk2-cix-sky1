@@ -21,3 +21,6 @@
 [submodule "mbedtls"]
 	path = mbedtls
 	url = https://github.com/Mbed-TLS/mbedtls
+[submodule "firmware/csupm/SCP-firmware"]
+	path = firmware/csupm/SCP-firmware
+	url = https://github.com/ARM-software/SCP-firmware

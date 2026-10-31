@@ -2,9 +2,17 @@
 /*
  * Reset, register-window and exception vectors of CSU_PM (Xtensa LX7,
  * windowed ABI, XEA2).  VECBASE is 0x20000400; pm.ld places each vector
- * at its offset.  Interrupts are not enabled yet: every exception other
- * than the window ones ends in arch_panic.
+ * at its offset.
+ *
+ * Interrupts are handled later, not in the vector: the handler masks the
+ * lines that are pending (INTENABLE), adds them to arch_irq_pending and
+ * returns; the main loop (scp/src/arch_interrupt.c) runs their handlers
+ * with interrupts masked and unmasks the lines.  The handlers here touch
+ * nothing but a few registers they save, so they need neither a stack nor
+ * a register window.  Every other exception ends in arch_panic.
  */
+
+#include "irq.h"
 
 #define PS_UM		(1 << 5)
 #define PS_WOE		(1 << 18)
@@ -140,23 +148,86 @@ _WindowUnderflow12:
 
 /* --- other vectors ---------------------------------------------------------- */
 
-	.macro	vector name, excsave
+	.macro	vector name, excsave, target=arch_panic
 	.section .\name\().text, "ax"
 	.global	_\name
 _\name:
 	wsr.\excsave a0
-	j	arch_panic
+	j	\target
 	.endm
 
-	vector	Level2InterruptVector, excsave2
-	vector	Level3InterruptVector, excsave3
-	vector	Level4InterruptVector, excsave4
-	vector	Level5InterruptVector, excsave5
+	vector	Level2InterruptVector, excsave2, _irq_level2
+	vector	Level3InterruptVector, excsave3, _irq_level3
+	vector	Level4InterruptVector, excsave4, _irq_level4
+	vector	Level5InterruptVector, excsave5, _irq_level5
 	vector	DebugExceptionVector, excsave6
 	vector	NMIExceptionVector, excsave7
 	vector	KernelExceptionVector, excsave1
-	vector	UserExceptionVector, excsave1
+	vector	UserExceptionVector, excsave1, _user_exception
 	vector	DoubleExceptionVector, excsave1
+
+/* --- interrupts --------------------------------------------------------------- */
+
+	.data
+	.align	4
+_irq_save:
+	.space	4 * 3 * 6		/* a2-a4, per level 1-5 */
+	.global	arch_irq_pending
+arch_irq_pending:
+	.word	0
+
+/*
+ * Mask the pending lines of this level, add them to arch_irq_pending.
+ * Entered with a0 in EXCSAVE<level>.  Software and edge interrupts are
+ * cleared here (INTCLEAR ignores the others); a level-sensitive line stays
+ * masked until its handler has run.
+ */
+	.macro	defer level, mask
+	movi	a0, _irq_save + 12 * \level
+	s32i	a2, a0, 0
+	s32i	a3, a0, 4
+	s32i	a4, a0, 8
+	rsr.interrupt a2
+	rsr.intenable a3
+	and	a2, a2, a3
+	movi	a4, \mask
+	and	a2, a2, a4
+	xor	a3, a3, a2
+	wsr.intenable a3
+	wsr.intclear a2
+	movi	a3, arch_irq_pending
+	l32i	a4, a3, 0
+	or	a4, a4, a2
+	s32i	a4, a3, 0
+	l32i	a4, a0, 8
+	l32i	a3, a0, 4
+	l32i	a2, a0, 0
+	rsr.excsave\level a0
+	rsync
+	.endm
+
+	.text
+	.literal_position
+	.align	4
+_user_exception:
+	rsr.exccause a0
+	bnei	a0, EXCCAUSE_LEVEL1_INTERRUPT, 1f
+	defer	1, IRQ_LEVEL1_MASK
+	rfe
+1:	rsr.excsave1 a0
+	j	arch_panic
+
+	.macro	level n, mask
+	.align	4
+_irq_level\n:
+	defer	\n, \mask
+	rfi	\n
+	.endm
+
+	level	2, IRQ_LEVEL2_MASK
+	level	3, IRQ_LEVEL3_MASK
+	level	4, IRQ_LEVEL4_MASK
+	level	5, IRQ_LEVEL5_MASK
 
 /* An exception nothing handles: stop here (EXCCAUSE, EPC1 and EXCVADDR,
  * or the level's EPC, tell why). */
