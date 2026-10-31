@@ -51,10 +51,10 @@ static void __drv_ci700_slc_flush(uint32_t hnf, uint64_t start, uint64_t size)
 	hal_printf_level(LOG_ERR, "slc timeout!!!\n");
 }
 
-/* DRAM above 8 GiB of address space is reached through its alias at 512 GiB */
+/* DRAM above 32 GiB of address space is reached through its alias at 512 GiB */
 static void _drv_ci700_slc_flush(uint32_t hnf, uint64_t start, uint64_t size)
 {
-	const uint64_t split = 0x200000000ull, alias = 0x8000000000ull;
+	const uint64_t split = 0x800000000ull, alias = 0x8000000000ull;
 
 	if (start + size <= split) {
 		__drv_ci700_slc_flush(hnf, start, size);
