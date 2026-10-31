@@ -25,7 +25,8 @@ LDFLAGS	:= -nostdlib -T pm.ld -Wl,--gc-sections -Wl,-Map=$(O)/csupm.map
 SCP		:= SCP-firmware
 SCP_GEN		:= $(O)/scp/gen
 SCP_MODULES	:= xt_timer timer cix_mbox transport scmi rcsu power_domain scmi_power_domain \
-		   scmi_system_power
+		   scmi_system_power soc_sensor sensor scmi_sensor \
+		   resource_perms
 SCP_FWK		:= fwk_arch fwk_core fwk_delayed_resp fwk_dlist fwk_id fwk_interrupt \
 		   fwk_io fwk_log fwk_mm fwk_module fwk_notification fwk_ring fwk_slist \
 		   fwk_status fwk_string fwk_time assert
@@ -41,14 +42,14 @@ SCP_INC		:= -I$(SCP_GEN) -Iscp/include -I$(SCP)/framework/include \
 		   $(foreach m,$(SCP_MODULES) $(SCP_HEADERS),-I$(call mod_dir,$(m))/include)
 SCP_SRCS	:= $(patsubst %,$(SCP)/framework/src/%.c,$(SCP_FWK)) \
 		   $(foreach m,$(SCP_MODULES),$(wildcard $(call mod_dir,$(m))/src/*.c)) \
-		   $(wildcard scp/src/*.c) $(patsubst %,scp/config/config_%.c,$(SCP_MODULES))
+		   $(wildcard scp/src/*.c) $(wildcard $(patsubst %,scp/config/config_%.c,$(SCP_MODULES)))
 
 FW_CFLAGS := $(CFLAGS) -Os -Iinclude -Wvla $(SCP_DEFS) $(SCP_INC)
 # upstream code builds without -Wextra -Werror
 SCP_CFLAGS := $(filter-out -Wextra -Werror,$(CFLAGS)) -Os -Iinclude $(SCP_DEFS) $(SCP_INC)
 
 SRCS	:= arch/vectors.S src/main.c src/lcru.c src/uart.c src/i2c.c src/pmic.c src/soc.c \
-	   src/pmu.c src/mbox.c src/power.c lib/string.c lib/malloc.c lib/printf.c lib/libgcc.c $(SCP_SRCS)
+	   src/pmu.c src/mbox.c src/power.c src/pvt.c lib/string.c lib/malloc.c lib/printf.c lib/libgcc.c $(SCP_SRCS)
 OBJS	:= $(patsubst %,$(O)/%.o,$(SRCS)) $(SCP_GEN)/fwk_module_list.c.o
 
 all: $(O)/csupm.xbin

@@ -50,4 +50,6 @@ enum scp_pd {
 	SCP_PD_COUNT,
 };
 
+#define SCP_SENSOR_COUNT	20
+
 #endif

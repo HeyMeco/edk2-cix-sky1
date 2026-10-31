@@ -15,6 +15,7 @@ MEMORY
 	iram  (rx)  : ORIGIN = 0x20000000, LENGTH = 0x30000
 	dram0 (rw)  : ORIGIN = 0x20040000, LENGTH = 0x10000
 	dram1 (rw)  : ORIGIN = 0x20080000, LENGTH = 0x3e700
+	efuse (rw)  : ORIGIN = 0x200be700, LENGTH = 0x10
 }
 
 VECBASE = 0x20000400;
@@ -72,6 +73,9 @@ SECTIONS
 	/* the heap (lib/malloc.c) is the rest of DRAM1 */
 	_heap_start = _bss_end;
 	_heap_end = _stack_bottom;
+
+	/* the eFuse copy's default (src/pvt.c); the SE overwrites it */
+	.dram1.efuse 0x200be700 : { KEEP(*(.dram1.efuse)) } > efuse
 
 	/* Xtensa property tables (instruction ranges, literals), not loaded */
 	.xt.lit 0 : { *(.xt.lit .xt.lit.*) }

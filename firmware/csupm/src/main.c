@@ -10,6 +10,7 @@
 #include "mbox.h"
 #include "pmic.h"
 #include "pmu.h"
+#include "pvt.h"
 #include "uart.h"
 
 #define I2C_HZ			400000u
@@ -45,6 +46,7 @@ static void ss_init(void)
 static void ss_run(void)
 {
 	pmu_reset_all();			/* perf_stream_restore */
+	pvt_init();				/* sky1_pvt_init */
 	mbox_init();				/* app_msgInit */
 }
 
