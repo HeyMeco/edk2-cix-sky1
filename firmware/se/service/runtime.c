@@ -4,8 +4,8 @@
  * service_crypto_lib.c, service_fuse.c, service_memrepair.c).
  *
  * Unlike CIX's firmware, secret eFuse fields (device and model keys) are
- * only given to requests on the TEE mailbox, and the hash service only
- * reads DRAM.
+ * only given to requests on the TEE mailbox, the hash service only reads
+ * DRAM, and nothing burns eFuses.
  */
 #include "se.h"
 #include "arch.h"
@@ -272,80 +272,18 @@ static void ipc_get_oem_pubkey_hash_status_handler(void *param, uint32_t plen, v
 }
 
 /*
- * Blow the OEM root key hash { hash[32], crc16 } into the eFuse: this turns
- * secure boot on for good.  A non-secure part (life cycle 5) also moves to
- * life cycle 3; a secure one first locks debug.  1: done, 2: already
- * fused, 4: bad CRC, 5: read back differs, ~0: failed.
+ * Burning the OEM root key hash into the eFuse (which turns secure boot on
+ * for good, and on a non-secure part also moves its life cycle) is not
+ * offered: the request is refused, nothing is written.  CIX's firmware
+ * does it on request from the AP.
  */
 static void ipc_set_oem_pubkey_hash_handler(void *param, uint32_t plen, void *resp, uint32_t *rlen)
 {
-	static const uint8_t zero[32];
-	uint8_t fuse[32] = { 0 };
-	uint32_t *r = resp, valid = 1, lc_fuse = 3, lc, err;
-	uint16_t crc = 0;
-
-	if (param == NULL || plen < 0x24 || r == NULL) {
-		hal_printf_level(LOG_ERR, "ERR %s, %d\n", __func__, __LINE__);
-		goto fail;
-	}
-	*rlen = 4;
-	if (hal_crc(param, 32, &crc))
-		goto fail;
-	hal_printf_level(LOG_ERR, "cal CRC 0x%x buffer CRC 0x%x \n", crc, (unsigned)((uint32_t *)param)[8]);
-	if (((uint32_t *)param)[8] != crc) {
-		r[0] = 4;
-		SE_INFO("oem pubkey hash CRC error!\n");
-		return;
-	}
-	if (sec_efuse_read(&g_handle_efuse, 0x4e4, 0, 256, fuse))
-		goto fail;
-	if (memcmp(zero, fuse, 32)) {
-		r[0] = 2;
-		SE_INFO("oem pubkey hash is already fused!\n");
-		return;
-	}
-	hexdump("oem_pkhash_para->oem_pkhash", param, 32);
-	if (plat_get_info(PLAT_INFO_LIFE_CYCLE, &lc))
-		goto fail;
-	if (lc == LIFE_CYCLE_NONSECURE) {
-		SE_INFO("un-secure write oem pubkey hash\n");
-		err = sec_efuse_program(&g_handle_efuse, 0x4e4, 0, 256, param);
-		if (!err)
-			err = sec_efuse_program(&g_handle_efuse, 0x15e, 3, 1, &valid);
-		if (!err)
-			err = sec_efuse_program(&g_handle_efuse, 0, 0, 2, &lc_fuse);
-	} else if (lc == LIFE_CYCLE_SECURE) {
-		SE_INFO("secure write oem pubkey hash\n");
-		REG32(SE_SYSCTRL_ROM_CTRL) |= 1;
-		SE_INFO("sec_ctrl:0x%08x\n", (unsigned)REG32(SE_SYSCTRL_ROM_CTRL));
-		REG32(SE_SYSCTRL_ROM_CTRL) |= 0x1f0000;
-		REG32(SE_SYSCTRL_ROM_CTRL) &= 0xffffff07;
-		REG32(SE_SYSCTRL_ROM_CTRL) |= 0x3f00;
-		err = sec_efuse_program(&g_handle_efuse, 0x4e4, 0, 256, param);
-		if (!err)
-			err = sec_efuse_program(&g_handle_efuse, 0x15e, 3, 1, &valid);
-	} else {
-		goto fail;
-	}
-	if (err)
-		goto fail;
-	drv_fuse_re_sense_one_row(0x4e4, 0x20);
-	if (sec_efuse_read(&g_handle_efuse, 0x4e4, 0, 256, fuse))
-		goto fail;
-	if (memcmp(param, fuse, 32)) {
-		r[0] = 5;
-		SE_INFO("fuse read back compare error\n");
-		return;
-	}
-	r[0] = 1;
-	SE_INFO("oem pubkey hash written\n");
-	return;
-fail:
-	if (r) {
-		r[0] = 0xffffffff;
+	if (resp) {
+		*(uint32_t *)resp = 0xffffffff;
 		*rlen = 4;
 	}
-	SE_INFO("write error\n");
+	hal_printf_level(LOG_ERR, "[SE_FW]# eFuse programming is not supported\n");
 }
 
 static void ddr_irq_disable_handler(void *param, uint32_t plen, void *resp, uint32_t *rlen)

@@ -69,8 +69,9 @@ through 7 (`drv_ddr_init`, `drv_ddr_postci`, `drv_ddr_get_mem_size`,
 
 The services keep CIX's interface, with two differences: secret eFuse
 fields (device and model keys) are given only to requests on the TEE
-mailbox, and the hash service only reads DRAM.  CIX's firmware serves both
-to the non-secure side.
+mailbox, the hash service only reads DRAM, and the request to burn the
+OEM root key hash into the eFuse is refused: nothing here programs eFuses.
+CIX's firmware does all three for the non-secure side.
 
 `scripts/open/test_se.py` runs CIX's debug build and this firmware in
 Unicorn (`scripts/open/se_emu.py`, a model of the SoC as the SE sees it) on
