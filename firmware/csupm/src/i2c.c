@@ -83,8 +83,9 @@ void i2c_setup(uint32_t hz, uint32_t masters, uint32_t slaves)
 	}
 }
 
-/* Wait for the transfer to complete; 600 ms as CIX allows */
-static int wait(unsigned i, uint32_t start)
+/* Wait for the transfer to complete (for a read, every byte received);
+ * 600 ms as CIX allows */
+static int wait(unsigned i, bool read, uint32_t start)
 {
 	uint32_t isr;
 
@@ -92,7 +93,7 @@ static int wait(unsigned i, uint32_t start)
 		isr = R16(i, ISR) & ISR_ALL;
 		if (isr & ISR_ERR)
 			break;
-		if (isr & ISR_COMP && !(REG8(I2C_BASE(i) + XFER)))
+		if (isr & ISR_COMP && !(read && REG8(I2C_BASE(i) + XFER)))
 			break;
 		if (ccount() - start > core_hz / 1000000 * 600000)
 			return -2;
@@ -124,7 +125,7 @@ static int send(unsigned i, uint8_t addr, const uint8_t *buf, unsigned n)
 	for (unsigned k = 0; k < n && k < FIFO - 2; k++)
 		R16(i, DATA) = (R16(i, DATA) & 0xff00) + buf[k];
 	R16(i, ADDR) = (R16(i, ADDR) & 0xff80) + (addr & 0x7f);
-	return wait(i, ccount());
+	return wait(i, false, ccount());
 }
 
 int i2c_write(unsigned bus, uint8_t addr, const uint8_t *buf, unsigned n)
@@ -143,7 +144,7 @@ int i2c_write_read(unsigned bus, uint8_t addr, const uint8_t *wbuf, unsigned wn,
 	if (!err) {
 		start(bus, true, rn);
 		R16(bus, ADDR) = (R16(bus, ADDR) & 0xff80) + (addr & 0x7f);
-		err = wait(bus, ccount());
+		err = wait(bus, true, ccount());
 		for (unsigned k = 0; !err && k < rn; k++)
 			rbuf[k] = (R16(bus, SR) & SR_RXDV) ? (uint8_t)R16(bus, DATA) : 0;
 	}

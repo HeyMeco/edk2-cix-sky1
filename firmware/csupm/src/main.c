@@ -5,6 +5,7 @@
  */
 #include "i2c.h"
 #include "lcru.h"
+#include "pmic.h"
 #include "uart.h"
 
 #define I2C_HZ			400000u
@@ -42,6 +43,8 @@ int main(void)
 	uart_init();
 	uart_puts("CSU_PM: open firmware\n");
 	i2c_setup(I2C_HZ, I2C_MASTERS, I2C_SLAVES);
+	pmic_init();
+	pmic_check();
 	se_handshake_up();
 	se_handshake_ready();
 	for (;;)
