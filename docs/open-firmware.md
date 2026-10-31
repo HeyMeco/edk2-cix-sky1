@@ -14,7 +14,7 @@ mask ROM ─▶ SE firmware ─▶ CSU_PM ─▶ TF-A BL2 ─▶ BL31 + OP-TEE (
 
 | Stage | Source | Status here |
 |---|---|---|
-| SE firmware (Cortex-M: DRAM training, eFuse, image checks) | none | binary; not a realistic target |
+| SE firmware (Cortex-M33: SoC bring-up, eFuse, image checks, AP services) | [firmware/se](../firmware/se); CIX's DDR driver relinked from their debug build | **built from source** (`--open`; `--vendor-se` keeps CIX's); same register writes and memory contents as CIX's in [test_se.py](../scripts/open/test_se.py) ([below](#se-firmware)) |
 | CSU_PM (Xtensa, Arm SCP-firmware based) | framework only | binary |
 | TF-A BL2 | `arm-trusted-firmware` + patch 0002 | **built from source** (`--open`, chain A), re-signed into bootloader1 |
 | TF-A BL31 | `arm-trusted-firmware` + patches 0004-0007 | **built from source** (`--open`) |
@@ -27,10 +27,11 @@ mask ROM ─▶ SE firmware ─▶ CSU_PM ─▶ TF-A BL2 ─▶ BL31 + OP-TEE (
 | Sensor fusion hub firmware (`sfh_fw.bin`, Cortex-M) | [firmware/sfh](../firmware/sfh) | **built from source** (`--open`); same hardware writes as CIX's in every scenario of [test_sfh.py](../scripts/open/test_sfh.py) |
 | `trustzone_config` | CIX generator | CIX stock binary on every board; identical to the generator's output apart from its timestamp ([below](#trustzone-configuration)) |
 
-With `--open` on an Orion O6/O6N, the only CIX-built code left before UEFI
-is the SE firmware (Cortex-M) and CSU_PM (Xtensa) in bootloader1.
-Everything on the application cores up to and beside BL33 (TF-A, OP-TEE,
-StandaloneMM) and the sensor fusion hub firmware are built here.
+With `--open` on an Orion O6/O6N, the CIX-built code left before UEFI is
+CSU_PM (Xtensa) and, inside the SE firmware, CIX's DDR driver (DRAM
+training) as a relinked binary.  Everything else on the SE, on the
+application cores up to and beside BL33 (TF-A, OP-TEE, StandaloneMM) and
+the sensor fusion hub firmware are built here.
 
 ## Which boards
 
@@ -84,12 +85,16 @@ FIP on every board is rooted at `0d999213` (the pregenerated
 5. BL2: `make PLAT=sky1 TRUSTED_BOARD_BOOT=1 ROT_KEY=cix_privatekey.pem bl2`
    with mbed TLS 2.28 (submodule `mbedtls`). The root of trust is the
    SHA-256 of that key's public half, built into BL2.
-6. bootloader1: the reference bootloader1 (the board's, or CIX's with
-   `--boot-firmware cix`) with its AP image replaced by BL2, zero-padded to
-   the size of the CIX BL2 so the container keeps its layout, and both
-   signatures redone with the published BL1 keys (`oem_privatekey.pem`,
-   `cix_privatekey.pem`). SE and CSU_PM stay byte for byte.
-7. bootloader3: the BL33 certificates come from `cert_create` under the
+6. SE firmware: CIX's debug SE build is fetched at the pinned commit, its
+   DDR driver turned into `ddr_island.S`, and `make -C firmware/se` builds
+   `se_fw.bin` (arm-none-eabi GCC, Mbed TLS). `--vendor-se` skips this.
+7. bootloader1: the reference bootloader1 (the board's, or CIX's with
+   `--boot-firmware cix`) with its AP image replaced by BL2 and its SE image
+   by the open SE firmware, each zero-padded to the size of CIX's so the
+   container keeps its layout, and both signatures redone with the
+   published BL1 keys (`oem_privatekey.pem`, `cix_privatekey.pem`). CSU_PM
+   stays byte for byte.
+8. bootloader3: the BL33 certificates come from `cert_create` under the
    same root (trusted key certificate with only the non-trusted-world key,
    NV counter 223) instead of the closed `cert_uefi_create_rsa`; the open
    BL2 checks them as `NON_TRUSTED_KEY_CERT_ID`.
@@ -335,29 +340,63 @@ The SE loads `sfh_fw.bin` from flash without any signature or hash check,
 on every board, so this image (and anything else put there) runs whatever
 the board's signing chain.
 
-### SE firmware and CSU_PM
+### SE firmware
 
-CIX's `cix_proprietary__cix_firmware` repository on GitHub carries debug
-builds of the SE firmware (`se_fw.elf`, version 2.0.2026W01.01), CSU_PM
-(`csupm_sky1`, 00.12.001) and the boot ROM (`brom.elf`) with full DWARF
-debug information: source file names, functions, types and line numbers.
-[scripts/open/re/dwarfmap.py](../scripts/open/re/dwarfmap.py) lists their
-compile units; Ghidra decompiles them with names and types.
+[firmware/se](../firmware/se) rebuilds the SE firmware from CIX's debug
+build (`se_fw.elf` 2.0.2026W01.01, full DWARF, in CIX's
+`cix_proprietary__cix_firmware` repository; pinned in
+[manifests/cix-debug-firmware.json](../manifests/cix-debug-firmware.json)
+and fetched by the build, not redistributed): start-up, eFuse, memory
+configuration, both flash controllers, the crypto engine's bring-up, TRNG
+and OTP, key manager, PLLs and clock/power sequencing, CI-700, MMHUB,
+RCSU, SRAM repair, loading and verifying CSU_PM and BL2, the mailbox
+services, suspend/resume and crash records.  SHA-2, HKDF and RSA come from
+the Mbed TLS submodule, SM2/SM3 are written here.  The DDR driver (DRAM
+training, 44 KB) is CIX's code: [se_ddr_island.py](../scripts/open/se_ddr_island.py)
+turns it into relinkable assembly (it reassembles to CIX's bytes exactly)
+and the build links it in, with CIX's PVT table.  The image is 151 KB
+(CIX's release image: 334 KB).
 
-* SE firmware: Cortex-M33 (Armv8-M Mainline, GCC Arm Embedded 10.3),
-  1238 functions, 219 KB of code in about 190 files: secure boot and image
-  loading (`framework/image_verify`, `xloader`), the CE crypto library
-  (`ce_lite`, 61 KB), eFuse, key management, memory repair, SoC bring-up
-  (clocks, PLLs, power, CI-700, TZC-400, MMHUB), the AP mailbox services,
-  suspend/resume, a debug monitor (26 KB) and the DDR driver
-  (`driver/ddr`, about 45 KB), which stays CIX's binary. The shipping
-  2.0.2026W31.01 image differs from the debug build; `funcmatch.py --thumb`
-  matches about 300 of its functions directly, the rest has to be mapped
-  through strings and the call graph.
-* CSU_PM: Xtensa LX7 (`cix_lx7`, Cadence XtensaTools 14.10 clang),
-  FreeRTOS, Arm SCP-firmware (public) and about 130 KB of CIX code (DPM,
-  clock tree, CLI, CI-700/NI-700, PMIC, I2C, sensors). Building it needs an
-  Xtensa compiler for that core configuration.
+[se_emu.py](../scripts/open/se_emu.py) runs an SE image in Unicorn on a
+model of the SoC as the SE sees it (boot ROM hand-over, QSPI flash, PLLs,
+power controllers, crypto engine status, PM handshakes);
+[test_se.py](../scripts/open/test_se.py) boots CIX's debug build and the
+open one on the same flash image and compares every register write and
+what ends up in DRAM and the PM's SRAM (CSU_PM, BL2, key blocks, boot
+records):
+
+* cold boot from reset to the AP's release: identical over 831 registers,
+  for life cycles 4, 5 and 7, with and without device keys;
+* run-time requests from the AP (`--services`): the same answers;
+* a suspend request through WFI, the SoC's re-initialisation and the
+  resume message to the PM (`--suspend`): identical over 804 registers;
+* secure boot fused for the image's keys (`--secure`, open firmware only):
+  the open O6 image is verified and boots; with one byte of BL2 or CSU_PM
+  changed it does not.
+
+DRAM training itself is not emulated (its entry points are stubbed; it is
+the same code in both).  Differences from CIX's firmware, on purpose:
+
+* secret eFuse fields (CIX device and model keys, test keys, OEM model key)
+  go only to requests on the TEE mailbox; CIX's answers any field to the
+  non-secure mailbox (`0x8200000e`), so the OS can read the keys OP-TEE's
+  hardware unique key is derived from;
+* the hash service (`0x8200000c`) only reads DRAM; CIX's hashes any
+  address the caller names, SE SRAM and eFuse included;
+* no debug monitor; a memory-configuration block lookup that is correct
+  where CIX's reads past its table; a write enable per erased sector.
+
+Not done: the clock and power records of crash reports are raw register
+dumps, and the SFH load during suspend has not been emulated.  The open
+SE has not been boot-tested on hardware.
+
+### CSU_PM
+
+CSU_PM (`csupm_sky1`, 00.12.001, in the same repository) is Xtensa LX7
+(`cix_lx7`, Cadence XtensaTools 14.10 clang): FreeRTOS, Arm SCP-firmware
+(public) and about 130 KB of CIX code (DPM, clock tree, CLI,
+CI-700/NI-700, PMIC, I2C, sensors). Building it needs an Xtensa compiler
+for that core configuration.
 
 ## Roadmap
 
@@ -365,7 +404,8 @@ compile units; Ghidra decompiles them with names and types.
    persist across a cold boot; Secure Boot keys enrol; suspend and resume).
    `--vendor-stmm` isolates the StandaloneMM image if variables misbehave.
    Then make it the default for the chain-A boards.
-2. SE firmware from source, with CIX's DDR driver linked in as a binary.
+2. Boot-test the open SE (UART5 log; `--vendor-se` to compare), then
+   suspend/resume and the SFH.
 3. CSU_PM from source, once an Xtensa toolchain for its core works.
 
 ## Debugging
@@ -382,5 +422,6 @@ UARTs on the Orion O6/O6N, 115200 baud (from
 | UART5 | SE |
 
 Output starts on the EC, then the SE, then the AP. A board that stays silent
-on UART5 rejected bootloader1; SE output without AP output points at BL2 or
+on UART5 rejected bootloader1 (or, with the open SE, failed before its
+UART came up: rebuild with `--vendor-se` to tell which); SE output without AP output points at BL2 or
 the bootloader2 signatures.
