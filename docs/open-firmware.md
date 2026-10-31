@@ -17,7 +17,7 @@ mask ROM ─▶ SE firmware ─▶ CSU_PM ─▶ TF-A BL2 ─▶ BL31 + OP-TEE (
 | SE firmware (Cortex-M: DRAM training, eFuse, image checks) | none | binary; not a realistic target |
 | CSU_PM (Xtensa, Arm SCP-firmware based) | framework only | binary |
 | TF-A BL2 | `arm-trusted-firmware` + patch 0002 | **built from source** (`--open`, chain A), re-signed into bootloader1 |
-| TF-A BL31 | `arm-trusted-firmware` + patches 0004-0006 | **built from source** (`--open`) |
+| TF-A BL31 | `arm-trusted-firmware` + patches 0004-0007 | **built from source** (`--open`) |
 | OP-TEE BL32 | `optee_os` + patch queue | **built from source** (`--open`) |
 | StandaloneMM inside OP-TEE | upstream EDK2 + 3 CIX drivers | binary, taken from the board's vendor `bootloader2` |
 | FIP certificates, `fiptool` | TF-A `cert_create` (patched), `fiptool` | **open** for bootloader2 and bootloader3 |
@@ -153,7 +153,7 @@ check_open.py IMAGE REF_BOOTLOADER1 BL2.bin [--root ROOT.pem]
 
 | Submodule | Pin | Patches |
 |---|---|---|
-| `arm-trusted-firmware` | `114fb205` (CIX, 2026-03-10) | 0001, 0003 `cert_create`: certificates that carry only one world's key; 0002 BL2 platform support; 0004 TrustZone configuration in BL31; 0005 audio domain and resume marker after system suspend; 0006 NI-700 QoS as in the CIX BL31 |
+| `arm-trusted-firmware` | `114fb205` (CIX, 2026-03-10) | 0001, 0003 `cert_create`: certificates that carry only one world's key; 0002 BL2 platform support; 0004 TrustZone configuration in BL31; 0005 audio domain and resume marker after system suspend; 0006 NI-700 QoS as in the CIX BL31; 0007 normal-world SiP argument checks |
 | `mbedtls` | `8b3f26a5` (2.28.0) | none |
 | `optee_os` | `cc66640f` (CIX, 2025-11-11) | 0001-0005 from [orion-unofficial/edk2-cix](https://github.com/orion-unofficial/edk2-cix) `source/unofficial/cix/1.2/op-tee/3.17.0` (BSD-2-Clause, authorship kept): compiler fixes, fail-closed hardware entropy and key return, FF-A 1.2 StandaloneMM loader behind `CFG_STMM_FFA_VERSION=12` (default 10 keeps the vendor StMM interface), stop StMM on a failed NOR transaction; 0006 NOR secure storage only where the TrustZone configuration puts it |
 
@@ -205,6 +205,16 @@ was compared between the two binaries; after patch 0006 they agree.
 * **System suspend** (patch 0005): the audio domain sequence and the `0xBB`
   resume marker in `SW_USED_REG1` the CIX BL31 has on the first core back.
 * **QoS** (patch 0006): NPU at 0x7, SE and PM ports at 0xD.
+* **SiP argument checks** (patch 0007). `CIX_SIP_NOR_STORAGE`
+  (`0xC200000B`) runs a SPI NOR transaction on a buffer the caller gives as
+  a physical address, and the CIX BL31 accepts it from the normal world
+  unchecked: since BL31 maps its own and OP-TEE's memory, a normal-world
+  caller can have flash data written over the secure firmware, or secure
+  memory written to flash. The open BL31 keeps normal-world buffers inside
+  non-secure DRAM (OP-TEE's calls for StandaloneMM come from the secure
+  world and are unchanged). `CIX_SIP_POWER_DOMAIN_SET` (`0xC200000A`)
+  indexed a table with an unchecked ID and now ignores out-of-range ones.
+  Every board's vendor BL31 has both handlers as they were.
 
 Left out on purpose:
 

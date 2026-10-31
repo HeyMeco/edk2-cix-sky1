@@ -1,0 +1,94 @@
+From f048b3616ca4bf0f427068b3efab96609551716b Mon Sep 17 00:00:00 2001
+From: Mecid <mecidi.cc@gmail.com>
+Date: Sat, 31 Oct 2026 13:00:45 +0100
+Subject: [PATCH] plat/cix: check normal-world SiP arguments
+
+CIX_SIP_NOR_STORAGE (0xC200000B) runs one SPI NOR transaction with a
+data buffer the caller names by physical address (x4 bits 31:0, length
+in bits 63:32), and BL31 accepted it from any caller.  BL31 maps its own
+image and OP-TEE's, so a normal-world caller could have flash data
+written over BL31 or OP-TEE memory, or their memory written to flash.
+OP-TEE issues the call for StandaloneMM's variable store, from the
+secure world; nothing in UEFI calls it directly.  Keep secure callers as
+they are and refuse a normal-world buffer outside the non-secure DRAM
+BL31 maps (SMC_UNK).
+
+CIX_SIP_POWER_DOMAIN_SET (0xC200000A) indexed the power domain table
+with x1 unchecked; out-of-range IDs now do nothing.
+
+The CIX BL31 in the vendor bootloader2 has both handlers as they were.
+---
+ plat/cix/common/cix_sip_svc.c        | 34 ++++++++++++++++++++++++++--
+ plat/cix/sky1/drivers/scmi/scmi_pd.c |  4 ++++
+ 2 files changed, 36 insertions(+), 2 deletions(-)
+
+diff --git a/plat/cix/common/cix_sip_svc.c b/plat/cix/common/cix_sip_svc.c
+index f5aeabeef..72e509d25 100755
+--- a/plat/cix/common/cix_sip_svc.c
++++ b/plat/cix/common/cix_sip_svc.c
+@@ -141,6 +141,33 @@ int cix_nor_storage_handler(uint32_t smc_fid,
+ 	return ret;
+ }
+ 
++/*
++ * The NOR transaction's data buffer (x4: address in bits 31:0, length in
++ * bits 63:32) is a physical address BL31 reads from or writes to.  OP-TEE
++ * passes StandaloneMM's buffers; a normal-world caller may only name
++ * non-secure DRAM, or it could have flash data written over BL31 or
++ * OP-TEE, or their memory written to flash.
++ */
++static bool cix_nor_buffer_allowed(u_register_t flags, u_register_t x4)
++{
++	unsigned long long base = x4 & 0xffffffffULL;
++	unsigned long long size = x4 >> 32;
++	unsigned long long ns_end;
++
++	if (is_caller_secure(flags) || (size == 0U)) {
++		return true;
++	}
++	ns_end = SKY1_NS_DRAM1_BASE +
++		 (unsigned long long)GetMemOutputBuffer()->AvailableSize *
++		 0x100000ULL - SKY1_TZC_DRAM1_SIZE;
++	if ((base < SKY1_NS_DRAM1_BASE) || (base + size > ns_end)) {
++		WARN("SiP NOR: buffer 0x%llx+0x%llx outside non-secure DRAM\n",
++		     base, size);
++		return false;
++	}
++	return true;
++}
++
+ static int cix_sip_setup(void)
+ {
+ 	/* register Sip service function ops*/
+@@ -229,8 +256,11 @@ static uintptr_t cix_sip_handler(unsigned int smc_fid,
+ 		}
+ 
+ 	case CIX_SIP_NOR_STORAGE:
+-                SMC_RET1(handle, cix_nor_storage_handler(smc_fid, x1, x2, x3, x4));
+-                break;
++		if (!cix_nor_buffer_allowed(flags, x4)) {
++			SMC_RET1(handle, SMC_UNK);
++		}
++		SMC_RET1(handle, cix_nor_storage_handler(smc_fid, x1, x2, x3, x4));
++		break;
+ 
+ 	case ARM_SIP_SVC_CALL_COUNT:
+ 		/* PMF calls */
+diff --git a/plat/cix/sky1/drivers/scmi/scmi_pd.c b/plat/cix/sky1/drivers/scmi/scmi_pd.c
+index a6bb1be71..88201a20e 100644
+--- a/plat/cix/sky1/drivers/scmi/scmi_pd.c
++++ b/plat/cix/sky1/drivers/scmi/scmi_pd.c
+@@ -389,6 +389,10 @@ void set_clr_power_domain_cnt(uint32_t pd_id, bool flag)
+ 	struct power_domain pd_info, parent_pd;
+ 	uint32_t parent_id;
+ 
++	/* pd_id comes from CIX_SIP_POWER_DOMAIN_SET */
++	if (pd_id >= ARRAY_SIZE(scmi_power_domains))
++		return;
++
+ 	pd_info = scmi_power_domains[pd_id];
+ 	parent_id = pd_info.parent_id;
+ 
+-- 
+2.56.0
+
