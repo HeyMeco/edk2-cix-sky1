@@ -84,6 +84,14 @@
   DEFINE NETWORK_ENABLE             = TRUE    # built in; off until enabled in setup
 
   #
+  # Never burn eFuses.  CIX's EfuseOemKeyDxe writes OemPublicKey.bin into the
+  # SoC's OEM root-key eFuses on the first boot of a chip that has none, which
+  # is irreversible and would bind the board to that key's boot chain.  UEFI
+  # Secure Boot does not need it: its keys are variables in SPI flash.
+  #
+  DEFINE EFUSE_OEM_KEY_ENABLE       = FALSE
+
+  #
   # Secure Boot defaults: Microsoft's keys (see SecureBootKeys/README.md), so
   # "Reset Secure Boot Keys" enables Windows and shim-signed Linux.  DBX stays
   # on the Sky1 default; Windows Update maintains it.
