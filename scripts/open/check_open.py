@@ -13,6 +13,9 @@ From the flash image (dist/<board>_<version>_open.bin or cix_flash_all.bin):
 * bootloader2 and bootloader3: their certificate chains verify against
   that root (bootloader3 through its own trusted key certificate, as
   NON_TRUSTED_KEY_CERT_ID in the BL2 chain of trust).
+* the TrustZone configuration (image type 9, if the layout has one) passes
+  the checks BL31 makes, and its secure storage region, if enabled, stays
+  clear of the boot firmware.
 
 Needs openssl and python3-cryptography (the build container has both).
 """
@@ -26,6 +29,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cixfw  # noqa: E402
 
 DIGESTINFO_SHA256 = bytes.fromhex("3031300d060960864801650304020105000420")
+
+
+def tz_config(blob):
+    """Parse trustzone_config.bin as BL31 does (sky1_tz_config.c): returns
+    (problem or None, data fields)."""
+    vmaj, vmin, _, length, sig, crc1, crc2 = struct.unpack_from("<HHIIIII", blob)
+    if sig != 0x46435A54:
+        return f"signature {sig:#x}", None
+    if (vmaj, vmin, blob[24]) != (1, 0, 1):
+        return f"version {vmaj}.{vmin}/{blob[24]}", None
+    if not (36 <= length <= 64 and length % 4 == 0):
+        return f"length {length}", None
+    words = list(struct.unpack_from(f"<{length // 4}I", blob))
+    words[4] = words[5] = 0
+    a = b = 0
+    for w in words:
+        a = (a + w) & 0xFFFFFFFF
+        b = (b + a) & 0xFFFFFFFF
+    if (a, b) != (crc1, crc2):
+        return "checksum", None
+    data = blob[26:26 + min(blob[25] - 2, 11)].ljust(11, b"\0")
+    spe, stype, saddr, ssize, recovery = struct.unpack("<BBIIB", data)
+    return None, {"spe": spe, "storage": stype, "addr": saddr, "size": ssize, "recovery": recovery}
 
 
 def header_entries(img):
@@ -90,6 +116,16 @@ def main():
         signer = hashlib.sha256(cixfw.TbbrCert(tk[0]).spki()).digest() if tk else b""
         check(not problems, f"{name} chain {problems or 'ok'}")
         check(signer == rotpk, f"{name} trusted key certificate signed by the BL2 root of trust")
+
+    # TrustZone configuration (only the Orion O6/O6N layouts have one)
+    if 9 in hdr:
+        a9, n9 = hdr[9]
+        problem, tz = tz_config(img[a9:a9 + n9])
+        check(problem is None, f"TrustZone configuration {problem or tz}")
+        if tz and tz["storage"] == 1:
+            clash = [t for t, (a, n) in hdr.items() if a < tz["addr"] + tz["size"] and tz["addr"] < a + n]
+            check(not clash and tz["addr"] >= 0x101010,
+                  f"secure storage {tz['addr']:#x}+{tz['size']:#x} clear of the boot firmware {clash or ''}")
 
     print("image ok" if not bad else f"{len(bad)} check(s) failed")
     sys.exit(1 if bad else 0)

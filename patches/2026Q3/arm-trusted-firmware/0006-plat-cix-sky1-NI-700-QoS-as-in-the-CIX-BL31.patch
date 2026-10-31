@@ -1,0 +1,54 @@
+From d7b082bab8e197372a2d3a3d4ec347440e51374d Mon Sep 17 00:00:00 2001
+From: Mecid <mecidi.cc@gmail.com>
+Date: Sat, 31 Oct 2026 12:50:45 +0100
+Subject: [PATCH] plat/cix: sky1: NI-700 QoS as in the CIX BL31
+
+The NI-700 QoS table of the CIX BL31 (v2.7 release Beta 2.1.5, July
+2026) differs from the public tree's (March 2026) in three places:
+
+* NPU read and write QoS 0x7 instead of 0xd (MMHUB_NPU_SLV0/1);
+* SYSHUB_SE (0x0d098000) and SYSHUB_PM (0x0d097000) overrides with QoS
+  0xd, after SYSHUB_USBC_DRD_SLV.
+
+Every other QoS entry (NI-700 and CI-700) is identical; compared entry by
+entry in the two binaries.
+---
+ plat/cix/sky1/sky1_qos.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/plat/cix/sky1/sky1_qos.c b/plat/cix/sky1/sky1_qos.c
+index e2728e0e2..167c72303 100644
+--- a/plat/cix/sky1/sky1_qos.c
++++ b/plat/cix/sky1/sky1_qos.c
+@@ -55,6 +55,8 @@ typedef enum {
+ 	SYSHUB_USBC_1_SLV,
+ 	SYSHUB_USBC_2_SLV,
+ 	SYSHUB_USBC_DRD_SLV,
++	SYSHUB_SE,
++	SYSHUB_PM,
+ 
+ 	PCIEHUB_PCIE_X1_SLV0,
+ 	PCIEHUB_PCIE_X1_SLV1,
+@@ -174,8 +176,8 @@ static ni700_qos_setting_t g_sky1_ni700_qos_setting [ ] = {
+ 	QOS_NI700_NODE_INIT(MMHUB_ISP_SLV0,     PLAT_QOS_ENA,0xf/*ar_qos*/,0xf/*aw_qos*/,0xd058000+0x84,0xd058000+0x8c,0xd058000+0x90),
+ 	QOS_NI700_NODE_INIT(MMHUB_ISP_SLV1,     PLAT_QOS_ENA,0xf/*ar_qos*/,0xf/*aw_qos*/,0xd059000+0x84,0xd059000+0x8c,0xd059000+0x90),
+ 
+-	QOS_NI700_NODE_INIT(MMHUB_NPU_SLV0,     PLAT_QOS_ENA,0xd/*ar_qos*/,0xd/*aw_qos*/,0xd05a000+0x84,0xd05a000+0x8c,0xd05a000+0x90),
+-	QOS_NI700_NODE_INIT(MMHUB_NPU_SLV1,     PLAT_QOS_ENA,0xd/*ar_qos*/,0xd/*aw_qos*/,0xd05b000+0x84,0xd05b000+0x8c,0xd05b000+0x90),
++	QOS_NI700_NODE_INIT(MMHUB_NPU_SLV0,     PLAT_QOS_ENA,0x7/*ar_qos*/,0x7/*aw_qos*/,0xd05a000+0x84,0xd05a000+0x8c,0xd05a000+0x90),
++	QOS_NI700_NODE_INIT(MMHUB_NPU_SLV1,     PLAT_QOS_ENA,0x7/*ar_qos*/,0x7/*aw_qos*/,0xd05b000+0x84,0xd05b000+0x8c,0xd05b000+0x90),
+ 
+ 	QOS_NI700_NODE_INIT(MMHUB_VPU_SLV0,     PLAT_QOS_ENA,0xd/*ar_qos*/,0xd/*aw_qos*/,0xd05d000+0x84,0xd05d000+0x8c,0xd05d000+0x90),
+ 	QOS_NI700_NODE_INIT(MMHUB_VPU_SLV1,     PLAT_QOS_ENA,0xd/*ar_qos*/,0xd/*aw_qos*/,0xd05e000+0x84,0xd05e000+0x8c,0xd05e000+0x90),
+@@ -193,6 +195,8 @@ static ni700_qos_setting_t g_sky1_ni700_qos_setting [ ] = {
+ 	QOS_NI700_NODE_INIT(SYSHUB_USBC_1_SLV,  PLAT_QOS_ENA,0x8/*ar_qos*/,0x8/*aw_qos*/,0xd0a5000+0x84,0xd0a5000+0x8c,0xd0a5000+0x90),
+ 	QOS_NI700_NODE_INIT(SYSHUB_USBC_2_SLV,  PLAT_QOS_ENA,0x8/*ar_qos*/,0x8/*aw_qos*/,0xd0a6000+0x84,0xd0a6000+0x8c,0xd0a6000+0x90),
+ 	QOS_NI700_NODE_INIT(SYSHUB_USBC_DRD_SLV,PLAT_QOS_ENA,0x8/*ar_qos*/,0x8/*aw_qos*/,0xd0a7000+0x84,0xd0a7000+0x8c,0xd0a7000+0x90),
++	QOS_NI700_NODE_INIT(SYSHUB_SE,          PLAT_QOS_ENA,0xd/*ar_qos*/,0xd/*aw_qos*/,0xd098000+0x84,0xd098000+0x8c,0xd098000+0x90),
++	QOS_NI700_NODE_INIT(SYSHUB_PM,          PLAT_QOS_ENA,0xd/*ar_qos*/,0xd/*aw_qos*/,0xd097000+0x84,0xd097000+0x8c,0xd097000+0x90),
+ 
+ 	/*pciepub-ni700-ansi qos setting*/
+ //	QOS_NI700_NODE_INIT(PCIEHUB_PCIE_X1_SLV0,PLAT_QOS_ENA,0xf/*ar_qos*/,0xf/*aw_qos*/,0xd016000+0x84,0xd016000+0x8c,0xd016000+0x90),
+-- 
+2.56.0
+

@@ -1,0 +1,243 @@
+From b6447ee7e2970fe1889b6cba8c2d29f1a0c715f1 Mon Sep 17 00:00:00 2001
+From: Mecid <mecidi.cc@gmail.com>
+Date: Sat, 31 Oct 2026 12:44:28 +0100
+Subject: [PATCH] plat-cix: NOR secure storage only where the TrustZone
+ configuration says
+
+The NOR file system (TEE_STORAGE_PRIVATE_NOR) wrote at CFG_NOR_FS_OFFSET
+(0x800000) plus 1 or 2 MiB depending on the flash's JEDEC density.  On
+the 8 MiB flashes of the Orion O6 that is past the end of the chip, which
+ignores the upper address bits: the file system would land on the
+firmware header and bootloader1.
+
+The CIX OP-TEE in the vendor bootloader2 takes the region from the
+TrustZone configuration TF-A BL31 leaves at 0x80400000 instead (the
+TZ_TFA_SECURE_BASE mapping).  Do the same, with checks the vendor build
+does not have:
+
+* plat-cix maps CFG_TZ_CONFIG_SHM and reports the region only when
+  secure_storage_type is 1 (enabled);
+* spi_nor_fs_setup() accepts it only inside the chip (JEDEC density) and
+  below 16 MiB, on 4 KiB boundaries; otherwise the NOR file system
+  reports TEE_ERROR_STORAGE_NOT_AVAILABLE;
+* the file system's block count is capped to the region.
+
+The CIX default configuration has secure storage disabled.
+---
+ core/arch/arm/plat-cix/conf.mk |  4 +++
+ core/arch/arm/plat-cix/main.c  | 26 ++++++++++++++-
+ core/drivers/spi-nor/spi_nor.c | 58 ++++++++++++++++++++++------------
+ core/include/drivers/spi_nor.h |  7 ++++
+ core/tee/tee_nor_fs.c          |  8 +++++
+ 5 files changed, 81 insertions(+), 22 deletions(-)
+
+diff --git a/core/arch/arm/plat-cix/conf.mk b/core/arch/arm/plat-cix/conf.mk
+index 09e58ff4..f3feda39 100755
+--- a/core/arch/arm/plat-cix/conf.mk
++++ b/core/arch/arm/plat-cix/conf.mk
+@@ -127,6 +127,10 @@ endif
+ CFG_TZ_TF_A_SHM ?= 0x824FF000
+ CFG_TZ_TF_A_SIZE ?= 0x00001000
+ 
++# TrustZone configuration TF-A BL31 leaves for OP-TEE (secure storage region)
++CFG_TZ_CONFIG_SHM ?= 0x80400000
++CFG_TZ_CONFIG_SIZE ?= 0x00001000
++
+ CFG_SHMEM_START ?= 0x82500000
+ CFG_SHMEM_SIZE ?= 0x00B00000
+ CFG_NUM_THREADS = 32
+diff --git a/core/arch/arm/plat-cix/main.c b/core/arch/arm/plat-cix/main.c
+index c56d6d6e..17320286 100644
+--- a/core/arch/arm/plat-cix/main.c
++++ b/core/arch/arm/plat-cix/main.c
+@@ -38,6 +38,7 @@
+ #include <platform_config.h>
+ #include <stdint.h>
+ #include <drivers/cix_uart_pl011.h>
++#include <drivers/spi_nor.h>
+ #include <drivers/gic.h>
+ #include <drivers/ipc.h>
+ #include <kernel/tee_common_otp.h>
+@@ -92,6 +93,10 @@ register_phys_mem(MEM_AREA_IO_NSEC, FIRMWARE_VERSION_STR_BASE_ADDR, FIRMWARE_VER
+ register_phys_mem(MEM_AREA_RAM_SEC, TZ_TFA_SHM_BASE, TZ_TFA_SHM_SIZE);
+ #endif
+ 
++#if defined(CFG_TZ_CONFIG_SHM)
++register_phys_mem(MEM_AREA_RAM_SEC, CFG_TZ_CONFIG_SHM, CFG_TZ_CONFIG_SIZE);
++#endif
++
+ #if defined(CFG_TEE_KEY_META_SHM)
+ register_phys_mem(MEM_AREA_RAM_SEC, TEE_KEY_META_SHM_BASE, TEE_KEY_META_SHM_SIZE);
+ #endif
+@@ -202,4 +207,23 @@ TEE_Result tee_otp_get_ta_enc_key(uint32_t key_type __maybe_unused,
+ 	return ret;
+ }
+ 
+-
++#if defined(CFG_TZ_CONFIG_SHM) && defined(CFG_NOR_FS)
++/*
++ * NOR secure storage region from the TrustZone configuration that BL31 reads
++ * from the boot flash (trustzone_config.bin, trustzone_export_config.h in the
++ * CIX PackageTool) and leaves at CFG_TZ_CONFIG_SHM: spe_feature_en (u8),
++ * secure_storage_type (u8, 1: enabled), secure_storage_addr (u32),
++ * secure_storage_size (u32), bl3_backup_recovery_en (u8).
++ */
++bool plat_get_nor_fs_region(uint32_t *offset, uint32_t *size)
++{
++	const uint8_t *cfg = phys_to_virt(CFG_TZ_CONFIG_SHM, MEM_AREA_RAM_SEC,
++					  11);
++
++	if (!cfg || cfg[1] != 1)
++		return false;
++	*offset = get_unaligned_le32(cfg + 2);
++	*size = get_unaligned_le32(cfg + 6);
++	return true;
++}
++#endif
+diff --git a/core/drivers/spi-nor/spi_nor.c b/core/drivers/spi-nor/spi_nor.c
+index 761d34e6..c13dc329 100644
+--- a/core/drivers/spi-nor/spi_nor.c
++++ b/core/drivers/spi-nor/spi_nor.c
+@@ -3,6 +3,7 @@
+  *
+  * SPDX-License-Identifier: BSD-3-Clause
+  */
++#include <inttypes.h>
+ #include <util.h>
+ #include <stdio.h>
+ #include <string_ext.h>
+@@ -21,17 +22,15 @@
+ #define SPANSION_ID		0x01U
+ #define MACRONIX_ID		0xC2U
+ #define MICRON_ID		0x2CU
+-#define W25R64JW                0x17
+-#define W25R128JW               0x18
+-#define NOR_JEDEC_OFFSET        0x100000
+ #define BANK_SIZE		0x1000000U
+ #define WRITE_SECTION_SIZE      256
+ #define ERASE_SECTION_SIZE       0x1000
+ #define SPI_READY_TIMEOUT_US	80000U
+ #define QSPI_FLASH_CONFIG       0x188800
+ 
+-uint32_t nor_fs_offset = CFG_NOR_FS_OFFSET;
+-uint32_t nor_fs_size = 0x200000;
++/* Set by spi_nor_fs_setup() */
++uint32_t nor_fs_offset;
++uint32_t nor_fs_size;
+ 
+ static int spi_nor_reg(uint8_t reg, uint8_t *buf, size_t len,
+ 					   enum spi_mem_data_dir dir)
+@@ -80,27 +79,45 @@ static inline int spi_nor_write_en(void)
+ }
+ 
+ 
++/* No secure storage unless the platform says where (see spi_nor_fs_setup()) */
++bool __weak plat_get_nor_fs_region(uint32_t *offset __unused,
++				   uint32_t *size __unused)
++{
++	return false;
++}
++
+ /*
+- * set secure storage offset and size, while init spi nor.
++ * Secure storage region in the boot flash, from the platform.  It must lie
++ * inside the chip as its JEDEC density reports it and below 16 MiB (3-byte
++ * addresses): an 8 MiB flash ignores the address bits above, so a region
++ * past its end would wrap onto the boot firmware.
+  */
+-static int spi_nor_set_offset_by_jedec()
++bool spi_nor_fs_setup(void)
+ {
+-        uint8_t jedec_id[6];
+-        spi_nor_read_jedec(jedec_id);
+-
+-        if(W25R64JW == jedec_id[2])
+-	{
+-                nor_fs_offset += NOR_JEDEC_OFFSET;
+-		nor_fs_size = 0x100000;
+-	}
+-        else if(W25R128JW == jedec_id[2])
+-	{
+-                nor_fs_offset += 2 * NOR_JEDEC_OFFSET;
+-		nor_fs_size = 0x800000;
++	uint8_t jedec_id[3] = { 0 };
++	uint64_t chip_size;
++	uint32_t offset = 0;
++	uint32_t size = 0;
++
++	if (!plat_get_nor_fs_region(&offset, &size) || !size)
++		return false;
++	if (spi_nor_read_jedec(jedec_id) || jedec_id[2] < 0x10 ||
++	    jedec_id[2] > 0x18)
++		return false;
++	chip_size = BIT64(jedec_id[2]);
++	if ((uint64_t)offset + size > chip_size ||
++	    offset % ERASE_SECTION_SIZE || size % ERASE_SECTION_SIZE) {
++		EMSG("NOR secure storage 0x%"PRIx32"+0x%"PRIx32" outside the %"PRIu64" MiB flash",
++		     offset, size, chip_size >> 20);
++		return false;
+ 	}
++	nor_fs_offset = offset;
++	nor_fs_size = size;
++	IMSG("NOR secure storage at 0x%"PRIx32", 0x%"PRIx32" bytes", offset,
++	     size);
++	return true;
+ }
+ 
+-
+ /*
+  * Check if device is ready.
+  *
+@@ -342,7 +359,6 @@ int spi_mem_exec_op(const struct spi_mem_op *op)
+ 
+ void spi_nor_register_normal(struct spi_nor *nor)
+ {
+-	spi_nor_set_offset_by_jedec();
+ 	nor->read_dummy = 1;
+ 	nor->is_secure = true;
+ 	nor->size = nor_fs_size;
+diff --git a/core/include/drivers/spi_nor.h b/core/include/drivers/spi_nor.h
+index e4f2e4c0..185861da 100644
+--- a/core/include/drivers/spi_nor.h
++++ b/core/include/drivers/spi_nor.h
+@@ -143,4 +143,11 @@ void spi_nor_register_w77(struct spi_nor *nor);
+ 
+ int spi_mem_exec_op(const struct spi_mem_op *op);
+ int spi_nor_read_jedec(uint8_t *id);
++
++/*
++ * Secure storage region in the boot flash (offset and size in bytes); false
++ * when the platform has none.
++ */
++bool plat_get_nor_fs_region(uint32_t *offset, uint32_t *size);
++bool spi_nor_fs_setup(void);
+ #endif /* DRIVERS_SPI_NOR_H */
+diff --git a/core/tee/tee_nor_fs.c b/core/tee/tee_nor_fs.c
+index 132b7d70..020b3cb3 100644
+--- a/core/tee/tee_nor_fs.c
++++ b/core/tee/tee_nor_fs.c
+@@ -248,6 +248,9 @@ static TEE_Result tee_nor_init(void)
+ 	if (true == nor_dev_info_synced)
+ 		return TEE_SUCCESS;
+ 
++	if (!secure_nor && !spi_nor_fs_setup())
++		return TEE_ERROR_STORAGE_NOT_AVAILABLE;
++
+ 	g_spi_nor = malloc(sizeof(struct spi_nor));
+ 	if (g_spi_nor == NULL)
+ 		return TEE_ERROR_OUT_OF_MEMORY;
+@@ -471,6 +474,11 @@ static TEE_Result tee_nor_get_max_block(uint32_t *max_block)
+                        max_nor_block = 4 * CFG_NOR_FS_MAX_BLOCKS;
+        }
+ 
++	/* Normal flash: stay inside the region spi_nor_fs_setup() accepted */
++	if (!CFG_SECURE_NOR_FLASH)
++		max_nor_block = MIN(max_nor_block,
++				    g_spi_nor->size >> NOR_BLOCK_SIZE_SHIFT);
++
+ 	DMSG("tee_nor_get_max_block successfully");
+ 	*max_block = max_nor_block;
+ 
+-- 
+2.56.0
+

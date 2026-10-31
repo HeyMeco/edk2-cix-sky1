@@ -9,6 +9,8 @@
 * the flash packer: header layout, address order, bootloader2 version
   stamp, OTA concatenation (the byte-for-byte comparison with
   cix_package_tool is in docs/open-firmware.md; it needs the CIX tool)
+* the TrustZone configuration parser of check_open.py (BL31's checks) on
+  the 40-byte CIX and the 36-byte Radxa formats
 """
 
 import json
@@ -21,6 +23,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 sys.path.insert(0, str(HERE))
+import check_open  # noqa: E402
 import cixfw  # noqa: E402
 
 failures = []
@@ -100,11 +103,40 @@ def test_pack(tmp):
         check(True, "oversized file rejected")
 
 
+def tz_blob(config):
+    """trustzone_config.bin as the CIX trustzone_config tool writes it."""
+    length = (24 + len(config) + 3) & ~3
+    body = bytearray(struct.pack("<HHIIIII", 1, 0, 1234, length, 0x46435A54, 0, 0) + config)
+    body += b"\xff" * (length - len(body))
+    words = struct.unpack(f"<{length // 4}I", bytes(body))
+    a = b = 0
+    for w in words:
+        a = (a + w) & 0xFFFFFFFF
+        b = (b + a) & 0xFFFFFFFF
+    struct.pack_into("<II", body, 16, a, b)
+    return bytes(body) + b"\xff" * (4096 - length)
+
+
+def test_tz_config():
+    cix = tz_blob(bytes([1, 13, 1, 0]) + struct.pack("<II", 0, 0) + b"\0")
+    radxa = tz_blob(bytes([1, 12, 1, 1]) + struct.pack("<II", 0x600000, 0x200000))
+    check(len(cix) == 4096 and struct.unpack_from("<I", cix, 8)[0] == 40, "TrustZone config: CIX format is 40 bytes")
+    check(check_open.tz_config(cix) == (None, {"spe": 1, "storage": 0, "addr": 0, "size": 0, "recovery": 0}),
+          "TrustZone config: CIX format parses")
+    check(check_open.tz_config(radxa) == (None, {"spe": 1, "storage": 1, "addr": 0x600000, "size": 0x200000,
+                                                 "recovery": 0}),
+          "TrustZone config: Radxa format parses, missing recovery byte reads 0")
+    bad = bytearray(radxa)
+    bad[27] ^= 1
+    check(check_open.tz_config(bytes(bad))[0] == "checksum", "TrustZone config: corrupted byte detected")
+
+
 def main():
     test_vendor_bl1()
     with tempfile.TemporaryDirectory() as td:
         test_resign(Path(td))
         test_pack(Path(td))
+    test_tz_config()
     if failures:
         sys.exit(f"{len(failures)} failure(s)")
 
