@@ -143,6 +143,7 @@ class Xtensa:
         self.sym_addrs = []
         self.div = None                   # operands of an FP divide sequence
         self.exclusive = 0                # exclusive-access monitor result (GETEX)
+        self.monitor = False              # exclusive monitor armed (CLREX clears it)
         self.trace = None
 
     # --- memory ----------------------------------------------------------
@@ -195,25 +196,83 @@ class Xtensa:
                 for seg in elf.iter_segments():
                     if seg["p_type"] == "PT_LOAD" and seg["p_filesz"]:
                         self.write_bytes(seg["p_paddr"], seg.data())
+            # code overlays (.overlayN.text) share one window: their symbols
+            # are kept per overlay and named by the one _ovly_id says is mapped
+            ovl = {}
+            for i, sec in enumerate(elf.iter_sections()):
+                if sec.name.startswith(".overlay") and sec.name.endswith(".text"):
+                    ovl[i] = int(sec.name[8:-5])
+                    self.overlay_window = (sec["sh_addr"], max(sec["sh_addr"] + sec["sh_size"],
+                                                               getattr(self, "overlay_window", (0, 0))[1]))
             syms = []
+            self.overlay_syms = {}
+            self.objects = {}
             for sec in elf.iter_sections():
                 if isinstance(sec, SymbolTableSection):
                     for s in sec.iter_symbols():
+                        if s["st_info"]["type"] == "STT_OBJECT" and s.name:
+                            self.objects[s.name] = (s["st_value"], s["st_size"])
                         if s["st_info"]["type"] in ("STT_FUNC", "STT_NOTYPE") and s.name and s["st_value"]:
-                            syms.append((s["st_value"], s.name, s["st_size"]))
+                            n = ovl.get(s["st_shndx"]) if isinstance(s["st_shndx"], int) else None
+                            if n is None:
+                                syms.append((s["st_value"], s.name, s["st_size"]))
+                            else:
+                                self.overlay_syms.setdefault(n, []).append((s["st_value"], s.name))
             self.entry = elf.header["e_entry"]
         syms.sort()
+        for v in self.overlay_syms.values():
+            v.sort()
         self.symbols = syms
         self.sym_addrs = [a for a, _, _ in syms]
         self.byname = {n: a for a, n, _ in syms}
+        for n, v in self.overlay_syms.items():
+            for a, name in v:
+                self.byname.setdefault(name, a)
 
     def addr(self, name):
-        return self.byname[name]
+        """Address of a function or (from load_elf) data symbol."""
+        if name in self.byname:
+            return self.byname[name]
+        return self.objects[name][0]
 
     def func(self, pc=None):
         pc = self.pc if pc is None else pc
+        win = getattr(self, "overlay_window", None)
+        if win and win[0] <= pc < win[1] and "_ovly_id" in self.byname:
+            n = self.read(self.byname["_ovly_id"], 4)
+            v = self.overlay_syms.get(n, [])
+            j = bisect_right([a for a, _ in v], pc) - 1
+            if j >= 0:
+                return f"{v[j][1]}+{pc - v[j][0]:#x} (overlay {n})"
         i = bisect_right(self.sym_addrs, pc) - 1
         return f"{self.symbols[i][1]}+{pc - self.symbols[i][0]:#x}" if i >= 0 else f"{pc:#x}"
+
+    def backtrace(self, depth=16):
+        """Return addresses of the windowed call chain, innermost first:
+        live frames from the register file, spilled ones from their save
+        areas (a caller's a0/a1 at its callee's sp - 16/- 12)."""
+        pcs = [self.pc]
+        wb, a0, a1, live = self.wb4 >> 2, self.a(0), self.a(1), True
+        if self.read(self.pc, 1) == 0x36:                    # at an ENTRY: the frame is the caller's
+            inc = (self.sr[PS] >> PS_CALLINC_SHIFT) & 3
+            pcs.append((self.a(4 * inc) & 0x3fffffff) | (self.pc & 0xc0000000))
+        while len(pcs) < depth:
+            inc = a0 >> 30
+            if not inc:
+                break
+            ret = (a0 & 0x3fffffff) | (pcs[-1] & 0xc0000000)
+            pcs.append(ret)
+            caller = (wb - inc) & 15
+            if live and self.ws >> caller & 1:
+                a0, a1 = self.ar[caller * 4], self.ar[caller * 4 + 1]
+            else:
+                live = False
+                try:
+                    a0, a1 = self.read(a1 - 16, 4), self.read(a1 - 12, 4)
+                except Exception:
+                    break
+            wb = caller
+        return pcs
 
     # --- registers -------------------------------------------------------
 
@@ -258,6 +317,7 @@ class Xtensa:
         elif n == INTCLEAR: self.int_latched &= ~v
         elif n == INTENABLE: self.intenable = v
         elif n == CCOUNT: self.ccount = v
+        elif n == CPENABLE: self.sr[n] = v & 0xff
         elif 240 <= n <= 242:
             self.ccompare[n - 240] = v
             self.int_latched &= ~(1 << TIMER_INT[n - 240])
@@ -364,6 +424,17 @@ class Xtensa:
 
     def pending(self):
         return (self.int_lines | self.int_latched) & self.intenable
+
+    def skip(self, cycles):
+        """Advance CCOUNT by cycles (a busy-wait done at once), latching the
+        timers it passes; bus.advance, if any, sees the time go by."""
+        c = self.ccount & M32
+        for i in range(3):
+            if 0 < (self.ccompare[i] - c) & M32 <= cycles:
+                self.int_latched |= 1 << TIMER_INT[i]
+        self.ccount += cycles
+        if hasattr(self.bus, "advance"):
+            self.bus.advance(self, cycles)
 
     def _timers(self):
         c = self.ccount & M32
@@ -839,6 +910,11 @@ def st0(w, r, s, t):
                     c.sr[PS] = ps & ~PS_EXCM
                     return c.sr[EPC1]
                 return Op(rfw, 0, ctl=True, text=("rfwo", "rfwu")[s - 4])
+        if t == 2 and s == 1:
+            # CLREX: CIX's image has it only where each interrupt dispatcher
+            # hands over to the RTOS, where ports with XCHAL_HAVE_EXCLUSIVE
+            # clear the monitor
+            return Op(lambda c, pc, n: setattr(c, "monitor", False), 0, text="clrex")
         if t == 1:                                     # RFI level
             lvl = s
 

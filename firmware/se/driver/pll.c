@@ -2,9 +2,11 @@
 /*
  * PLLs in the CSU_PM clock generator (CIX driver/pll/drv_pll.c).
  *
- * Each PLL block: +0x04 control (bit 24 output enable), +0x08 feedback
- * divider [6:0], +0x0c configuration (bit 5 start, bit 4 locked).  CPU
- * PLLs of harvested cores stay off.  The register writes keep CIX's order.
+ * Each PLL block: +0x00 feedback divider [11:0], +0x04 fraction [23:0]
+ * and output enable (bit 24), +0x08 post dividers [2:0] and [6:4] and
+ * reference divider [13:8] (as CSU_PM's pll_ctrl_* read them), +0x0c
+ * configuration (bit 5 start, bit 4 locked).  CPU PLLs of harvested cores
+ * stay off.  The register writes keep CIX's order.
  */
 #include "se.h"
 #include "harvest.h"
@@ -25,7 +27,7 @@
 #define DDRC_PLL		(CGC + 0x7000)
 
 #define PLL_CTRL		0x04
-#define PLL_FBDIV		0x08
+#define PLL_DIV			0x08
 #define PLL_CFG			0x0c
 #define PLL_OUT_EN		BIT(24)
 #define PLL_START		BIT(5)
@@ -33,7 +35,7 @@
 
 static void pll_set_div(uint32_t pll, uint32_t div)
 {
-	REG32(pll + PLL_FBDIV) = (REG32(pll + PLL_FBDIV) & ~0x7fu) | div;
+	REG32(pll + PLL_DIV) = (REG32(pll + PLL_DIV) & ~0x7fu) | div;
 }
 
 static void pll_start(uint32_t pll)
