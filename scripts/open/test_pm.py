@@ -10,6 +10,8 @@ assertion.  Compared:
 
 * register writes, per register in order (UART and I2C controllers
   excepted: the I2C transfers are compared instead);
+* the final contents of the shared memory it writes (the hub window at
+  0x60000000: PCC tables, logs);
 * with --scmi, the answers to the same SCMI commands on every channel
   (base protocol discovery, then each protocol's attributes and its domains).
 
@@ -25,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pm_emu  # noqa: E402
 
 CIX_PM = "release/pm_fw/Release/csupm_sky1"
-IDLE = "vApplicationIdleHook"
+IDLE = ("vApplicationIdleHook", "arch_idle")    # CIX's (FreeRTOS), ours
 BOOT_BUDGET = 8_000_000
 CHANNELS = (0, 2, 4, 6)               # AP -> PM mailboxes with an SMT channel
 # not compared register by register: UART data, I2C controllers (the
@@ -33,6 +35,13 @@ CHANNELS = (0, 2, 4, 6)               # AP -> PM mailboxes with an SMT channel
 IGNORE_BLOCKS = {0xa0030000, 0xa0010000, 0xa0011000, 0xa0012000, 0xa0013000}
 IGNORE_RANGES = []
 MAX_DOMAINS = 8                       # per protocol, to keep the run short
+# shared memory, compared by its final contents: the hub window
+# (CIX's _memmap_mem_sram_hub, DRAM and SRAM seen through a window)
+MEMORY = [(0x60000000, 0xa0000000, "hub window")]
+
+
+def is_memory(addr):
+    return any(lo <= addr < hi for lo, hi, _ in MEMORY)
 
 
 def ignored(addr):
@@ -44,7 +53,7 @@ def boot(elf):
     for name in pm_emu.ASSERTS:
         if name in cpu.byname:
             cpu.stops[cpu.addr(name)] = name
-    idle = cpu.addr(IDLE)
+    idle = next(cpu.addr(n) for n in IDLE if n in cpu.byname)
     cpu.stops[idle] = "idle"
     why = cpu.run(BOOT_BUDGET)
     del cpu.stops[idle]
@@ -53,9 +62,15 @@ def boot(elf):
         why = cpu.run(50_000) or "idle"
     regs = defaultdict(list)
     for pc, addr, size, value in cpu.writes:
-        if not ignored(addr) and not (pm_emu.RAM[0] <= addr < pm_emu.RAM[0] + pm_emu.RAM[1]):
+        if not ignored(addr) and not is_memory(addr) and \
+                not (pm_emu.RAM[0] <= addr < pm_emu.RAM[0] + pm_emu.RAM[1]):
             regs[addr].append(value)
     return cpu, soc, why, regs
+
+
+def memory(soc):
+    """Pages of the shared memory the run wrote: page -> bytes."""
+    return {p << 12: bytes(soc.mem.pages[p][:0x1000]) for p in soc.mem.pages if is_memory(p << 12)}
 
 
 def ask(cpu, soc, chan, proto, msg, args=()):
@@ -131,6 +146,17 @@ def main():
         for r in diffs[:None if a.v else 40]:
             print(f"  {r:#010x}: CIX {[hex(v) for v in ra.get(r, [])][:6]} open {[hex(v) for v in rb.get(r, [])][:6]}")
         print(f"{len(set(ra) | set(rb))} registers compared, {len(diffs)} differ")
+        ma, mb = memory(sa), memory(sb)
+        mdiff = 0
+        for page in sorted(set(ma) | set(mb)):
+            pa, pb = ma.get(page, bytes(0x1000)), mb.get(page, bytes(0x1000))
+            if pa != pb:
+                d = [i for i in range(0x1000) if pa[i] != pb[i]]
+                mdiff += 1
+                if a.v or mdiff <= 20:
+                    print(f"  memory {page:#010x}: {len(d)} bytes differ, first at {page + d[0]:#x}")
+        print(f"{len(set(ma) | set(mb))} pages of shared memory compared, {mdiff} differ")
+        bad += mdiff
         ia, ib = [w for _, w in sa.i2c_log], [w for _, w in sb.i2c_log]
         print(f"I2C: {'same' if ia == ib else 'differ'} ({len(ia)} transfers)")
         bad += len(diffs) + (ia != ib)

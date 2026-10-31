@@ -156,7 +156,9 @@ def check(paths, objdump):
             parts = line.split("\t")
             if literal or len(parts) < 3 or not re.match(r"^\s*[0-9a-f]+:$", parts[0]):
                 continue
-            mn = parts[2].split()[0] if parts[2].split() else ""
+            if not parts[2].strip():
+                continue                                    # a literal word (from .xt.prop), not code
+            mn = parts[2].split()[0]
             reg = re.match(r"^(rsr|wsr|xsr|rur|wur)\.(\w+)$", mn)
             ok = (reg.group(2) in ALLOWED_SRS) if reg else mn in ALLOWED
             if mn == ".byte" and prev in ("j", "jx", "ret", "ret.n", "retw", "retw.n", ".byte"):

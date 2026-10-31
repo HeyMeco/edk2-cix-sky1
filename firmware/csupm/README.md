@@ -137,6 +137,37 @@ python3 scripts/open/test_pm.py --scmi                 # CIX's image: reference
 python3 scripts/open/test_pm.py OURS.elf --scmi        # ours against it
 ```
 
+## Firmware
+
+Built in the container with `make` (`make check` also runs the
+instruction-set check on the image):
+
+```sh
+make -C firmware/csupm O=/tmp/csupm all check
+```
+
+* [`pm.ld`](pm.ld): CIX's memory map (IRAM `0x20000000`-`0x20030000`,
+  DRAM0 `0x20040000`-`0x20050000`, DRAM1 `0x20080000`-`0x200be700`, the
+  stack at its top; above it the eFuse copy, scratch and BIOS
+  configuration areas that other agents use), VECBASE `0x20000400`.
+* [`arch/vectors.S`](arch/vectors.S): reset, the register-window vectors
+  and the exception vectors; start-up enables coprocessor 0, clears .bss
+  (the SE does not) and calls `main`.
+* [`src/main.c`](src/main.c): stage 1, the SE handshake, then idle.
+* `csupm.xbin` is the bootloader1 image ("pm"):
+  [`scripts/open/xbin.py`](../../scripts/open/xbin.py) writes CIX's XBIN
+  format (header, one entry per program header, data), checked by
+  rebuilding the images in both vendor bootloader1 files byte for byte.
+
+Against CIX's image in `test_pm.py`, stage 1 boots and completes the
+handshake; of what CIX's image does by then, 1328 of 1329 registers, 5 of
+8 pages of shared memory and the 35 I2C transfers still differ, and so do
+the SCMI answers. The rest builds on SCP-firmware v2.11.0, the upstream
+release closest to CIX's framework and modules (their DWARF has the
+fewest functions upstream lacks and upstream has the fewest CIX lacks,
+of v2.9 to v2.14); CIX changed `fwk_core.c` to run inside FreeRTOS and
+added `ipc_arbiter` and `iotunnel` for the mailbox transport.
+
 ## Plan
 
 | Step | State |
@@ -146,7 +177,8 @@ python3 scripts/open/test_pm.py OURS.elf --scmi        # ours against it
 | Emulator for the core (`xt_emu.py`), running CIX's image into its drivers | done |
 | Model of the SoC as CSU_PM sees it (`pm_emu.py`): CIX's image reaches its idle task and answers SCMI | done |
 | Differential test harness (`test_pm.py`: register writes, I2C, SCMI answers) | done; suspend/resume to add |
-| Start-up, vectors, FreeRTOS port, libc | to do |
+| Start-up, vectors, libc, XBIN image; stage 1 boots and does the SE handshake | done |
+| Interrupts (aggregator, mailboxes), timer, idle with WAITI | to do |
 | SCP-firmware framework and modules (upstream plus CIX's changes), CIX modules and configuration | to do |
 | CIX `Source/common` and `Source/projects/sky1`, without the debug CLI | to do |
 | Our image passes `test_pm.py` | to do |
