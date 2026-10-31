@@ -298,6 +298,13 @@ in order; the shared-memory ones counted by 4 KiB page):
 
 ## Plan
 
+How much of CIX's code the port covers (by function size; translation, not
+equivalence, which `test_pm.py` checks):
+
+```sh
+python3 scripts/open/csupm_coverage.py OURS.elf [--units]
+```
+
 | Step | State |
 |---|---|
 | Toolchain for pm_core_v1, instruction-set check | done |
@@ -315,6 +322,6 @@ in order; the shared-memory ones counted by 4 KiB page):
 | DVFS: PMIC, PSU, DVFS, performance plugins, SCMI perf | done; DPM runtime (power model, TDP/EDP limits) to do |
 | RTT, RAM log, version, PCC tables | done |
 | System power sequence (shutdown, reset, suspend/resume, DDR retention, S3 script), PM messages | done; fans, PMIC error notification to do |
-| CIX `Source/common` and `Source/projects/sky1`, without the debug CLI | to do |
-| Our image passes `test_pm.py` | to do |
+| CIX `Source/common` and `Source/projects/sky1`, without the debug CLI | in progress: 42% and 70% of CIX's code (`csupm_coverage.py --units` lists what is left: DPM runtime, performance streams, fans; CIX's event, timer and job framework counts as left but is replaced by SCP-firmware's events) |
+| Our image passes `test_pm.py` | boot registers, I2C, SCMI and PM-message answers pass; left: 16 registers on resume and one after a PM message (both CIX's DPM runtime); the version and RAM log pages differ by design |
 | `build.sh --open` puts it in bootloader1 | to do |

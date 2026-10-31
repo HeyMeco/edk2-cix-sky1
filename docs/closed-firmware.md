@@ -11,8 +11,8 @@ prove identical code, and nothing here has been built or boot-tested.
 
 | Region | Contents | Public source | Can be rebuilt |
 |---|---|---|---|
-| `bootloader1.img` #1 | SE firmware (Cortex-M) | none | no |
-| `bootloader1.img` #2 | CSU_PM firmware (Xtensa, Arm SCP-firmware based) | SCP-firmware framework only | only with large reverse engineering |
+| `bootloader1.img` #1 | SE firmware (Cortex-M) | none | **built** for O6/O6N with `--open` from CIX's debug build, apart from the DDR driver (DRAM training), which is relinked ([open firmware](open-firmware.md#se-firmware)) |
+| `bootloader1.img` #2 | CSU_PM firmware (Xtensa, Arm SCP-firmware based) | SCP-firmware framework only | ported from CIX's debug build, matching CIX's in an emulator; not shipped yet ([open firmware](open-firmware.md#csu_pm)) |
 | `bootloader1.img` #3 | TF-A BL2 | cixtech TF-A, 5 platform files missing | **built** for O6/O6N with `--open` (patch 0002), re-signed into bootloader1 ([open firmware](open-firmware.md#bl2)) |
 | `bootloader2.img` | TF-A FIP: BL31 + OP-TEE BL32 (with StandaloneMM) | cixtech TF-A and OP-TEE, with gaps; StandaloneMM: EDK2 + 3 CIX binaries | **built** for O6/O6N with `--open`, StandaloneMM included ([open firmware](open-firmware.md#standalonemm)) |
 | `csu_pm_config.bin` | PM configuration | `pm_config` generator | yes, byte-identical for both Orange Pi boards |
@@ -236,13 +236,16 @@ images contain: the SE weekly tag (where present), the CSU_PM build
   the verification in software), bootloader3 recovery from the backup copy
   (`plat_recovery_from_backup`, about 25 strings), and the TrustZone loader
   and SPI-NOR write shared with BL31. Best done together with BL31.
-* **CSU_PM**: the framework is open (Arm SCP-firmware, BSD-3-Clause) and the
-  module structure is visible, but every CIX module (PLL, PMIC/EDP, DDR DFS,
-  thermal, fans, `SKY1SOC_PERF`, IPC arbiter, CLI) would have to be recovered
-  from Xtensa code, and building needs the exact Xtensa core configuration,
-  which is proprietary. This is the firmware that sets frequency caps.
-* **SE firmware**: no counterpart. It contains the DRAM training and the
-  eFuse and secure-boot logic; not a realistic target.
+* **CSU_PM**: the framework is open (Arm SCP-firmware, BSD-3-Clause); CIX's
+  modules (PLL, PMIC/EDP, DDR DFS, thermal, fans, `SKY1SOC_PERF`, IPC
+  arbiter, CLI) are recovered from the debug build CIX published, which
+  has full DWARF. The core configuration is proprietary, but the core has
+  no user TIE, so GCC builds for it with a description made from the
+  instructions CIX's build uses. This is the firmware that sets frequency
+  caps. Status: [open firmware](open-firmware.md#csu_pm).
+* **SE firmware**: rebuilt from CIX's debug build, apart from the DRAM
+  training, which is relinked as CIX built it
+  ([open firmware](open-firmware.md#se-firmware)).
 
 ## EC firmware
 
