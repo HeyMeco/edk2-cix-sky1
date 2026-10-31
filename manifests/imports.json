@@ -7,10 +7,10 @@
     "upstream": "Platform/Radxa",
     "local": "edk2-project/Platform/Radxa",
     "summary": {
-      "same": 131,
+      "same": 129,
+      "modified": 9,
       "removed": 38,
-      "added": 6,
-      "modified": 7
+      "added": 5
     },
     "files": {
       "ACS/acs_waiver.json": {
@@ -19,11 +19,11 @@
       },
       "Drivers/AcpiPlatformDxe/AcpiPlatformDxe.c": {
         "upstream_blob": "9ad3c0273ae1232c2429400ffc61860d1a84305e",
-        "status": "same"
+        "status": "modified"
       },
       "Drivers/AcpiPlatformDxe/AcpiPlatformDxe.inf": {
         "upstream_blob": "d13e1a3bdc7652230dc9e6f5be213b507cc3a001",
-        "status": "same"
+        "status": "modified"
       },
       "Drivers/Logo/Logo.bmp": {
         "upstream_blob": "2cdf2dca3cc0a1942299ad96a0b7bf6df7c0aedf",
@@ -60,10 +60,6 @@
       "Include/PlatformInfoTypes.h": {
         "upstream_blob": "1619cc2ff1b1b15f0d601952411f83676c89180c",
         "status": "same"
-      },
-      "Include/RadxaSetupVar.h": {
-        "upstream_blob": null,
-        "status": "added"
       },
       "Library/ArmPsciResetSystemLib/ArmPsciResetSystemLib.c": {
         "upstream_blob": "bc41d2b66ae3cc53a0a1660eae3e32b62d0c42f6",

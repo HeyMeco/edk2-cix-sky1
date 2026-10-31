@@ -46,7 +46,8 @@ features" block); a board DSC only describes its hardware:
 give them `!ifndef` defaults: hardware switches are set by every board DSC,
 features unconditionally by the shared body after the board's defines.
 The CIX setup interface hides what a board lacks from its hardware switches
-(patch 0014: no EC, no GMAC). Board-only drivers go into the FV through
+(patch 0014: no EC, no GMAC) and shows board-only options from them
+(patch 0015: UFS power with `BOARD_UFS_POWER`). Board-only drivers go into the FV through
 `BOARD_FDF_DXE_EARLY`/`BOARD_FDF_DXE` (e.g. the O6N's PD driver).
 What is shared and what differs per board: [parity](parity.md).
 
@@ -64,8 +65,10 @@ CIX setup interface and drivers replace them, and DT boot reads the DTB
 `sky1-orion-o6.dtb` / `sky1-orion-o6n.dtb` from disk like every other board
 instead of an embedded copy. The newer Realtek UNDI driver Radxa shipped
 (RTL8126) is used on every board (`Platform/CIX/Sky1/Drivers/RealtekUndi`).
-The O6N UFS power mode falls back to `PcdUFSPowerMode` (Auto) now that the
-Radxa setup variable no longer exists.
+Radxa's own setup variable (`RadxaSetupVar`) is gone as well: the O6N UFS
+power mode is *UFS Power Mode* on the CIX setup's Platform page (patch 0015,
+`PLATFORM_SETUP_DATA.UfsPowerMode`, Auto by default), and the ACPI SCMI flag
+Radxa's ACPI driver copied from it into `SCMS` had no user in the tables.
 
 Other local changes:
 

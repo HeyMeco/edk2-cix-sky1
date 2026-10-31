@@ -223,6 +223,11 @@
 !ifndef SPI_TPM_ENABLE
   DEFINE SPI_TPM_ENABLE             = FALSE
 !endif
+!ifndef BOARD_UFS_POWER
+  # TRUE: switchable UFS module socket; setup shows "UFS Power Mode" and the
+  # board's platform code applies it (PLATFORM_SETUP_DATA.UfsPowerMode)
+  DEFINE BOARD_UFS_POWER            = FALSE
+!endif
 
 !include Platform/CIX/Sky1/Sky1Common.dsc.inc
 !include NetworkPkg/NetworkDefines.dsc.inc
@@ -437,12 +442,15 @@
   GCC:*_*_*_CC_FLAGS              = -DSTMM_SUPPORT
 !endif
 
-# Setup shows only what the board has (patch 0014 in edk2-platforms)
+# Setup shows only what the board has (patches 0014, 0015 in edk2-platforms)
 !if $(I2C_EC_ENABLE) == FALSE
   GCC:*_*_*_VFRPP_FLAGS           = -DBOARD_NO_EC
 !endif
 !if $(SOC_GMAC_ENABLE) == FALSE
   GCC:*_*_*_VFRPP_FLAGS           = -DBOARD_NO_GMAC
+!endif
+!if $(BOARD_UFS_POWER) == TRUE
+  GCC:*_*_*_VFRPP_FLAGS           = -DBOARD_UFS_POWER
 !endif
 
 !ifdef FW_CONFIG_UPDATE_SUPPORT

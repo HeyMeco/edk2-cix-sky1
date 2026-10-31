@@ -58,7 +58,7 @@ only describes hardware ([architecture](architecture.md#shared-board-body)).
 
 | Feature | Notes |
 |---|---|
-| Setup | the CIX setup interface (`SetupManagerDxe`), with the PCIe 64-bit window and ASPM options; items for hardware a board lacks are hidden (EC: version, fan mode, light sensor, device power; GMAC page) |
+| Setup | the CIX setup interface (`SetupManagerDxe`), with the PCIe 64-bit window and ASPM options; items for hardware a board lacks are hidden (EC: version, fan mode, light sensor, device power; GMAC page), and *UFS Power Mode* (Auto / Always On / Always Off) appears on boards with a switchable UFS socket (`BOARD_UFS_POWER`: the O6N) |
 | ACPI or DT boot | chosen in setup (*System Table*); DT boot loads `BOARD_DTB_NAME` from disk |
 | Network | stack, PXE and HTTP boot built in, **off by default** (setup: *Platform → Network Stack*); Realtek PCIe (RTL8125/8126/8136/8161/8168) and USB UNDI drivers load only when it is on |
 | Secure Boot | defaults are Microsoft's PK/KEK/db |
@@ -104,8 +104,7 @@ Not yet merged:
 * Orion O6/O6N power on when AC returns (`PcdStateAfterG3` 1, Radxa's
   default); the other boards keep CIX's default.
 * MS-R1 no longer names its memory part in setup (Minisforum's setup copy read
-  it from GPIO 82–85); O6N's UFS power option has no setup entry (Auto, from
-  `PcdUFSPowerMode`).
+  it from GPIO 82–85).
 
 ### Changes for users of the previous images
 
