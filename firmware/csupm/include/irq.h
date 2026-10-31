@@ -20,6 +20,9 @@
 #define IRQ_TIMER1		7
 #define IRQ_TIMER2		8
 
+/* Lines past 31 exist only in software (scp/src/arch_interrupt.c) */
+#define IRQ_SOFT_TIMER		32		/* the timer module's alarms */
+
 /* Aggregator: line L (12-30) has raw status at +4 (L - 12), enables 0x80 above */
 #define AGG_BASE		0xa0000500u
 #define AGG_FIRST		12

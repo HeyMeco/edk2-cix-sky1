@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-2-Clause-Patent
 """Differential test of the open CSU_PM firmware against CIX's.
 
-  test_pm.py [OPEN.elf] [--cix CIX.elf] [--scmi] [-v]
+  test_pm.py [OPEN.elf] [--cix CIX.elf] [--scmi] [--no-cache] [-v]
 
 Each image runs in pm_emu.py on the same Sky1 model from reset until it
 idles with the SE handshake done (0x5c5a, 0x55ca, 0x5a5c), without an
@@ -16,9 +16,14 @@ assertion.  Compared:
   (base protocol discovery, then each protocol's attributes and its domains).
 
 With CIX's image alone it prints what CIX's firmware does: the reference.
+The open image is asked the questions CIX's answers led to.  CIX's run is
+cached under out/test_pm-cache, keyed by the image and the emulator's
+sources.
 """
 
 import argparse
+import hashlib
+import pickle
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -117,36 +122,67 @@ def scmi_suite(cpu, soc):
     return out
 
 
+def run(elf, questions=None, suite=False):
+    """Boot an image; ask the questions ([(question, answer)] from CIX's
+    run) or, with suite, the SCMI suite."""
+    cpu, soc, why, regs = boot(elf)
+    r = {"name": Path(elf).name, "why": why, "insns": cpu.insns, "se": list(soc.se.log),
+         "regs": dict(regs), "i2c": [w for _, w in soc.i2c_log], "memory": memory(soc),
+         "backtrace": " < ".join(cpu.func(pc) for pc in cpu.backtrace(8)), "scmi": None}
+    if questions is not None:
+        r["scmi"] = [(qn, ask(cpu, soc, *qn[:3], qn[3]) if why == "idle" else None)
+                     for qn, _ in questions]
+    elif suite and why == "idle":
+        r["scmi"] = scmi_suite(cpu, soc)
+    return r
+
+
+def cached(elf, refresh):
+    """CIX's run, from out/test_pm-cache when the image and the emulator
+    are unchanged."""
+    here = Path(__file__).resolve().parent
+    h = hashlib.sha256(Path(elf).read_bytes())
+    for f in ("pm_emu.py", "xt_emu.py", "xtensa_flix.py", "test_pm.py"):
+        h.update((here / f).read_bytes())
+    path = here.parent.parent / "out" / "test_pm-cache" / f"{h.hexdigest()[:16]}.pickle"
+    if path.exists() and not refresh:
+        return pickle.loads(path.read_bytes())
+    r = run(elf, suite=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(pickle.dumps(r))
+    return r
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("open_elf", nargs="?")
     ap.add_argument("--cix")
     ap.add_argument("--scmi", action="store_true", help="then compare SCMI answers")
+    ap.add_argument("--no-cache", action="store_true", help="run CIX's image again")
     ap.add_argument("-v", action="store_true")
     a = ap.parse_args()
     cix_elf = a.cix
     if cix_elf is None:
         from cix_debug import fetch
         cix_elf = fetch(CIX_PM)
-    runs = []
     bad = 0
-    for elf in [cix_elf] + ([a.open_elf] if a.open_elf else []):
-        cpu, soc, why, regs = boot(elf)
-        ok = why == "idle" and soc.se.log[-1:] == [0x5a5c]
+    ref = cached(cix_elf, a.no_cache)
+    runs = [ref] + ([run(a.open_elf, ref["scmi"] if a.scmi else None)] if a.open_elf else [])
+    for r in runs:
+        ok = r["why"] == "idle" and r["se"][-1:] == [0x5a5c]
         bad += not ok
-        print(f"{'ok  ' if ok else 'FAIL'} {Path(elf).name}: {why} after {cpu.insns} instructions, "
-              f"{len(regs)} registers written, {len(soc.i2c_log)} I2C transfers, "
-              f"SE handshake {' '.join(f'{v:#x}' for v in soc.se.log)}")
-        if why != "idle":
-            print("     " + " < ".join(cpu.func(pc) for pc in cpu.backtrace(8)))
-        runs.append((cpu, soc, regs))
+        print(f"{'ok  ' if ok else 'FAIL'} {r['name']}: {r['why']} after {r['insns']} instructions, "
+              f"{len(r['regs'])} registers written, {len(r['i2c'])} I2C transfers, "
+              f"SE handshake {' '.join(f'{v:#x}' for v in r['se'])}")
+        if r["why"] != "idle":
+            print("     " + r["backtrace"])
     if len(runs) == 2:
-        (_, sa, ra), (_, sb, rb) = runs
+        ra, rb = runs[0]["regs"], runs[1]["regs"]
         diffs = [r for r in sorted(set(ra) | set(rb)) if ra.get(r) != rb.get(r)]
         for r in diffs[:None if a.v else 40]:
             print(f"  {r:#010x}: CIX {[hex(v) for v in ra.get(r, [])][:6]} open {[hex(v) for v in rb.get(r, [])][:6]}")
         print(f"{len(set(ra) | set(rb))} registers compared, {len(diffs)} differ")
-        ma, mb = memory(sa), memory(sb)
+        ma, mb = runs[0]["memory"], runs[1]["memory"]
         mdiff = 0
         for page in sorted(set(ma) | set(mb)):
             pa, pb = ma.get(page, bytes(0x1000)), mb.get(page, bytes(0x1000))
@@ -157,23 +193,28 @@ def main():
                     print(f"  memory {page:#010x}: {len(d)} bytes differ, first at {page + d[0]:#x}")
         print(f"{len(set(ma) | set(mb))} pages of shared memory compared, {mdiff} differ")
         bad += mdiff
-        ia, ib = [w for _, w in sa.i2c_log], [w for _, w in sb.i2c_log]
+        ia, ib = runs[0]["i2c"], runs[1]["i2c"]
         print(f"I2C: {'same' if ia == ib else 'differ'} ({len(ia)} transfers)")
         bad += len(diffs) + (ia != ib)
     if a.scmi:
-        answers = [scmi_suite(cpu, soc) for cpu, soc, _ in runs]
+        answers = [r["scmi"] for r in runs]
+        same_n = 0
         for i, (qn, ans) in enumerate(answers[0]):
             chan, proto, msg, args = qn
             line = f"ch{chan} {proto:#04x}/{msg}{list(args) if args else ''}: {fmt(ans)}"
             if len(answers) == 2:
-                other = answers[1][i][1] if i < len(answers[1]) and answers[1][i][0] == qn else None
+                other = answers[1][i][1]
                 same = other == ans
+                same_n += same
                 bad += not same
                 if a.v or not same:
                     print(f"{'ok  ' if same else 'FAIL'} {line}" + ("" if same else f" (open {fmt(other)})"))
             else:
                 print(line)
-        print(f"{len(answers[0])} SCMI commands")
+        if len(answers) == 2:
+            print(f"{same_n} of {len(answers[0])} SCMI answers the same")
+        else:
+            print(f"{len(answers[0])} SCMI commands")
     if len(runs) == 2 or bad:
         print(f"{bad} differences" if len(runs) == 2 else "CIX's image did not boot in the model")
     sys.exit(1 if bad else 0)
