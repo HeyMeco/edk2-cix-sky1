@@ -435,10 +435,12 @@ clock tree, CLI, CI-700/NI-700, PMIC, I2C, sensors).
 user TIE, so Espressif's GCC builds for it with a core description made
 from the instruction set CIX's own build uses (`xtensa_core.py`), and
 `xtensa_isa.py check` keeps every build inside that set.
-`xtensa_flix.py` decodes the core's FLIX bundles and `xt_emu.py` runs
-CIX's image from reset into its drivers, where it stops for lack of a
-SoC model (it polls an I2C controller that nothing answers). The
-firmware itself is still CIX's binary; the plan is in the
+`xtensa_flix.py` decodes the core's FLIX bundles, `xt_emu.py` interprets
+the core and `pm_emu.py` models the SoC around it (I2C and PMICs, PLLs,
+mailboxes, interrupts, the SE handshake): CIX's image boots there to its
+idle task and answers SCMI on the AP's channels. `test_pm.py` compares an
+image against CIX's (register writes, I2C transfers, the answers to 185
+SCMI commands). The firmware itself is still CIX's binary; the plan is in the
 [README](../firmware/csupm/README.md).
 
 ## Roadmap
@@ -450,9 +452,9 @@ firmware itself is still CIX's binary; the plan is in the
 2. Boot-test the open SE (UART5 log; `--vendor-se` to compare), then
    suspend/resume and the SFH.
 3. CSU_PM from source. The toolchain works (`make -C firmware/csupm
-   check`), the FLIX formats are decoded and an emulator runs CIX's
-   image into its drivers; next is the SoC model around it, then the
-   firmware ([plan](../firmware/csupm/README.md#plan)).
+   check`), CIX's image boots and answers SCMI in an emulator of the core
+   and the SoC around it, and `test_pm.py` compares against it; next is
+   the firmware itself ([plan](../firmware/csupm/README.md#plan)).
 
 ## Debugging
 
