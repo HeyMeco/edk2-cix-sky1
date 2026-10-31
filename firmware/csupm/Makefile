@@ -50,6 +50,8 @@ SCP_CFLAGS := $(filter-out -Wextra -Werror,$(CFLAGS)) -Os -Iinclude -Isrc $(SCP_
 
 # upstream modules kept with a change (scp/module/*/README) build as upstream's
 $(O)/scp/module/scmi_clock/%: FW_CFLAGS = $(SCP_CFLAGS)
+$(O)/scp/module/dvfs/%: FW_CFLAGS = $(SCP_CFLAGS)
+$(O)/scp/module/scmi_perf/%: FW_CFLAGS = $(SCP_CFLAGS)
 
 SRCS	:= arch/vectors.S src/main.c src/lcru.c src/uart.c src/i2c.c src/pmic.c src/soc.c \
 	   src/pmu.c src/mbox.c src/power.c src/pvt.c src/plat.c $(wildcard src/clk/*.c) lib/string.c lib/malloc.c lib/printf.c lib/libgcc.c $(SCP_SRCS)
