@@ -18,3 +18,6 @@
 	path = optee_os
 	url = https://github.com/cixtech/cix_opensource__tee__op-tee
 	branch = cix_p1_k6.6_2025q3_tfa_open_dev
+[submodule "mbedtls"]
+	path = mbedtls
+	url = https://github.com/Mbed-TLS/mbedtls

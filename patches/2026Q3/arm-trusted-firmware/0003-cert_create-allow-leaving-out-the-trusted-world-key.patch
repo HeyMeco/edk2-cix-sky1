@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mecid <mecidi.cc@gmail.com>
+Date: Sat, 31 Oct 2026 12:20:03 +0100
+Subject: [PATCH] cert_create: allow leaving out the trusted world key
+
+With the non-trusted world key optional as well, cert_create can write
+the trusted key certificate CIX puts into the BL33 FIP (trusted_key_no.crt,
+only the non-trusted world key).  A requested certificate still needs the
+key that signs it.
+---
+ tools/cert_create/src/main.c         | 7 +++++++
+ tools/cert_create/src/tbbr/tbb_ext.c | 3 ++-
+ 2 files changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/tools/cert_create/src/main.c b/tools/cert_create/src/main.c
+index 9a505d650..7e00c04ce 100644
+--- a/tools/cert_create/src/main.c
++++ b/tools/cert_create/src/main.c
+@@ -215,6 +215,13 @@ static void check_cmd_params(void)
+ 			continue;
+ 		}
+ 
++		/* The key that signs this certificate must be given */
++		if (!new_keys && keys[cert->key].fn == NULL) {
++			ERROR("Key '%s' required to sign '%s' not specified\n",
++			      keys[cert->key].desc, cert->cn);
++			exit(1);
++		}
++
+ 		/* Check that all parameters required to create this certificate
+ 		 * have been specified in the command line */
+ 		for (j = 0; j < cert->num_ext; j++) {
+diff --git a/tools/cert_create/src/tbbr/tbb_ext.c b/tools/cert_create/src/tbbr/tbb_ext.c
+index 4b30dc73b..483ce9f68 100644
+--- a/tools/cert_create/src/tbbr/tbb_ext.c
++++ b/tools/cert_create/src/tbbr/tbb_ext.c
+@@ -85,7 +85,8 @@ static ext_t tbb_ext[] = {
+ 		.ln = "Trusted World Public Key",
+ 		.asn1_type = V_ASN1_OCTET_STRING,
+ 		.type = EXT_TYPE_PKEY,
+-		.attr.key = TRUSTED_WORLD_KEY
++		.attr.key = TRUSTED_WORLD_KEY,
++		.optional = 1
+ 	},
+ 	[NON_TRUSTED_WORLD_PK_EXT] = {
+ 		.oid = NON_TRUSTED_WORLD_PK_OID,

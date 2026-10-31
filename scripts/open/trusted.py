@@ -15,6 +15,11 @@ the vendor one does:
      and the NV counter of the vendor FIP; fiptool from TF-A
   4. an independent check of the certificate chain and image hashes
 
+With a reference bootloader1 it also builds BL2 from source and signs it
+into bootloader1 (build_bootloader1), and build_bootloader3 certifies BL33
+with cert_create under the same root, so no CIX-built code or tool is left
+before BL33 except the SE and CSU_PM firmware.
+
 Runs inside the build container.  Used by build.py --open; standalone:
 
   scripts/open/trusted.py BOARD [--target RELEASE|DEBUG] [--out DIR]
@@ -87,6 +92,17 @@ def build_bl31(out, debug, jobs):
          f"CROSS_COMPILE={CROSS}", f"BUILD_BASE={out}", f"BUILD_MESSAGE_TIMESTAMP={tfa_timestamp(env)}",
          "bl31"], env=env, capture=True)
     return out / "sky1" / ("debug" if debug else "release") / "bl31.bin"
+
+
+def build_bl2(out, debug, jobs, root_key):
+    """TF-A BL2 (plat/cix BL2 support from the patch queue) with trusted
+    board boot against root_key."""
+    env = build_env()
+    run(["make", "-C", str(TFA), f"-j{jobs}", "PLAT=sky1", "SPD=opteed", f"DEBUG={int(debug)}",
+         "TRUSTED_BOARD_BOOT=1", f"MBEDTLS_DIR={ROOT / 'mbedtls'}", f"ROT_KEY={root_key}",
+         f"CROSS_COMPILE={CROSS}", f"BUILD_BASE={out}", f"BUILD_MESSAGE_TIMESTAMP={tfa_timestamp(env)}",
+         "bl2"], env=env, capture=True)
+    return out / "sky1" / ("debug" if debug else "release") / "bl2.bin"
 
 
 def build_tools():
@@ -179,14 +195,91 @@ def build_bootloader2(cfg, target="RELEASE", out=None, jobs=None, ref=None):
     }
 
 
+def build_bootloader1(cfg, ref_bl1, target="RELEASE", out=None, jobs=None):
+    """bootloader1 with the source-built BL2 in place of the CIX one, re-signed
+    with the published chain-A keys; the SE and CSU_PM firmware stay as
+    they are in ref_bl1.  Returns (path, manifest info)."""
+    if not cixfw.CHAINS[cfg["signing_chain"]]["keys_public"]:
+        die(f"{cfg['board']}: signing chain {cfg['signing_chain']} has no public keys")
+    out = Path(out or ROOT / "output" / cfg["board"] / target / "open")
+    out.mkdir(parents=True, exist_ok=True)
+    keys = cix_keys()
+    key1, key2 = keys["oem_privatekey.pem"], keys["cix_privatekey.pem"]
+
+    ref = cixfw.Bl1(Path(ref_bl1).read_bytes())
+    (n1, _), (n2, _) = ref.keys()
+    if (cixfw.key_id(n1), cixfw.key_id(n2)) != cixfw.CHAINS["A"]["bl1"]:
+        die(f"{ref_bl1}: not signed with the chain-A keys")
+    if not all(ok for _, ok in ref.verify()):
+        die(f"{ref_bl1}: does not verify")
+
+    log("  building TF-A BL2")
+    bl2 = build_bl2(out / "tfa-bl2", target == "DEBUG", jobs or os.cpu_count(), key2)
+    payload = bl2.read_bytes()
+    slot = [img for img in ref.images() if img[1] == "ap"][0]
+    # Keep the container layout of the reference: pad BL2 with zeros to the
+    # size of the CIX BL2, so that its signature stays where the boot ROM
+    # finds it in every vendor container.  The padding is BL2 .bss, which
+    # BL2 clears when it starts.
+    size = len(payload)
+    if size > slot[3]:
+        die(f"BL2 ({size} bytes) is larger than the CIX BL2 ({slot[3]} bytes) it replaces")
+    payload += bytes(slot[3] - size)
+    ref.replace("ap", payload)
+    ref.resign(key1, key2)
+    if not all(ok for _, ok in ref.verify()):
+        die("re-signed bootloader1 does not verify")
+    path = out / "bootloader1.img"
+    path.write_bytes(bytes(ref.data))
+    log(f"  bootloader1.img: BL2 {size} bytes (padded to {len(payload)}), re-signed")
+    return path, {
+        "bootloader1": "SE and CSU_PM from the reference, BL2 from source",
+        "bootloader1_reference_sha256": sha256(ref_bl1),
+        "bl2_sha256": sha256(bl2),
+        "bootloader1_sha256": sha256(path),
+    }
+
+
+def build_bootloader3(fd, nt_key, out, nvctr=223):
+    """The BL33 FIP with certificates from TF-A cert_create: its trusted key
+    certificate (NON_TRUSTED_KEY_CERT_ID) signed with the CIX root, the
+    non-trusted world key and the content key nt_key.  Writes the
+    certificates to out/certs and returns (FIP path, manifest info)."""
+    keys = cix_keys()
+    root = keys["cix_privatekey.pem"]
+    out = Path(out)
+    certs = out / "certs"
+    certs.mkdir(parents=True, exist_ok=True)
+    cert_create, fiptool = build_tools()
+    run([str(cert_create), "--key-alg", "rsa", "--key-size", "3072", "--hash-alg", "sha256",
+         "--ntfw-nvctr", str(nvctr), "--tfw-nvctr", "31",
+         "--rot-key", str(root), "--non-trusted-world-key", str(nt_key), "--nt-fw-key", str(nt_key),
+         "--trusted-key-cert", str(certs / "trusted_key_no.crt"),
+         "--nt-fw-key-cert", str(certs / "nt_fw_key.crt"), "--nt-fw-cert", str(certs / "nt_fw_cert.crt"),
+         "--nt-fw", str(fd)], capture=True)
+    fip = out / "bootloader3.img"
+    run([str(fiptool), "create", "--trusted-key-cert", str(certs / "trusted_key_no.crt"),
+         "--nt-fw-key-cert", str(certs / "nt_fw_key.crt"), "--nt-fw-cert", str(certs / "nt_fw_cert.crt"),
+         "--nt-fw", str(fd), str(fip)], capture=True)
+    problems, info = cixfw.verify_fip(fip.read_bytes(), cixfw.spki_of(root))
+    if problems:
+        die(f"source-built bootloader3 does not verify: {problems}")
+    log(f"  bootloader3.img: certificates from cert_create, chain ok (root {info['root']})")
+    return fip, {"bootloader3_certificates": "cert_create", "bootloader3_root": info["root"]}
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("board")
     ap.add_argument("--target", default="RELEASE", choices=["RELEASE", "DEBUG"])
     ap.add_argument("--out")
     ap.add_argument("--jobs", type=int)
+    ap.add_argument("--bl1", help="reference bootloader1: also build bootloader1 with the open BL2")
     a = ap.parse_args()
-    _, info = build_bootloader2(board(a.board), a.target, a.out, a.jobs)
+    cfg = board(a.board)
+    _, info = build_bootloader2(cfg, a.target, a.out, a.jobs)
+    if a.bl1:
+        info.update(build_bootloader1(cfg, a.bl1, a.target, a.out, a.jobs)[1])
     print(json.dumps(info, indent=2))
 
 

@@ -194,14 +194,15 @@ def check_certificates(cfg, pr):
 BOOT_FIRMWARE = ("bootloader1.img", "bootloader2.img", "sfh_fw.bin")
 
 
-def stage_boot_firmware(cfg, fw, mode, bootloader2=None):
+def stage_boot_firmware(cfg, fw, mode, bootloader2=None, bootloader1=None):
     """Select the boot firmware (BL1: SE, CSU_PM, BL2; bootloader2: BL31,
     OP-TEE, StMM) and check that it matches the board's signing chain.
 
     mode "vendor": the board vendor's images, as staged by fetch-blobs.py.
     mode "cix": CIX's 2026Q3 images signed for the board's chain; the SE,
     CSU_PM, BL2, BL31 and OP-TEE builds are the same on both chains, so all
-    boards run one boot firmware.  bootloader2: a source-built FIP (--open).
+    boards run one boot firmware.  bootloader2: a source-built FIP,
+    bootloader1: one with a source-built BL2 (--open).
     """
     chain = cfg["signing_chain"]
     if mode == "cix":
@@ -214,13 +215,15 @@ def stage_boot_firmware(cfg, fw, mode, bootloader2=None):
                 "reads v2.0 (port the board's mem_config first)")
     if bootloader2:
         shutil.copyfile(bootloader2, fw / "bootloader2.img")
+    if bootloader1:
+        shutil.copyfile(bootloader1, fw / "bootloader1.img")
     bl1 = cixfw.bl1_chain((fw / "bootloader1.img").read_bytes())
     bl2 = cixfw.fip_chain((fw / "bootloader2.img").read_bytes())
     if (bl1, bl2) != (chain, chain):
         die(f"{cfg['board']}: boot firmware is signed for chain {bl1}/{bl2}, the board needs {chain}")
 
 
-def package(cfg, fd, outdir, boot_firmware="vendor", bootloader2=None):
+def package(cfg, fd, outdir, boot_firmware="vendor", bootloader2=None, bootloader1=None, open_certs=False):
     pkg = ROOT / cfg["package"]
     pr = outdir / "pr"
     shutil.rmtree(pr, ignore_errors=True)
@@ -256,7 +259,7 @@ def package(cfg, fd, outdir, boot_firmware="vendor", bootloader2=None):
     for f in sorted((pkg / "Firmwares").glob("*")):
         if f.is_file() and not f.name.startswith("."):
             shutil.copyfile(f, fw / f.name)
-    stage_boot_firmware(cfg, fw, boot_firmware, bootloader2)
+    stage_boot_firmware(cfg, fw, boot_firmware, bootloader2, bootloader1)
 
     # 4. tools (host architecture, see CIX_TOOL_FIXES), keys and flash layouts
     for tool in ("cert_uefi_create_rsa", "fiptool", "cix_regen_trusted_key_cert"):
@@ -276,20 +279,29 @@ def package(cfg, fd, outdir, boot_firmware="vendor", bootloader2=None):
     #    for boards whose BL2 accepts it, regenerated from the OEM key pair.
     nt_fw = str(outdir / "SKY1_BL33_UEFI.fd")
     pregenerated = pkg / "Certs" / "trusted_key_no.crt"
-    if cfg.get("trusted_key_cert", "regenerate") == "regenerate":
-        run(cix_tool("cix_regen_trusted_key_cert", "-p", "Keys/oem_publickey.pem", "-s", "Keys/oem_privatekey.pem",
-                     "-o", "certs/trusted_key_no.crt"), cwd=pr, capture=True)
+    if open_certs:
+        # --open: TF-A cert_create, the trusted key certificate under the
+        # CIX root that the source-built BL2 verifies
+        fip, _ = trusted.build_bootloader3(outdir / "SKY1_BL33_UEFI.fd", pr / "Keys" / "oem_privatekey.pem",
+                                           outdir / "open" / "bl3")
+        shutil.copyfile(fip, fw / "bootloader3.img")
+        for crt in ("trusted_key_no.crt", "nt_fw_key.crt", "nt_fw_cert.crt"):
+            shutil.copyfile(outdir / "open" / "bl3" / "certs" / crt, pr / "certs" / crt)
     else:
-        if not pregenerated.exists():
-            die(f"{cfg['board']}: {pregenerated} missing (run scripts/fetch-blobs.py)")
-        shutil.copyfile(pregenerated, pr / "certs" / "trusted_key_no.crt")
-    run(cix_tool("cert_uefi_create_rsa", "--key-alg", "rsa", "--key-size", "3072", "--hash-alg", "sha256", "-p",
-         "--ntfw-nvctr", "223", "--nt-fw-cert", "certs/nt_fw_cert.crt", "--nt-fw-key-cert", "certs/nt_fw_key.crt",
-         "--nt-fw-key", "Keys/oem_privatekey.pem", "--non-trusted-world-key", "Keys/oem_privatekey.pem",
-         "--nt-fw", nt_fw), cwd=pr, capture=True)
-    run(cix_tool("fiptool", "create", "--trusted-key-cert", "certs/trusted_key_no.crt",
-         "--nt-fw-key-cert", "certs/nt_fw_key.crt", "--nt-fw-cert", "certs/nt_fw_cert.crt",
-         "--nt-fw", nt_fw, "Firmwares/bootloader3.img"), cwd=pr, capture=True)
+        if cfg.get("trusted_key_cert", "regenerate") == "regenerate":
+            run(cix_tool("cix_regen_trusted_key_cert", "-p", "Keys/oem_publickey.pem", "-s", "Keys/oem_privatekey.pem",
+                         "-o", "certs/trusted_key_no.crt"), cwd=pr, capture=True)
+        else:
+            if not pregenerated.exists():
+                die(f"{cfg['board']}: {pregenerated} missing (run scripts/fetch-blobs.py)")
+            shutil.copyfile(pregenerated, pr / "certs" / "trusted_key_no.crt")
+        run(cix_tool("cert_uefi_create_rsa", "--key-alg", "rsa", "--key-size", "3072", "--hash-alg", "sha256", "-p",
+             "--ntfw-nvctr", "223", "--nt-fw-cert", "certs/nt_fw_cert.crt", "--nt-fw-key-cert", "certs/nt_fw_key.crt",
+             "--nt-fw-key", "Keys/oem_privatekey.pem", "--non-trusted-world-key", "Keys/oem_privatekey.pem",
+             "--nt-fw", nt_fw), cwd=pr, capture=True)
+        run(cix_tool("fiptool", "create", "--trusted-key-cert", "certs/trusted_key_no.crt",
+             "--nt-fw-key-cert", "certs/nt_fw_key.crt", "--nt-fw-cert", "certs/nt_fw_cert.crt",
+             "--nt-fw", nt_fw, "Firmwares/bootloader3.img"), cwd=pr, capture=True)
     check_certificates(cfg, pr)
 
     # 6. SPI images, with the open packer (scripts/open/cixfw.py; its output
@@ -485,8 +497,9 @@ def main():
                     help="BL1/BL2/bootloader2 source (default: boot_firmware in boards/<board>.yaml); "
                          "cix: CIX 2026Q3 for the board's signing chain")
     ap.add_argument("--open", action="store_true",
-                    help="build bootloader2 (TF-A BL31 + OP-TEE) from source; CIX-chain boards only "
-                         "(see docs/open-firmware.md); the image is named <board>_<version>_open.bin")
+                    help="build BL2, BL31 and OP-TEE from source (bootloader1 re-signed, bootloader2, "
+                         "bootloader3 certificates); chain-A boards only (docs/open-firmware.md); the "
+                         "image is named <board>_<version>_open.bin")
     a = ap.parse_args()
 
     all_boards = boards()
@@ -520,13 +533,17 @@ def main():
         outdir.mkdir(parents=True)
         fd = edk2_build(cfg, a.target, version, date, commit, a.jobs, outdir / "build.log")
         boot_fw = a.boot_firmware or cfg.get("boot_firmware", "vendor")
-        bl2, open_info = (None, None)
+        bl1, bl2, open_info = (None, None, None)
         if a.open:
-            log(f"{n}: building bootloader2 from source")
-            ref = (PACKAGE_TOOL / cixfw.CHAINS[cfg["signing_chain"]]["cix_dir"] / "bootloader2.img"
-                   if boot_fw == "cix" else None)
+            log(f"{n}: building BL2, BL31 and OP-TEE from source")
+            cix_dir = PACKAGE_TOOL / cixfw.CHAINS[cfg["signing_chain"]]["cix_dir"]
+            ref = cix_dir / "bootloader2.img" if boot_fw == "cix" else None
             bl2, open_info = trusted.build_bootloader2(cfg, a.target, outdir / "open", a.jobs, ref)
-        package(cfg, fd, outdir, boot_fw, bl2)
+            ref_bl1 = (cix_dir if boot_fw == "cix" else ROOT / cfg["package"] / "Firmwares") / "bootloader1.img"
+            bl1, bl1_info = trusted.build_bootloader1(cfg, ref_bl1, a.target, outdir / "open", a.jobs)
+            open_info.update(bl1_info)
+            open_info["bootloader3_certificates"] = "cert_create"
+        package(cfg, fd, outdir, boot_fw, bl2, bl1, open_certs=a.open)
         layout = check_layout(cfg, outdir)
         manifest = write_manifest(cfg, outdir, a.target, version, date, layout, open_info, boot_fw)
         log(f"{n}: cix_flash_all.bin {manifest['outputs']['cix_flash_all.bin']['sha256']}")
