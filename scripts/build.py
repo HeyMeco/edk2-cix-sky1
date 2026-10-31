@@ -250,7 +250,8 @@ def stage_boot_firmware(cfg, fw, mode, bootloader2=None, bootloader1=None):
         die(f"{cfg['board']}: boot firmware is signed for chain {bl1}/{bl2}, the board needs {chain}")
 
 
-def package(cfg, fd, outdir, boot_firmware="vendor", bootloader2=None, bootloader1=None, open_certs=False):
+def package(cfg, fd, outdir, boot_firmware="vendor", bootloader2=None, bootloader1=None, open_certs=False,
+            sfh=None):
     pkg = ROOT / cfg["package"]
     pr = outdir / "pr"
     shutil.rmtree(pr, ignore_errors=True)
@@ -287,6 +288,9 @@ def package(cfg, fd, outdir, boot_firmware="vendor", bootloader2=None, bootloade
         if f.is_file() and not f.name.startswith("."):
             shutil.copyfile(f, fw / f.name)
     stage_boot_firmware(cfg, fw, boot_firmware, bootloader2, bootloader1)
+    if sfh:
+        # source-built sensor fusion hub firmware (the SE loads it unsigned)
+        shutil.copyfile(sfh, fw / "sfh_fw.bin")
 
     # 4. tools (host architecture, see CIX_TOOL_FIXES), keys and flash layouts
     for tool in ("cert_uefi_create_rsa", "fiptool", "cix_regen_trusted_key_cert"):
@@ -576,7 +580,9 @@ def main():
             bl1, bl1_info = trusted.build_bootloader1(cfg, ref_bl1, a.target, outdir / "open", a.jobs)
             open_info.update(bl1_info)
             open_info["bootloader3_certificates"] = "cert_create"
-        package(cfg, fd, outdir, boot_fw, bl2, bl1, open_certs=a.open)
+            sfh, sfh_info = trusted.build_sfh(outdir / "open")
+            open_info.update(sfh_info)
+        package(cfg, fd, outdir, boot_fw, bl2, bl1, open_certs=a.open, sfh=sfh if a.open else None)
         layout = check_layout(cfg, outdir)
         manifest = write_manifest(cfg, outdir, a.target, version, date, layout, open_info, boot_fw)
         log(f"{n}: cix_flash_all.bin {manifest['outputs']['cix_flash_all.bin']['sha256']}")

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Ghidra headless post-script: apply "address name" pairs (fnmatch.py
+// Ghidra headless post-script: apply "address name" pairs (funcmatch.py
 // output), create and analyse those functions, then decompile every
 // function into <out>.c, unnamed ones (code the reference tree lacks)
 // first into <out>-unmatched.c.

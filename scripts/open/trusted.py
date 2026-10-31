@@ -106,6 +106,16 @@ def build_bl2(out, debug, jobs, root_key):
     return out / "sky1" / ("debug" if debug else "release") / "bl2.bin"
 
 
+def build_sfh(out):
+    """Sensor fusion hub firmware from firmware/sfh (arm-none-eabi), in
+    place of CIX's sfh_fw.bin.  Returns (path, manifest info)."""
+    out = Path(out) / "sfh"
+    run(["make", "-C", str(ROOT / "firmware/sfh"), f"O={out}"], capture=True)
+    path = out / "sfh_fw.bin"
+    log(f"  sfh_fw.bin: {path.stat().st_size} bytes from source")
+    return path, {"sfh_fw": "source", "sfh_fw_sha256": sha256(path)}
+
+
 def build_tools():
     run(["make", "-C", str(TFA), "PLAT=sky1", "certtool", "fiptool"], capture=True)
     return TFA / "tools/cert_create/cert_create", TFA / "tools/fiptool/fiptool"

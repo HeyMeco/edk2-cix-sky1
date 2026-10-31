@@ -24,12 +24,13 @@ mask ROM ─▶ SE firmware ─▶ CSU_PM ─▶ TF-A BL2 ─▶ BL31 + OP-TEE (
 | bootloader1 container (`CIXBTFF!`) | — | **open**: parse, verify, replace, re-sign (`cixfw.py bl1`) |
 | SPI image packer (`cix_package_tool`) | — | **open**: `cixfw.py pack`, used by every build |
 | `memory_config`, `pm_config` | CIX generators | built from source where the board package has them |
+| Sensor fusion hub firmware (`sfh_fw.bin`, Cortex-M) | [firmware/sfh](../firmware/sfh) | **built from source** (`--open`); same hardware writes as CIX's in every scenario of [test_sfh.py](../scripts/open/test_sfh.py) |
 | `trustzone_config` | CIX generator | CIX stock binary on every board; identical to the generator's output apart from its timestamp ([below](#trustzone-configuration)) |
 
 With `--open` on an Orion O6/O6N, the only CIX-built code left before UEFI
-is the Cortex-M and Xtensa firmware (SE and CSU_PM in bootloader1,
-`sfh_fw.bin`). Everything on the application cores up to and beside BL33
-(TF-A, OP-TEE, StandaloneMM) is built here.
+is the SE firmware (Cortex-M) and CSU_PM (Xtensa) in bootloader1.
+Everything on the application cores up to and beside BL33 (TF-A, OP-TEE,
+StandaloneMM) and the sensor fusion hub firmware are built here.
 
 ## Which boards
 
@@ -147,7 +148,7 @@ check_open.py IMAGE REF_BOOTLOADER1 BL2.bin [--root ROOT.pem]
   [scripts/open/test_stmm_nor.py](../scripts/open/test_stmm_nor.py) tests the
   StandaloneMM NOR driver on the host.
 * [scripts/open/re](../scripts/open/re) holds the reverse-engineering tools
-  used for BL2 and BL31: `fnmatch.py` names the functions of a stripped CIX
+  used for BL2 and BL31: `funcmatch.py` names the functions of a stripped CIX
   image from a build of the public tree, `decompile.sh` runs Ghidra on it
   with those names, `cot.py` and `bl2tables.py` decode the chain of trust,
   image descriptors, I/O policies and memory map of a BL2.
@@ -169,7 +170,7 @@ They are applied by `scripts/prepare.py` like the EDK2 queues
 The open BL2 and BL31 were written and checked against the CIX binaries in
 the 2026Q3 bootloader1/bootloader2 (TF-A `v2.7(release):Beta_2.1.5_release`,
 built 2026-07-15): functions matched against a build of the public tree
-(`fnmatch.py`), the rest decompiled. Where they differ on purpose:
+(`funcmatch.py`), the rest decompiled. Where they differ on purpose:
 
 ### BL2
 
@@ -266,7 +267,7 @@ CIX stock configuration (SPE on, secure storage and bootloader3 recovery
 off), the defaults BL31 also uses where the layout has none. BL31 (patch
 0004) and `check_open.py` refuse an overlapping region in any case.
 
-## Gaps
+## Components
 
 ### StandaloneMM
 
@@ -315,11 +316,48 @@ formatting, 20 000 random writes, erases and reads checked against a model
 (flash and RAM copy), bounds, and failing transactions in the middle of
 writes.
 
-### Not planned
+### Sensor fusion hub
 
-SE firmware and CSU_PM stay binary: no source exists, the SE does DRAM
-training, and CSU_PM needs the proprietary Xtensa core configuration to
-build. `sfh_fw.bin` (17 KB Cortex-M) is small enough to clean-room later.
+`sfh_fw.bin` (flash image type 8 at `0x101000`) runs on a small Cortex-M
+next to the SE. The SE copies it into the SFH SRAM and starts it when the
+system enters suspend to RAM; it serves timed wake-ups over the CIX mailbox
+(`ap2sfh`, `pm2sfh`, replies on `sfh2ap`): `0xFFF2` (suspend, wake after N
+seconds), `0xFFF4` (resume), `0xFFF7` (wake after N ms), waking the system
+by writing 3 to `0x50070080`, and signals `0xAABB` at `0x50070100` once
+up. CIX's image is FreeRTOS-based (the scheduler never starts) with
+newlib's stdio; [firmware/sfh](../firmware/sfh) does the same in 4 KB of C.
+[scripts/open/test_sfh.py](../scripts/open/test_sfh.py) runs both images
+in Unicorn against a model of the mailbox, timers and control block and
+compares every hardware write: boot, the three messages, malformed ones and
+the timer interrupts produce the same writes in the same order.
+
+The SE loads `sfh_fw.bin` from flash without any signature or hash check,
+on every board, so this image (and anything else put there) runs whatever
+the board's signing chain.
+
+### SE firmware and CSU_PM
+
+CIX's `cix_proprietary__cix_firmware` repository on GitHub carries debug
+builds of the SE firmware (`se_fw.elf`, version 2.0.2026W01.01), CSU_PM
+(`csupm_sky1`, 00.12.001) and the boot ROM (`brom.elf`) with full DWARF
+debug information: source file names, functions, types and line numbers.
+[scripts/open/re/dwarfmap.py](../scripts/open/re/dwarfmap.py) lists their
+compile units; Ghidra decompiles them with names and types.
+
+* SE firmware: Cortex-M33 (Armv8-M Mainline, GCC Arm Embedded 10.3),
+  1238 functions, 219 KB of code in about 190 files: secure boot and image
+  loading (`framework/image_verify`, `xloader`), the CE crypto library
+  (`ce_lite`, 61 KB), eFuse, key management, memory repair, SoC bring-up
+  (clocks, PLLs, power, CI-700, TZC-400, MMHUB), the AP mailbox services,
+  suspend/resume, a debug monitor (26 KB) and the DDR driver
+  (`driver/ddr`, about 45 KB), which stays CIX's binary. The shipping
+  2.0.2026W31.01 image differs from the debug build; `funcmatch.py --thumb`
+  matches about 300 of its functions directly, the rest has to be mapped
+  through strings and the call graph.
+* CSU_PM: Xtensa LX7 (`cix_lx7`, Cadence XtensaTools 14.10 clang),
+  FreeRTOS, Arm SCP-firmware (public) and about 130 KB of CIX code (DPM,
+  clock tree, CLI, CI-700/NI-700, PMIC, I2C, sensors). Building it needs an
+  Xtensa compiler for that core configuration.
 
 ## Roadmap
 
@@ -327,7 +365,8 @@ build. `sfh_fw.bin` (17 KB Cortex-M) is small enough to clean-room later.
    persist across a cold boot; Secure Boot keys enrol; suspend and resume).
    `--vendor-stmm` isolates the StandaloneMM image if variables misbehave.
    Then make it the default for the chain-A boards.
-2. `sfh_fw.bin` clean-room.
+2. SE firmware from source, with CIX's DDR driver linked in as a binary.
+3. CSU_PM from source, once an Xtensa toolchain for its core works.
 
 ## Debugging
 
