@@ -21,4 +21,5 @@ acpi_parity:
   allow: []
 capsule: true                        # CIX signed capsule (.cap) for in-OS / ESRT updates
 trusted_key_cert: pregenerated          # CIX-root-signed cert shipped by the vendor (manifests/blobs)
-signing_chain: vendor                # BL1/FIP keys not public: only BL33 can be rebuilt
+signing_chain: B                     # keys not public (fused): only BL33 can be rebuilt
+boot_firmware: vendor                # vendor BL1/BL2 (default); "cix": CIX 2026Q3 boot firmware for this chain

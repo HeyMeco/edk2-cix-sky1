@@ -1,0 +1,14 @@
+#ifndef _BOARD_CONFIG_H_
+#define _BOARD_CONFIG_H_
+
+#define DRAM_4G_BDID   0
+#define DRAM_8G_BDID   1
+#define DRAM_16G_BDID  2
+#define DRAM_32G_BDID  3
+
+#define DRAM_4G_MASK       (BOARD_ID_MASK(DRAM_4G_BDID))
+#define DRAM_8G_MASK       (BOARD_ID_MASK(DRAM_8G_BDID))
+#define DRAM_16G_MASK      (BOARD_ID_MASK(DRAM_16G_BDID))
+#define DRAM_32G_MASK      (BOARD_ID_MASK(DRAM_32G_BDID))
+
+#endif

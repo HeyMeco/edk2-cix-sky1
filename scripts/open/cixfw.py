@@ -436,6 +436,39 @@ class Bl1:
         self.data[BL1_HDR_SIGNED + 4:BL1_HDR_SIGNED + 388] = pss_sign(key1, bytes(self.data[:BL1_HDR_SIGNED]))
 
 
+# Signing chains of the Sky1 boot firmware (boards/<board>.yaml signing_chain).
+# bl1: key 1 / key 2 as key_id(); fip: bootloader2 root, SHA-256 of the DER
+# public key (prefix); cix_dir: where CIX ships its boot firmware signed for
+# that chain in edk2-non-osi/Platform/CIX/Sky1/PackageTool.
+CHAINS = {
+    "A": {"bl1": ("c6d0e93f", "5672dfd9"), "fip": "33d47f74", "cix_dir": "Firmwares", "keys_public": True},
+    "B": {"bl1": ("fb3f60e4", "fb3f60e4"), "fip": "0d999213", "cix_dir": "Firmwares2", "keys_public": False},
+}
+
+
+def bl1_chain(data):
+    """Name of the signing chain of a bootloader1, or None."""
+    (n1, _), (n2, _) = Bl1(data).keys()
+    ids = (key_id(n1), key_id(n2))
+    return next((c for c, v in CHAINS.items() if v["bl1"] == ids), None)
+
+
+def fip_chain(data):
+    """Name of the signing chain of a bootloader2 (by its root key), or None."""
+    tk = [data[o:o + n] for u, o, n, _ in fip_entries(data) if FIP_NAMES.get(u, "").startswith("trusted-key-cert")]
+    if not tk:
+        return None
+    root = hashlib.sha256(TbbrCert(tk[0]).spki()).hexdigest()
+    return next((c for c, v in CHAINS.items() if root.startswith(v["fip"])), None)
+
+
+def mem_config_version(data):
+    """(major, minor) of a memory_config.bin (CDCB header at 0x20)."""
+    if data[0x20:0x24] != b"CDCB":
+        raise ValueError("no CDCB header")
+    return struct.unpack_from("<HH", data, 0x28)
+
+
 def key_id(n):
     """Key identity as used in the docs: SHA-256 over the 384-byte modulus."""
     return hashlib.sha256(n.to_bytes(384, "big")).hexdigest()[:8]

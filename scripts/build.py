@@ -33,6 +33,7 @@ from common import ROOT, board, boards, die, git, host_arch, load_json, log, pat
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "open"))
 import cixfw  # noqa: E402
+import memcfg  # noqa: E402
 import trusted  # noqa: E402
 
 PACKAGE_TOOL = ROOT / "edk2-non-osi/Platform/CIX/Sky1/PackageTool"
@@ -190,7 +191,36 @@ def check_certificates(cfg, pr):
             die(f"{cfg['board']}: {crt} uses PSS salt length {salts}, expected 0x20")
 
 
-def package(cfg, fd, outdir, bootloader2=None):
+BOOT_FIRMWARE = ("bootloader1.img", "bootloader2.img", "sfh_fw.bin")
+
+
+def stage_boot_firmware(cfg, fw, mode, bootloader2=None):
+    """Select the boot firmware (BL1: SE, CSU_PM, BL2; bootloader2: BL31,
+    OP-TEE, StMM) and check that it matches the board's signing chain.
+
+    mode "vendor": the board vendor's images, as staged by fetch-blobs.py.
+    mode "cix": CIX's 2026Q3 images signed for the board's chain; the SE,
+    CSU_PM, BL2, BL31 and OP-TEE builds are the same on both chains, so all
+    boards run one boot firmware.  bootloader2: a source-built FIP (--open).
+    """
+    chain = cfg["signing_chain"]
+    if mode == "cix":
+        src = PACKAGE_TOOL / cixfw.CHAINS[chain]["cix_dir"]
+        for f in BOOT_FIRMWARE:
+            shutil.copyfile(src / f, fw / f)
+        ver = cixfw.mem_config_version((fw / "memory_config.bin").read_bytes())
+        if ver != (2, 0):
+            die(f"{cfg['board']}: memory_config.bin is v{ver[0]}.{ver[1]}; the CIX 2026Q3 SE firmware "
+                "reads v2.0 (port the board's mem_config first)")
+    if bootloader2:
+        shutil.copyfile(bootloader2, fw / "bootloader2.img")
+    bl1 = cixfw.bl1_chain((fw / "bootloader1.img").read_bytes())
+    bl2 = cixfw.fip_chain((fw / "bootloader2.img").read_bytes())
+    if (bl1, bl2) != (chain, chain):
+        die(f"{cfg['board']}: boot firmware is signed for chain {bl1}/{bl2}, the board needs {chain}")
+
+
+def package(cfg, fd, outdir, boot_firmware="vendor", bootloader2=None):
     pkg = ROOT / cfg["package"]
     pr = outdir / "pr"
     shutil.rmtree(pr, ignore_errors=True)
@@ -207,7 +237,18 @@ def package(cfg, fd, outdir, bootloader2=None):
     host_env = {k: v for k, v in os.environ.items() if not k.startswith("GCC5")}
     host_env["SOURCE_DATE_EPOCH"] = str(int(source_date().timestamp()))
     host_env["TZ"] = "UTC"
-    make_config(pkg, "mem_config", "memory_config.bin", fw / "memory_config.bin", host_env)
+    # mem_config_v2: the board's DRAM settings in the v2.0 format the CIX
+    # 2026Q3 SE firmware reads, for boards whose vendor format is older
+    mem = "mem_config_v2" if boot_firmware == "cix" and (pkg / "mem_config_v2").is_dir() else "mem_config"
+    make_config(pkg, mem, "memory_config.bin", fw / "memory_config.bin", host_env)
+    if mem == "mem_config_v2" and (pkg / "mem_config").is_dir():
+        # the port must not change a single DRAM setting
+        ref = pr / "memory_config.vendor-format.bin"
+        make_config(pkg, "mem_config", "memory_config.bin", ref, host_env)
+        diffs = memcfg.compare(ref.read_bytes(), (fw / "memory_config.bin").read_bytes())
+        if diffs:
+            die(f"{cfg['board']}: mem_config_v2 differs from mem_config: {'; '.join(diffs)}")
+        log("  mem_config_v2 has the same settings as mem_config")
     make_config(pkg, "pm_config", "csu_pm_config.bin", fw / "csu_pm_config.bin", host_env)
     make_config(pkg, "trustzone_config", "trustzone_config.bin", fw / "trustzone_config.bin", host_env)
 
@@ -215,8 +256,7 @@ def package(cfg, fd, outdir, bootloader2=None):
     for f in sorted((pkg / "Firmwares").glob("*")):
         if f.is_file() and not f.name.startswith("."):
             shutil.copyfile(f, fw / f.name)
-    if bootloader2:
-        shutil.copyfile(bootloader2, fw / "bootloader2.img")     # --open: BL31 + OP-TEE from source
+    stage_boot_firmware(cfg, fw, boot_firmware, bootloader2)
 
     # 4. tools (host architecture, see CIX_TOOL_FIXES), keys and flash layouts
     for tool in ("cert_uefi_create_rsa", "fiptool", "cix_regen_trusted_key_cert"):
@@ -347,7 +387,8 @@ def check_nv_store(cfg, layout):
     die(f"{cfg['board']}: variable store {start:#x}-{end:#x} is not inside a reserved region of the flash layout")
 
 
-def write_manifest(cfg, outdir, target, version, date, layout, capsules=(), open_info=None):
+def write_manifest(cfg, outdir, target, version, date, layout, capsules=(), open_info=None,
+                   boot_firmware="vendor"):
     files = {}
     for f in ("cix_flash_all.bin", "cix_flash_ota.bin", "SKY1_BL33_UEFI.fd", *capsules):
         p = outdir / f
@@ -370,6 +411,8 @@ def write_manifest(cfg, outdir, target, version, date, layout, capsules=(), open
         "outputs": files,
         "staged_firmware": staged,
         "flash_layout": layout,
+        "boot_firmware": boot_firmware,
+        "signing_chain": cfg["signing_chain"],
     }
     if open_info:
         m["open"] = open_info
@@ -404,6 +447,8 @@ status.
 
 def release_name(cfg, manifest):
     stem = f"{cfg['board']}_{manifest['version']}"
+    if manifest.get("boot_firmware", "vendor") != board(cfg["board"]).get("boot_firmware", "vendor"):
+        stem += f"_{manifest['boot_firmware']}boot"
     if manifest.get("open"):
         stem += "_open"
     if manifest["target"] != "RELEASE":
@@ -464,6 +509,9 @@ def main():
     ap.add_argument("--skip-prepare", action="store_true")
     ap.add_argument("--extras", action="store_true",
                     help="also pack OTA image, capsules, FD and manifest into dist/extras/")
+    ap.add_argument("--boot-firmware", choices=["vendor", "cix"],
+                    help="BL1/BL2/bootloader2 source (default: boot_firmware in boards/<board>.yaml); "
+                         "cix: CIX 2026Q3 for the board's signing chain")
     ap.add_argument("--open", action="store_true",
                     help="build bootloader2 (TF-A BL31 + OP-TEE) from source; CIX-chain boards only "
                          "(see docs/open-firmware.md); the image is named <board>_<version>_open.bin")
@@ -478,8 +526,9 @@ def main():
     if not names:
         ap.error("name at least one board, or use --all / --list")
     for n in names:
-        if board(n).get("signing_chain") != "cix" and a.open:
-            die(f"--open: {n} is not on the CIX signing chain; its BL2 would reject a source-built bootloader2")
+        if a.open and not cixfw.CHAINS[board(n)["signing_chain"]]["keys_public"]:
+            die(f"--open: {n} is on signing chain {board(n)['signing_chain']}, whose keys are not public; "
+                "its BL2 would reject a source-built bootloader2")
 
     if not a.skip_prepare:
         run([sys.executable, str(ROOT / "scripts/prepare.py")])
@@ -498,14 +547,17 @@ def main():
         shutil.rmtree(outdir, ignore_errors=True)
         outdir.mkdir(parents=True)
         fd = edk2_build(cfg, a.target, version, date, commit, a.jobs, outdir / "build.log")
+        boot_fw = a.boot_firmware or cfg.get("boot_firmware", "vendor")
         bl2, open_info = (None, None)
         if a.open:
             log(f"{n}: building bootloader2 from source")
-            bl2, open_info = trusted.build_bootloader2(cfg, a.target, outdir / "open", a.jobs)
-        package(cfg, fd, outdir, bl2)
+            ref = (PACKAGE_TOOL / cixfw.CHAINS[cfg["signing_chain"]]["cix_dir"] / "bootloader2.img"
+                   if boot_fw == "cix" else None)
+            bl2, open_info = trusted.build_bootloader2(cfg, a.target, outdir / "open", a.jobs, ref)
+        package(cfg, fd, outdir, boot_fw, bl2)
         layout = check_layout(cfg, outdir)
         capsules = make_capsules(cfg, outdir)
-        manifest = write_manifest(cfg, outdir, a.target, version, date, layout, capsules, open_info)
+        manifest = write_manifest(cfg, outdir, a.target, version, date, layout, capsules, open_info, boot_fw)
         log(f"{n}: cix_flash_all.bin {manifest['outputs']['cix_flash_all.bin']['sha256']}")
         write_release_binary(cfg, outdir, manifest)
         if a.extras:
