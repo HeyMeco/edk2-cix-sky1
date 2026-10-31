@@ -60,10 +60,12 @@ through 7 (`drv_ddr_init`, `drv_ddr_postci`, `drv_ddr_get_mem_size`,
 | eFuse, key manager, crypto (Mbed TLS for SHA-2, HKDF, RSA; SM2/SM3 here; engine bring-up, TRNG, OTP from CIX's binary) | done |
 | SoC init (PLLs, clocks/resets/power, MPU, memory repair, fuse distribution, harvest) | done |
 | CI-700, MMHUB, RCSU gaskets (the TZC-400s are set up by the DDR driver) | done |
-| Secure boot: load, verify and start CSU_PM and BL2 | done; the signed path is not yet exercised in the emulator |
-| Runtime mailbox services, suspend/resume, SFH loading | written; not yet exercised in the emulator |
+| Secure boot: load, verify and start CSU_PM and BL2 | done; with secure boot fused for its keys, the open O6 image boots in the emulator, and does not with one byte of BL2 or CSU_PM changed |
+| Runtime mailbox services, suspend/resume | done; answers to run-time requests and everything from a suspend request to the resume message match CIX's (804 registers) |
+| SFH loading during suspend | written; not yet exercised in the emulator |
 | Crash information | written; clock and power records are reduced to raw registers |
-| Cold boot from reset to AP release, against CIX's firmware in the emulator | identical (831 registers, DRAM and PM SRAM) for life cycles 4, 5 and 7 |
+| Cold boot from reset to AP release, against CIX's firmware in the emulator | identical (831 registers, DRAM and PM SRAM) for life cycles 4, 5 and 7, with and without device keys |
+| `build.sh --open` puts it in bootloader1 (re-signed with the chain-A keys) | done; not yet boot-tested on hardware |
 
 The services keep CIX's interface, with two differences: secret eFuse
 fields (device and model keys) are given only to requests on the TEE

@@ -60,8 +60,25 @@ def is_memory(addr):
     return any(lo <= addr < hi for lo, hi, _ in MEMORY)
 
 
-def run(elf, flash, life_cycle):
-    soc = SkySoc(flash, life_cycle=life_cycle)
+def keys_efuse(flash, secure=False):
+    """eFuse with test device and model keys and, for secure boot, the image's
+    OEM and CIX key hashes and the secure-boot bit (life cycle 7)."""
+    import hashlib
+    import struct
+    fuses = {0xb4: bytes(range(0x10, 0x20)), 0xc4: bytes(range(0x40, 0x50)),
+             0x54: bytes(range(0x60, 0x70)), 0x64: bytes(range(0x80, 0x90))}
+    if secure:
+        hdr = flash[0x188000:0x189000]
+        oem_len, cix_len = struct.unpack_from("<I", hdr, 0x18)[0], struct.unpack_from("<I", hdr, 0x320)[0]
+        fuses[0x188] = hashlib.sha256(hdr[0x1c:0x1c + oem_len]).digest()
+        fuses[0x74] = hashlib.sha256(hdr[0x324:0x324 + cix_len]).digest()
+        fuses[0x154] = bytes([1 << 3 | 1 << 4])        # secure boot; signature algorithm 1 (RSA)
+        fuses[0x155] = bytes([0])
+    return fuses
+
+
+def run(elf, flash, life_cycle, efuse=None):
+    soc = SkySoc(flash, life_cycle=life_cycle, efuse=efuse)
     stubs = dict(DDR_STUBS)
     if "cix" in str(elf):
         stubs.update(CIX_STUBS)
@@ -113,6 +130,33 @@ def request(se, chan, fid, words):
     return ok, [se.read32(base + 4 * i) for i in range(min(n, 32))]
 
 
+def secure_boot(elf, flash):
+    """The open firmware with secure boot fused for the image's own keys:
+    it must start the AP; and not with a byte of BL2 or of CSU_PM changed."""
+    import struct
+    hdr = flash[0x188000:0x189000]
+    imgs = {struct.unpack_from("<I", hdr, 0x9ec + 24 * i)[0]: struct.unpack_from("<6I", hdr, 0x9ec + 24 * i)
+            for i in range(struct.unpack_from("<I", hdr, 0x9e8)[0])}
+    cases = [("as signed", None), ("BL2 altered", 0x188000 + imgs[3][3] + 0x100),
+             ("CSU_PM altered", 0x188000 + imgs[2][3] + 0x1000)]
+    bad = 0
+    for name, off in cases:
+        f = bytearray(flash)
+        if off is not None:
+            f[off] ^= 1
+        soc = SkySoc(bytes(f), life_cycle=7, efuse=keys_efuse(flash, secure=True))
+        se = Se(elf, soc, stubs=DDR_STUBS, stop=("service_debug_entry", "service_idle_entry"))
+        se.stop_write = (0x4fa80000, 8)                 # AP boot core powered on
+        se.poll_limit = 20_000_000
+        se.run(count=400_000_000)
+        started = se.stopped == "write 0x8 to 0x4fa80000"
+        ok = started == (off is None)
+        bad += not ok
+        print(f"{'ok  ' if ok else 'FAIL'} {name}: AP {'started' if started else 'not started'}"
+              f" ({se.stopped or se.poll})")
+    sys.exit(1 if bad else 0)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("open_elf")
@@ -122,15 +166,22 @@ def main():
     ap.add_argument("-v", action="store_true")
     ap.add_argument("--services", action="store_true", help="then compare answers to run-time requests")
     ap.add_argument("--suspend", action="store_true", help="then compare a suspend and resume")
+    ap.add_argument("--keys", action="store_true", help="with device and model keys in the eFuse")
+    ap.add_argument("--secure", action="store_true",
+                    help="open firmware alone, secure boot fused: boots the image as it is and refuses "
+                         "it with BL2 or CSU_PM altered")
     a = ap.parse_args()
     cix_elf = a.cix
     if cix_elf is None:
         from cix_debug import fetch
         cix_elf = fetch()
     flash = open(a.flash, "rb").read()
+    if a.secure:
+        return secure_boot(a.open_elf, flash)
+    efuse = keys_efuse(flash) if a.keys else None
     results, sessions = [], []
     for elf in (cix_elf, a.open_elf):
-        se, stopped, regs, mem = run(elf, flash, a.life_cycle)
+        se, stopped, regs, mem = run(elf, flash, a.life_cycle, efuse)
         sessions.append(se)
         where = stopped or (f"polling in {se.poll[0]}" if se.poll else se.pc_func())
         print(f"{Path(elf).name}: {len(se.writes)} writes, stopped at {where}")
