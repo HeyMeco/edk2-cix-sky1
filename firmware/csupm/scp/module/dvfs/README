@@ -1,3 +1,14 @@
-SCP-firmware v2.11.0's dvfs module with CIX's changes to it (in progress:
-see the CSU_PM README).  Upstream's licence: BSD-3-Clause
-(../../../SCP-firmware/license.md).
+SCP-firmware v2.11.0's dvfs module with CIX's changes to it:
+- the configuration fields CIX added (reference_perf_level, the level
+  reported for the sustained OPP; opp_level_num, the OPPs in use), filled
+  in by the configuration;
+- dvfs_get_sustained_opp answers FWK_E_RANGE when the sustained index is
+  outside the table, and dvfs_start leaves such a domain alone (upstream:
+  FWK_E_PARAM, and the start fails);
+- when the new OPP has the voltage of the current one, the frequency is
+  set anyway (upstream: only while no frequency has been set yet);
+- a request whose cookie is sky1soc_perf's module identifier is reported
+  to that module (event MOD_SKY1SOC_PERF_EVENT_IDX_DVFS_DONE) when it
+  completes, whatever the outcome.
+Everything else is upstream's (BSD-3-Clause, see
+../../../SCP-firmware/license.md).

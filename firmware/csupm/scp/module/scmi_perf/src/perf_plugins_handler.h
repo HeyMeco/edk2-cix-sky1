@@ -85,7 +85,7 @@ struct fast_channels_mirror {
  *      and runst its internal logic of storing and aggregating. This is an
  *      input to the Plugins Handler.
  */
-void perf_plugins_handler_update(
+int perf_plugins_handler_update(
     unsigned int perf_dom_idx,
     struct fc_perf_update *fc_update);
 

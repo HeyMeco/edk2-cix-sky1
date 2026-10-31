@@ -18,7 +18,8 @@ extern uint32_t plat_id_iss;
  * checksum, board, V/F table version, DVFS mode, PVT average at [41:32]) */
 extern bool boot_strap_valid;
 extern uint64_t boot_strap;
-/* The boot core: core_info[1] >> 4 is its DPM element */
+/* The SE's harvest word (0x56000508, its fuse bits inverted: a bit per
+ * core present, [15:12] the boot core; core_info[1] >> 4 is its DPM element) */
 extern bool core_info_valid;
 extern uint8_t core_info[4];
 

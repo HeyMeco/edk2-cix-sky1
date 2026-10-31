@@ -129,8 +129,11 @@ differential test, as `test_se.py` is for the SE. It boots each image,
 compares register writes per register and the I2C transfers, and with
 `--scmi` asks every channel the same 185 questions (discovery, then each
 protocol's attributes and domains: 8 perf domains from `gpu_core` to
-`dsu_perf`, clocks, power domains, sensors). With CIX's image alone it
-prints CIX's answers:
+`dsu_perf`, clocks, power domains, sensors), then sets performance levels
+and limits on the OS's channel and writes levels into its fast channels,
+reading them back (215 answers in all), and compares the I2C transfers and
+clock generator writes these lead to. With CIX's image alone it prints
+CIX's answers:
 
 ```sh
 python3 scripts/open/test_pm.py --scmi                 # CIX's image: reference
@@ -153,11 +156,17 @@ What runs, in CIX's order:
 1. Power-on (CIX's `ss_por_enter`, [`src/main.c`](src/main.c)): core
    clock, AxPROT, local watchdog off, mailbox reset, debug UART, the I2C
    controllers, the PMICs ([`src/pmic.c`](src/pmic.c): the board found by
-   probing as CIX does, each EDP rail at its boot voltage), then `0x5c5a`
-   to the SE and a wait for its `0x55ca`.
-2. Init (`ss_init_enter`): the interconnect counters stopped and cleared
+   probing as CIX does, each EDP rail at its boot voltage), the V/F
+   tables ([`src/dpm`](src/dpm): the BIOS's PM configuration, the part
+   number and V/F fuses, the table CIX picks for the part from them and the
+   PM strap, the minimum voltages computed from the fuses as CIX computes
+   them, the OPPs of the 12 DVFS domains), then `0x5c5a` to the SE and a
+   wait for its `0x55ca`.
+2. Init (`ss_init_enter`): the clock tree at its power-on settings
+   ([`src/clk`](src/clk)), the interconnect counters stopped and cleared
    ([`src/pmu.c`](src/pmu.c): NI-700 hubs, CI-700 DTC and XP watchpoints,
-   DFD trace, AMU, MPMM gears; static layouts from CIX's topology tables).
+   DFD trace, AMU, MPMM gears; static layouts from CIX's topology tables),
+   each DVFS domain at its sustained OPP (clock, then rail voltage).
 3. Run (`ss_run_enter`): the counters again, the PVT sensors
    ([`src/pvt.c`](src/pvt.c): eFuse trims, weights, thresholds), the ten
    mailboxes cleared and routed ([`src/mbox.c`](src/mbox.c)).
@@ -176,14 +185,20 @@ drivers that hand an interrupt on). Modules, upstream and ours:
 | Module | From | What |
 |---|---|---|
 | `transport`, `scmi` | upstream | SCMI over the mailboxes' data words (TF-A's `mailbox_mem_t`) |
-| `cix_mbox` | ours | the mailboxes' doorbells under `transport` (CIX's `ipc_arbiter` merges both) |
+| `cix_mbox` | ours | the mailboxes' doorbells under `transport` (CIX's `ipc_arbiter` merges both); writes to the OS's performance fast channels to `scmi_perf` |
 | `power_domain`, `scmi_power_domain`, `scmi_system_power` | upstream | ISP0, GPUTOP under SYSTOP |
 | `rcsu` | ours, CIX's `extmodules/rcsu` | the RCSU power controls (SRAM repair, power bits) |
 | `timer` | upstream | alarms |
 | `xt_timer` | ours | CCOUNT extended to 64 bits, CCOMPARE2 |
+| `clkpll`, `clock`, `scmi_clock` | ours (CIX's `clkpll`), upstream, upstream with CIX's changes | the 273 clocks of CIX's tree the OS sees |
 | `sensor`, `scmi_sensor` | upstream | 20 temperatures |
 | `soc_sensor` | ours, CIX's changed `reg_sensor` | the PVT sensors and the board's temperatures |
 | `resource_perms` | upstream | which agent may use which protocol |
+| `dvfs`, `scmi_perf` | upstream, CIX's changes (`scp/module/*/README`) | 12 DVFS domains, SCMI performance with fast channels and plugins |
+| `psu` | upstream, CIX's change | supplies over `pmic` |
+| `pmic` | ours, CIX's `extmodules/pmic` | the EDP rails through the DPM (`dpm_edp_set_voltage`) |
+| `sky1soc_perf` | ours, CIX's `extmodules/plugin_sky1soc` | plugin: CPU clusters and DSU stepped together within 200 mV, TDP caps |
+| `locked_perf` | ours, CIX's `extmodules/plugin_lockedperf` | plugin: levels and limits pinned by the platform |
 
 The configurations in [`scp/config`](scp/config) are CIX's, read from its
 image with [`scripts/open/dwarf_dump.py`](../../scripts/open/dwarf_dump.py)
@@ -201,16 +216,33 @@ XBIN format (header, one entry per program header, data), checked by
 rebuilding the images in both vendor bootloader1 files byte for byte.
 
 Against CIX's image in `test_pm.py` (CIX's boot: 1329 registers, 8 pages
-of shared memory, 33 I2C transfers, then 185 SCMI answers): it boots and
-completes the handshake; of the 1425 registers either image writes, 1159
-get the same values in the same order (the 266 others are mostly the
-clock tree and PLLs, the DVFS levels, the RCSU locks and the RTT window); 30 of the 33 I2C transfers match in order (the other three are
-DVFS changes); 59 of the SCMI answers match: base, power domains, system
-power and sensors on every channel, so every answer on TF-A's. What is
-left of SCMI is performance (8 domains) and clocks (273), both built on
-CIX's clock tree (`clk_tree.c`, `pll_ctrl.c`, `div_ctrl.c`,
-`pll_policy.c`, `clk_nodes.c`), which comes next, then DVFS (`dvfs`,
-`psu`, `pmic`, `sky1soc_perf`, `locked_perf`, `scmi_perf`).
+of shared memory, 33 I2C transfers, then 215 SCMI answers): it boots and
+completes the handshake; 13 of CIX's 1329 registers differ (the RTT
+window at `0xb001xxxx`, interrupt aggregator lines CIX enables for
+services not written yet, a mailbox status write, the SE's `0xaa55` in
+mailbox 8, the GPIO block); the 33 I2C transfers are the same, in order;
+all 215 SCMI answers are the same (base, power domains, system power,
+sensors, the 273 clocks, performance on 12 domains, levels set directly
+and through fast channels, with the same PLL writes and I2C transfers as
+CIX's). The shared memory differs (CIX's RAM log, PCC tables).
+
+[`scripts/open/test_vf.py`](../../scripts/open/test_vf.py) checks the V/F
+tables beyond the emulator's blank fuses: it gives both images the same
+simulated part (PM strap, random V/F fuses for an ATE phase, part number,
+the BIOS's configuration, Phecda's PMICs, GB1's boost) and compares the 12
+domains' OPPs, the table selectors and the I2C transfers:
+
+```sh
+python3 scripts/open/test_vf.py OURS.elf --strap 0x000c0000:0 --fuses 7 --phase 4
+```
+
+The tables match in every case tried. What is not there yet: the custom
+rail layouts a BIOS configuration can give (with one, CIX also reads the
+third PMIC's status), regulators other than the MP5475 (Phecda's and
+Alcor's MP2845s are not driven), the DPM runtime (power model, TDP and EDP
+limits, CIX's `dpm_opp_run`: [`scp/src/scp_dpm_stubs.c`](scp/src/scp_dpm_stubs.c)
+has what the performance modules call of it, as CIX's firmware has it at
+boot) and CIX's PMIC error notification (its SCMI protocol 0x81).
 
 ### What CIX's image does before it idles
 
@@ -236,12 +268,13 @@ in order; the shared-memory ones counted by 4 KiB page):
 | Model of the SoC as CSU_PM sees it (`pm_emu.py`): CIX's image reaches its idle task and answers SCMI | done |
 | Differential test harness (`test_pm.py`: register writes, I2C, SCMI answers) | done; suspend/resume to add |
 | Start-up, vectors, libc, XBIN image; stage 1 boots and does the SE handshake | done |
-| Power-on: clock and reset block, watchdog, UART, I2C, PMICs (30 of 33 boot I2C transfers) | done |
+| Power-on: clock and reset block, watchdog, UART, I2C, PMICs | done |
 | Interconnect counters, PVT sensors, mailboxes | done |
 | Interrupts (aggregator, mailboxes), timer, idle with WAITI | done |
 | SCP-firmware framework and modules: transport, SCMI base, power domains, system power, sensors, permissions | done |
-| Clock tree and PLLs, SCMI clocks | to do |
-| DVFS: PMIC, PSU, DVFS, performance plugins, SCMI perf | to do |
+| Clock tree and PLLs, SCMI clocks | done |
+| V/F tables from the fuses, boot DVFS levels (`test_vf.py`) | done |
+| DVFS: PMIC, PSU, DVFS, performance plugins, SCMI perf | done; DPM runtime (power model, TDP/EDP limits) to do |
 | System power sequence (shutdown, reset, suspend), RTT, logs, PCC tables | to do |
 | CIX `Source/common` and `Source/projects/sky1`, without the debug CLI | to do |
 | Our image passes `test_pm.py` | to do |

@@ -6,6 +6,7 @@
  */
 #include "arch_scp.h"
 #include "clk/clk.h"
+#include "dpm/dvfs_cfg.h"
 #include "i2c.h"
 #include "lcru.h"
 #include "mbox.h"
@@ -49,6 +50,7 @@ static void ss_init(void)
 	clk_nodes_init();
 	g_enable_pll_policy = policy;
 	pmu_reset_all();			/* perf_stream_init */
+	apply_config_dvfs_sustained_level();	/* DVFS domains at their boot OPP */
 }
 
 /* CIX's ss_run_enter: the services start */
@@ -78,10 +80,13 @@ int main(void)
 	lcru_mbox_reset(0x3ff);
 	uart_init();
 	uart_puts("CSU_PM: open firmware\n");
+	dpm_por_fuses();			/* BIOS configuration, OPN, V/F fuses */
 	plat_init();
 	i2c_setup(I2C_HZ, I2C_MASTERS, I2C_SLAVES);
 	pmic_init();
 	pmic_check();
+	/* CIX tells the SE it runs (0x5c5a) just before this */
+	dpm_por_vf_tables();			/* builtin_perf_profile_setup, cpu_harvest_setup */
 	se_handshake_up();
 	ss_init();
 	ss_run();

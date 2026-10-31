@@ -3,8 +3,17 @@
  * Mailbox driver for the transport module.  Every mailbox interrupts the
  * PM on the same aggregator line; the handler finds the mailboxes whose
  * doorbell rang, clears them and signals their transport channel.
+ *
+ * A write to one of a mailbox's fast channels also sets a status bit
+ * (mbox.h).  As CIX's ipc_arbiter (_on_mbox_event) does, writes to the OS's
+ * performance fast channels (mailbox 0, all but channel 1) go to scmi_perf;
+ * the others (channel 1 of mailbox 0, CIX's PCC commands, not handled yet,
+ * and mailbox 2's) are cleared and dropped.
  */
 #include <mod_cix_mbox.h>
+#ifdef BUILD_HAS_MOD_SCMI_PERF
+#include <mod_scmi_perf.h>
+#endif
 #include <mod_transport.h>
 
 #include <fwk_id.h>
@@ -16,6 +25,9 @@
 
 #include "irq.h"
 #include "mbox.h"
+
+/* Mailbox 0's fast channel 1: CIX's PCC commands */
+#define PCC_FAST_BIT	BIT(9 + 1)
 
 struct mbox_ctx {
 	const struct mod_cix_mbox_config *config;
@@ -38,11 +50,16 @@ static void mbox_isr(void)
 
 		if (!c->bound || !c->config->from_ap)
 			continue;
-		st = REG32(MBOX_STATUS(m)) & MBOX_DOORBELL_BIT;
+		st = REG32(MBOX_STATUS(m)) & (MBOX_DOORBELL_BIT | MBOX_FAST_BITS);
 		if (!st)
 			continue;
 		REG32(MBOX_CLEAR(m)) = st;
-		(void)c->transport->signal_message(c->channel);
+#ifdef BUILD_HAS_MOD_SCMI_PERF
+		if (m == 0 && (st & MBOX_FAST_BITS & ~PCC_FAST_BIT))
+			on_fast_channel_interrupt(false);
+#endif
+		if (st & MBOX_DOORBELL_BIT)
+			(void)c->transport->signal_message(c->channel);
 	}
 }
 

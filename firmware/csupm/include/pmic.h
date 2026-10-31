@@ -32,6 +32,8 @@ struct rail {
 
 void pmic_init(void);
 void pmic_check(void);
-bool pmic_set_mv(unsigned domain, uint32_t mv);
+/* The board layout found (CIX's dpm_edp_cfg_type); the rails' voltages are
+ * set with dpm_edp_set_voltage (src/dpm/dvfs_cfg.h) */
+enum pmic_preset pmic_get_preset(void);
 
 #endif

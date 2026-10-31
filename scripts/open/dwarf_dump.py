@@ -89,9 +89,9 @@ def fwk_id(v):
     if t == 2:
         return f"FWK_ID_MODULE({m})"
     if t == 3:
-        return f"FWK_ID_ELEMENT({m}, {(v >> 12) & 0xfff})"
+        return f"FWK_ID_ELEMENT({m}, {(v >> 12) & 0x3ff})"
     if t == 4:
-        return f"FWK_ID_SUB_ELEMENT({m}, {(v >> 12) & 0xfff}, {v >> 24})"
+        return f"FWK_ID_SUB_ELEMENT({m}, {(v >> 12) & 0x3ff}, {(v >> 22) & 0x3ff})"
     if t == 5:
         return f"FWK_ID_API({m}, {(v >> 12) & 15})"
     if t == 6:
