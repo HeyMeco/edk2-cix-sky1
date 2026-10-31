@@ -52,6 +52,11 @@ RUN set -eux; \
     cp /tmp/acpica/generate/unix/bin/* /opt/acpica/bin/; \
     rm -rf /tmp/acpica
 
+# Cortex-M firmware (SE, sensor fusion hub): Debian's arm-none-eabi GCC
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc-arm-none-eabi libnewlib-arm-none-eabi binutils-arm-none-eabi \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV GCC5_AARCH64_PREFIX=/opt/toolchain/aarch64-none-elf/bin/aarch64-none-elf- \
     IASL_PREFIX=/opt/acpica/bin/ \
     PATH=/opt/acpica/bin:/opt/toolchain/aarch64-none-elf/bin:$PATH

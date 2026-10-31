@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: BSD-2-Clause-Patent
 # Decompile a raw AArch64 image with Ghidra, naming the functions that
-# fnmatch.py matched against a reference build.
+# funcmatch.py matched against a reference build.
 #   decompile.sh IMAGE.bin BASE NAMES.txt OUTPREFIX
 set -e
 GHIDRA=${GHIDRA:-$(ls -d /opt/homebrew/Cellar/ghidra/*/libexec 2>/dev/null | tail -1)}
