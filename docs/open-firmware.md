@@ -28,22 +28,23 @@ mask ROM ─▶ SE firmware ─▶ CSU_PM ─▶ TF-A BL2 ─▶ BL31 + OP-TEE (
 ## Which boards
 
 Only boards whose BL2 trusts keys CIX has published can run code built here
-before BL33 (`signing_chain` in `boards/<board>.yaml`):
+before BL33 (`signing_chain` in `boards/<board>.yaml`; every board can still
+run the same CIX-built boot firmware, see [parity](parity.md)):
 
 | Chain | Boards | BL1 key 1 / key 2 | bootloader2 root | Private keys |
 |---|---|---|---|---|
-| `cix` | Orion O6, Orion O6N (CIX `Firmwares/`, Minisforum's public tree) | `c6d0e93f` / `5672dfd9` | `33d47f74` | public |
-| `vendor` | Orange Pi 6, Orange Pi 6 Plus, MS-R1 retail (CIX `Firmwares2/`) | `fb3f60e4` / `fb3f60e4` | `0d999213` | not public |
+| A | Orion O6, Orion O6N (CIX `Firmwares/`, Minisforum's public tree) | `c6d0e93f` / `5672dfd9` | `33d47f74` | public |
+| B | Orange Pi 6, Orange Pi 6 Plus, MS-R1 retail (CIX `Firmwares2/`) | `fb3f60e4` / `fb3f60e4` | `0d999213` | not public |
 
 Key identities: BL1 keys as SHA-256 over the 384-byte modulus, the FIP root
 as SHA-256 over the DER public key (prefixes). CIX published the private keys
-of the `cix` chain in `cixtech/edk2-non-osi` at `94368c7c`
+of chain A in `cixtech/edk2-non-osi` at `94368c7c`
 (`Platform/CIX/Sky1/PackageTool/Keys`): `oem_privatekey.pem` is BL1 key 1,
 `cix_privatekey.pem` is BL1 key 2 and the bootloader2 root of trust. They are
 pinned by hash in [manifests/cix-keys.json](../manifests/cix-keys.json) and
 fetched at build time.
 
-On the `vendor` boards only BL33 can be replaced: the retail MS-R1 already
+On the chain-B boards only BL33 can be replaced: the retail MS-R1 already
 showed that these chips reject a `cix`-chain BL1 (they stay silent). The BL33
 FIP on every board is rooted at `0d999213` (the pregenerated
 `trusted_key_no.crt`, NV counter 223), separately from bootloader2.
@@ -151,7 +152,7 @@ hands to BL2 in the shared page (`BL2_SE_FW_SHARE_BASE`, DRAM size, boot
 device) has to be read from the vendor BL2.
 
 A source-built BL2 then goes into bootloader1 with
-`cixfw.py bl1 --replace ap=bl2.bin --resign …` (`cix` chain only). The AP slot
+`cixfw.py bl1 --replace ap=bl2.bin --resign …` (chain A only). The AP slot
 must keep its offset for now (the replacement has to fit the existing slot;
 the O6 slot holds `0x2fe00` bytes, the vendor BL2 is `0x2f729`).
 
