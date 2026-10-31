@@ -1,0 +1,12 @@
+{
+  "_comment": "CIX debug builds with DWARF debug information (cixtech/cix_proprietary__cix_firmware). Reference for the open SE firmware, CSU_PM and boot ROM work: the DDR island is generated from se_fw.elf. Not redistributed; fetched and verified by scripts/open/cix_debug.py.",
+  "url": "https://github.com/cixtech/cix_proprietary__cix_firmware",
+  "commit": "9162ccf45c71b309cf303ec93775f2ffb1ba25bc",
+  "files": {
+    "debug/se_fw/se_fw.elf": {"size": 2554216, "sha256": "3af7c5e9da2fbad2cc79edba164b9b41a892d57e465fed9894e3568506254d76", "what": "SE firmware 2.0.2026W01.01, debug build"},
+    "debug/se_fw/se_fw.bin": {"size": 391672, "sha256": "acefc1d135810eb3d34761b101181b50484ae3fe74e43353a5058e7a82c223f9", "what": "the same, binary"},
+    "release/se_fw/se_fw.bin": {"size": 333920, "sha256": "3b5814c4d3ca337ed7c43e8b904ad409ddab80a78ecde03353313a963f305a5f", "what": "SE firmware 2.0.2026W01.01, release build"},
+    "release/pm_fw/Release/csupm_sky1": {"size": 2804228, "sha256": "e9a2d93e3aafab66b645fda16d8a7325fd7375d500a6273fe6b06ca424ff85db", "what": "CSU_PM 00.12.001 ELF"},
+    "common/brom/brom.elf": {"size": 786524, "sha256": "bae375817a35ce9808c2c7a344ea09218863192aea969038cb966bd66af768d1", "what": "SE boot ROM"}
+  }
+}
