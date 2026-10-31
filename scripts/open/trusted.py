@@ -116,6 +116,25 @@ def build_sfh(out):
     return path, {"sfh_fw": "source", "sfh_fw_sha256": sha256(path)}
 
 
+def build_se(out, version):
+    """SE firmware from firmware/se, with CIX's DDR driver relinked from
+    their debug build (fetched at the commit manifests/cix-debug-firmware.json
+    pins).  Returns (path, manifest info)."""
+    import cix_debug
+    out = Path(out) / "se"
+    out.mkdir(parents=True, exist_ok=True)
+    elf = cix_debug.fetch()
+    island = out / "ddr_island.S"
+    run([sys.executable, str(ROOT / "scripts/open/se_ddr_island.py"), str(elf), str(island),
+         "--data", "g_soc_pvt_data"], capture=True)
+    run(["make", "-C", str(ROOT / "firmware/se"), f"O={out}", f"DDR_ISLAND={island}",
+         f"MBEDTLS_DIR={ROOT / 'mbedtls'}", f"SE_FW_VERSION=beta2.0-{version}"], capture=True)
+    path = out / "se_fw.bin"
+    log(f"  se_fw.bin: {path.stat().st_size} bytes from source (DDR driver: CIX's)")
+    return path, {"se_fw": "source, CIX's DDR driver relinked", "se_fw_sha256": sha256(path),
+                  "cix_debug_elf_sha256": sha256(elf)}
+
+
 def build_tools():
     run(["make", "-C", str(TFA), "PLAT=sky1", "certtool", "fiptool"], capture=True)
     return TFA / "tools/cert_create/cert_create", TFA / "tools/fiptool/fiptool"
@@ -212,10 +231,10 @@ def build_bootloader2(cfg, target="RELEASE", out=None, jobs=None, ref=None, stmm
     }
 
 
-def build_bootloader1(cfg, ref_bl1, target="RELEASE", out=None, jobs=None):
-    """bootloader1 with the source-built BL2 in place of the CIX one, re-signed
-    with the published chain-A keys; the SE and CSU_PM firmware stay as
-    they are in ref_bl1.  Returns (path, manifest info)."""
+def build_bootloader1(cfg, ref_bl1, target="RELEASE", out=None, jobs=None, se=None):
+    """bootloader1 with the source-built BL2 (and, given se, SE firmware) in
+    place of CIX's, re-signed with the published chain-A keys; CSU_PM stays
+    as it is in ref_bl1.  Returns (path, manifest info)."""
     if not cixfw.CHAINS[cfg["signing_chain"]]["keys_public"]:
         die(f"{cfg['board']}: signing chain {cfg['signing_chain']} has no public keys")
     out = Path(out or ROOT / "output" / cfg["board"] / target / "open")
@@ -243,6 +262,14 @@ def build_bootloader1(cfg, ref_bl1, target="RELEASE", out=None, jobs=None):
         die(f"BL2 ({size} bytes) is larger than the CIX BL2 ({slot[3]} bytes) it replaces")
     payload += bytes(slot[3] - size)
     ref.replace("ap", payload)
+    if se:
+        se_payload = Path(se).read_bytes()
+        se_slot = [img for img in ref.images() if img[1] == "se"][0]
+        if len(se_payload) > se_slot[3]:
+            die(f"SE firmware ({len(se_payload)} bytes) is larger than CIX's ({se_slot[3]} bytes)")
+        # zero padding to CIX's size: the boot ROM copies it over .bss and the stack
+        ref.replace("se", se_payload + bytes(se_slot[3] - len(se_payload)))
+        log(f"  bootloader1.img: SE firmware {len(se_payload)} bytes (padded to {se_slot[3]})")
     ref.resign(key1, key2)
     if not all(ok for _, ok in ref.verify()):
         die("re-signed bootloader1 does not verify")
@@ -250,7 +277,8 @@ def build_bootloader1(cfg, ref_bl1, target="RELEASE", out=None, jobs=None):
     path.write_bytes(bytes(ref.data))
     log(f"  bootloader1.img: BL2 {size} bytes (padded to {len(payload)}), re-signed")
     return path, {
-        "bootloader1": "SE and CSU_PM from the reference, BL2 from source",
+        "bootloader1": ("CSU_PM from the reference, SE firmware and BL2 from source" if se else
+                        "SE and CSU_PM from the reference, BL2 from source"),
         "bootloader1_reference_sha256": sha256(ref_bl1),
         "bl2_sha256": sha256(bl2),
         "bootloader1_sha256": sha256(path),
