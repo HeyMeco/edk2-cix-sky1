@@ -1,0 +1,55 @@
+## @file
+#  NOR flash for the UEFI variable store in StandaloneMM on CIX Sky1, and
+#  single SPI NOR transactions for UEFI (gCixMmNorFlashCommunicateGuid).
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = NorFlashStandaloneMm
+  FILE_GUID                      = 530665B7-1243-4F4E-9906-E40C105BD05A
+  MODULE_TYPE                    = MM_STANDALONE
+  VERSION_STRING                 = 1.0
+  PI_SPECIFICATION_VERSION       = 0x00010032
+  ENTRY_POINT                    = NorFlashStandaloneMmInitialize
+
+[Sources]
+  NorFlashFvb.c
+  NorFlashStandaloneMm.c
+  NorFlashStandaloneMm.h
+  SpiNor.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  ArmPlatformPkg/ArmPlatformPkg.dec
+  EmbeddedPkg/EmbeddedPkg.dec
+  StandaloneMmPkg/StandaloneMmPkg.dec
+  Silicon/CIX/Sky1/CixPkg.dec
+  Platform/CIX/Sky1/StandaloneMm/Sky1StandaloneMm.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  DevicePathLib
+  HobLib
+  MemoryAllocationLib
+  MmServicesTableLib
+  OpteeSpServiceLib
+  StandaloneMmDriverEntryPoint
+
+[Guids]
+  gCixMmNorFlashCommunicateGuid
+  gCixNorFlashDevicePathGuid
+  gEfiAuthenticatedVariableGuid
+  gEfiSystemNvDataFvGuid
+  gEfiVariableGuid
+  gNvramInformationHobGuid
+
+[Protocols]
+  gEfiSmmFirmwareVolumeBlockProtocolGuid      ## PRODUCES
+
+[Depex]
+  TRUE

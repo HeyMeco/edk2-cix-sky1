@@ -71,9 +71,10 @@ on top of the CIX 2026Q3 BSP and booting operating systems through **ACPI**.
   yet; [docs/parity.md](docs/parity.md)).
 * **Open boot firmware** (work in progress, [docs/open-firmware.md](docs/open-firmware.md)):
   TF-A, mbed TLS and OP-TEE as pinned submodules; on the Orion O6/O6N
-  `--open` builds BL2, BL31 and OP-TEE from source and signs them, and the
-  BL33 certificates, with CIX's published keys, so only the SE and CSU_PM
-  firmware and the StandaloneMM image stay CIX-built (not boot-tested yet);
+  `--open` builds BL2, BL31, OP-TEE and the StandaloneMM variable store from
+  source and signs them, and the BL33 certificates, with CIX's published
+  keys, so only the SE and CSU_PM firmware stay CIX-built (not boot-tested
+  yet);
   an open SPI image packer, FIP verifier, bootloader1 re-signing tool and
   image checker ([scripts/open](scripts/open)).
 
@@ -122,7 +123,7 @@ the unpadded image, the BL33-only OTA image, the raw FD and `manifest.json`. Int
 log stay in `output/<board>/RELEASE/`.
 
 Options: `--target DEBUG`, `--version 2026Q3-2`, `--extras`, `--jobs N`,
-`--open` (O6/O6N: BL2, BL31 and OP-TEE from source, written as `<board>_<version>_open.bin`). On Apple Silicon
+`--open` (O6/O6N: BL2, BL31, OP-TEE and StandaloneMM from source, written as `<board>_<version>_open.bin`; `--vendor-stmm` keeps CIX's StandaloneMM). On Apple Silicon
 the container runs natively (arm64) and takes about two minutes per board.
 
 ### Orange Pi vendor images

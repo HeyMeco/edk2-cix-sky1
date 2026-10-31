@@ -7,10 +7,11 @@ is CIX's published key, so a FIP built here passes the closed BL2 exactly as
 the vendor one does:
 
   1. BL31 from arm-trusted-firmware (PLAT=sky1, SPD=opteed)
-  2. OP-TEE from optee_os (PLATFORM=cix-sky1) with the StandaloneMM
-     firmware volume taken unchanged from the reference bootloader2 (the
-     selected boot firmware: the board vendor's or CIX's)
-     (CIX's NorFlash/SerialOut/FwVersion StMM drivers are not public yet)
+  2. OP-TEE from optee_os (PLATFORM=cix-sky1) with a StandaloneMM firmware
+     volume: the one build.py builds from source
+     (edk2-project/Platform/CIX/Sky1/StandaloneMm), or CIX's, taken
+     unchanged from the reference bootloader2 (the selected boot firmware:
+     the board vendor's or CIX's)
   3. certificates with TF-A cert_create, signed with the published CIX key
      and the NV counter of the vendor FIP; fiptool from TF-A
   4. an independent check of the certificate chain and image hashes
@@ -120,11 +121,12 @@ def build_optee(out, stmm, debug, jobs):
     return out / "core" / "tee-raw.bin"
 
 
-def build_bootloader2(cfg, target="RELEASE", out=None, jobs=None, ref=None):
+def build_bootloader2(cfg, target="RELEASE", out=None, jobs=None, ref=None, stmm_fd=None):
     """Build and sign bootloader2.img; returns (path, manifest info).
 
-    ref: the bootloader2 that gives the StMM payload and the NV counter
-    (default: the board vendor's, staged by fetch-blobs.py)."""
+    ref: the bootloader2 that gives the NV counter, and the StMM payload
+    unless stmm_fd names a source-built one (default: the board vendor's,
+    staged by fetch-blobs.py)."""
     if not cixfw.CHAINS[cfg["signing_chain"]]["keys_public"]:
         die(f"{cfg['board']}: signing chain {cfg['signing_chain']} has no public keys, so a "
             "source-built bootloader2 would not boot")
@@ -145,10 +147,15 @@ def build_bootloader2(cfg, target="RELEASE", out=None, jobs=None, ref=None):
         die(f"{cfg['board']}: vendor bootloader2 does not verify against the CIX root: {problems}")
     nvctr = vinfo["nvctr"]
     tos = {cixfw.FIP_NAMES.get(u, u).split()[0]: vfip[o:o + n] for u, o, n, _ in cixfw.fip_entries(vfip)}["tos-fw"]
-    _, _, stmm_fv = cixfw.find_stmm(tos)
     stmm = out / "BL32_AP_EFI_STMM.fd"
-    stmm.write_bytes(stmm_fv)
-    log(f"  StMM from the reference bootloader2: {len(stmm_fv)} bytes, sha256 {sha256(stmm)[:16]}")
+    if stmm_fd:
+        stmm_fv = Path(stmm_fd).read_bytes()
+        stmm.write_bytes(stmm_fv)
+        log(f"  StMM from source: {len(stmm_fv)} bytes, sha256 {sha256(stmm)[:16]}")
+    else:
+        _, _, stmm_fv = cixfw.find_stmm(tos)
+        stmm.write_bytes(stmm_fv)
+        log(f"  StMM from the reference bootloader2: {len(stmm_fv)} bytes, sha256 {sha256(stmm)[:16]}")
 
     log("  building TF-A BL31")
     bl31 = build_bl31(out / "tfa", debug, jobs)
@@ -188,7 +195,7 @@ def build_bootloader2(cfg, target="RELEASE", out=None, jobs=None, ref=None):
         "bl31_sha256": sha256(bl31),
         "bl32_sha256": sha256(bl32),
         "stmm_sha256": sha256(stmm),
-        "stmm_from": str(Path(ref).relative_to(ROOT)) if ref else "vendor bootloader2",
+        "stmm_from": "source" if stmm_fd else (str(Path(ref).relative_to(ROOT)) if ref else "vendor bootloader2"),
         "nv_counter": nvctr,
         "fip_root": info["root"],
         "bootloader2_sha256": sha256(fip),
