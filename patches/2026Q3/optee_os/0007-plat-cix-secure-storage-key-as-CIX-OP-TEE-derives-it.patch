@@ -1,0 +1,60 @@
+From c2095c669140e27c304840a801a5d288f527313b Mon Sep 17 00:00:00 2001
+From: Mecid <mecidi.cc@gmail.com>
+Date: Sat, 31 Oct 2026 13:24:17 +0100
+Subject: [PATCH] plat-cix: secure storage key as CIX OP-TEE derives it
+
+The CIX OP-TEE in the vendor bootloader2 derives the secure storage key
+as SSK = HMAC-SHA256(HUK, die ID || "cix_ssk_gen_string\0"), the die ID
+being huk_subkey_derive(HUK_SUBKEY_DIE_ID) (cix_ssk_gen_string in its
+tee_fs key manager).  The public tree derives it with the generic
+HUK_SUBKEY_COMPAT construction, a fixed "BEEF" die ID and
+"ONLY_FOR_tee_fs_ssk", so neither firmware could read the secure storage
+objects (REE FS, NOR FS) the other wrote.
+
+CFG_CIX_SSK_COMPAT (default y on plat-cix) selects the CIX string and the
+OTP die ID in huk_compat(); the HUK is the CIX device key either way.
+---
+ core/arch/arm/plat-cix/conf.mk | 9 +++++++++
+ core/kernel/huk_subkey.c       | 5 +++++
+ 2 files changed, 14 insertions(+)
+
+diff --git a/core/arch/arm/plat-cix/conf.mk b/core/arch/arm/plat-cix/conf.mk
+index f3feda39..4fe37fd5 100755
+--- a/core/arch/arm/plat-cix/conf.mk
++++ b/core/arch/arm/plat-cix/conf.mk
+@@ -124,6 +124,15 @@ CFG_TEE_KEY_META_SHM ?= 0x824FE000
+ CFG_TEE_KEY_META_SIZE ?= 0x00001000
+ endif
+ 
++# Secure storage key as CIX OP-TEE derives it, HMAC(HUK, die ID ||
++# "cix_ssk_gen_string"), so objects stored under the vendor firmware stay
++# readable (and the other way round)
++CFG_CIX_SSK_COMPAT ?= y
++ifeq ($(CFG_CIX_SSK_COMPAT),y)
++$(call force,CFG_CORE_HUK_SUBKEY_COMPAT,y)
++$(call force,CFG_CORE_HUK_SUBKEY_COMPAT_USE_OTP_DIE_ID,y)
++endif
++
+ CFG_TZ_TF_A_SHM ?= 0x824FF000
+ CFG_TZ_TF_A_SIZE ?= 0x00001000
+ 
+diff --git a/core/kernel/huk_subkey.c b/core/kernel/huk_subkey.c
+index 03088c92..b8a77677 100644
+--- a/core/kernel/huk_subkey.c
++++ b/core/kernel/huk_subkey.c
+@@ -38,7 +38,12 @@ static TEE_Result huk_compat(void *ctx, enum huk_subkey_usage usage)
+ {
+ 	TEE_Result res = TEE_SUCCESS;
+ 	uint8_t chip_id[TEE_FS_KM_CHIP_ID_LENGTH] = { 0 };
++#ifdef CFG_CIX_SSK_COMPAT
++	/* CIX OP-TEE's secure storage key: the same construction, its string */
++	static uint8_t ssk_str[] = "cix_ssk_gen_string";
++#else
+ 	static uint8_t ssk_str[] = "ONLY_FOR_tee_fs_ssk";
++#endif
+ 
+ 	switch (usage) {
+ 	case HUK_SUBKEY_RPMB:
+-- 
+2.56.0
+

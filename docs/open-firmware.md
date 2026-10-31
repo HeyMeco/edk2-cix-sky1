@@ -159,7 +159,7 @@ check_open.py IMAGE REF_BOOTLOADER1 BL2.bin [--root ROOT.pem]
 | `arm-trusted-firmware` | `114fb205` (CIX, 2026-03-10) | 0001, 0003 `cert_create`: certificates that carry only one world's key; 0002 BL2 platform support; 0004 TrustZone configuration in BL31; 0005 audio domain and resume marker after system suspend; 0006 NI-700 QoS as in the CIX BL31; 0007 normal-world SiP argument checks |
 | `mbedtls` | `8b3f26a5` (2.28.0) | none |
 | `edk2` | CIX `9212cf39` | 0001, 0002 Secure Boot defaults and TPM page ([parity](parity.md)); 0003 the StandaloneMM core builds CIX's NVRAM information HOB |
-| `optee_os` | `cc66640f` (CIX, 2025-11-11) | 0001-0005 from [orion-unofficial/edk2-cix](https://github.com/orion-unofficial/edk2-cix) `source/unofficial/cix/1.2/op-tee/3.17.0` (BSD-2-Clause, authorship kept): compiler fixes, fail-closed hardware entropy and key return, FF-A 1.2 StandaloneMM loader behind `CFG_STMM_FFA_VERSION=12` (default 10 keeps the vendor StMM interface), stop StMM on a failed NOR transaction; 0006 NOR secure storage only where the TrustZone configuration puts it |
+| `optee_os` | `cc66640f` (CIX, 2025-11-11) | 0001-0005 from [orion-unofficial/edk2-cix](https://github.com/orion-unofficial/edk2-cix) `source/unofficial/cix/1.2/op-tee/3.17.0` (BSD-2-Clause, authorship kept): compiler fixes, fail-closed hardware entropy and key return, FF-A 1.2 StandaloneMM loader behind `CFG_STMM_FFA_VERSION=12` (default 10 keeps the vendor StMM interface), stop StMM on a failed NOR transaction; 0006 NOR secure storage only where the TrustZone configuration puts it; 0007 the secure storage key derived as CIX's OP-TEE derives it |
 
 They are applied by `scripts/prepare.py` like the EDK2 queues
 ([architecture](architecture.md#patch-queue)).
@@ -240,6 +240,15 @@ firmware header and bootloader1. It now uses only the region the TrustZone
 configuration enables, inside the chip; otherwise secure storage reports
 `TEE_ERROR_STORAGE_NOT_AVAILABLE`. REE-FS storage (through
 `tee-supplicant`), the default, is unaffected.
+
+Patch 0007: the secure storage key. CIX's OP-TEE derives it as
+HMAC-SHA256(HUK, die ID ‖ `"cix_ssk_gen_string"`), the die ID being the
+HUK subkey for that purpose; the public tree uses the generic compatible
+construction with a fixed die ID and `"ONLY_FOR_tee_fs_ssk"`. With the
+public derivation neither firmware could read the secure storage objects
+the other wrote (TA data under `/data/tee`, fTPM state). The open OP-TEE now
+derives CIX's key (`CFG_CIX_SSK_COMPAT`), so switching between vendor and
+open firmware keeps them.
 
 ### TrustZone configuration
 

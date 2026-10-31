@@ -14,7 +14,7 @@ prove identical code, and nothing here has been built or boot-tested.
 | `bootloader1.img` #1 | SE firmware (Cortex-M) | none | no |
 | `bootloader1.img` #2 | CSU_PM firmware (Xtensa, Arm SCP-firmware based) | SCP-firmware framework only | only with large reverse engineering |
 | `bootloader1.img` #3 | TF-A BL2 | cixtech TF-A, 5 platform files missing | **built** for O6/O6N with `--open` (patch 0002), re-signed into bootloader1 ([open firmware](open-firmware.md#bl2)) |
-| `bootloader2.img` | TF-A FIP: BL31 + OP-TEE BL32 (with StandaloneMM) | cixtech TF-A and OP-TEE, with gaps | **built** for O6/O6N with `--open` (StMM still binary) |
+| `bootloader2.img` | TF-A FIP: BL31 + OP-TEE BL32 (with StandaloneMM) | cixtech TF-A and OP-TEE, with gaps; StandaloneMM: EDK2 + 3 CIX binaries | **built** for O6/O6N with `--open`, StandaloneMM included ([open firmware](open-firmware.md#standalonemm)) |
 | `csu_pm_config.bin` | PM configuration | `pm_config` generator | yes, byte-identical for both Orange Pi boards |
 | `memory_config.bin` | DRAM configuration | `mem_config` generator | Radxa/Minisforum: built; Orange Pi: not yet decoded |
 | `trustzone_config.bin` | SPE, NOR secure storage and bootloader3 recovery settings for BL2, BL31 and OP-TEE | `trustzone_config` generator | yes; the CIX stock file on every board ([open firmware](open-firmware.md#trustzone-configuration)) |
@@ -54,15 +54,18 @@ Both payloads are plaintext. Missing from the public trees:
     the code that reads `trustzone_config.bin` at `0xF0000`; written for the
     open BL31 (TF-A patch 0004).
   * SPI-NOR erase/write in BL31 (`spi_nor_erase_sector`,
-    `write failure when override flash`).
-  * RAS event forwarding for IDM and TZC400.
-* BL32: `cix_ssk_gen_string`, the eFuse read through TZ shared memory, and a
-  few lock paths. The CIX platform, HDCP2 and the crypto-engine driver
+    `write failure when override flash`), which nothing calls.
+  * since matched by TF-A patches 0005 and 0006: the audio domain sequence
+    after system suspend and two QoS changes.
+* BL32: `cix_ssk_gen_string` (the secure storage key derivation, matched by
+  OP-TEE patch 0007), the eFuse read through TZ shared memory, and a few
+  lock paths. The CIX platform, HDCP2 and the crypto-engine driver
   (`lib/libmbedtls/core/te_driver`, `lib/libhosal`) are public.
 
-The embedded StandaloneMM is CIX's build, not ours: the secure-world variable
-driver comes from this blob, not from the UEFI tree built here. A rebuilt BL32
-would take our own StMM FV through `CFG_STMM_PATH`.
+The embedded StandaloneMM is CIX's build: the secure-world variable driver
+comes from this blob, not from the UEFI tree. `--open` builds its own
+([open firmware](open-firmware.md#standalonemm)) and passes it to OP-TEE
+through `CFG_STMM_PATH`.
 
 Signing: BL2 checks the bootloader2 certificate chain against a root key of
 its own, separate from the BL33 chain. On the Orion O6/O6N (and the CIX
