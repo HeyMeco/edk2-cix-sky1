@@ -51,5 +51,6 @@ enum scp_pd {
 };
 
 #define SCP_SENSOR_COUNT	20
+#define SCP_CLOCK_COUNT		273	/* clk_nodes_export_to_os */
 
 #endif

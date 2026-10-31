@@ -1,0 +1,7 @@
+SCP-firmware v2.11.0's scmi_clock module with CIX's changes:
+- an agent's device_count is 16 bits (upstream: 8), for the 273 clocks
+  the OS sees;
+- protocol version 0x20000 as CIX's reports.  CIX also added
+  CLOCK_NAME_GET and the two rate notifications (messages 8-10); those
+  are not here yet, and PROTOCOL_MESSAGE_ATTRIBUTES says so.  Everything else is upstream's (BSD-3-Clause, see
+../../../SCP-firmware/license.md).
