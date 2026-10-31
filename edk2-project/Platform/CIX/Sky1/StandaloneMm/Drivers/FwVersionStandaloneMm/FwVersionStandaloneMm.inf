@@ -1,0 +1,41 @@
+## @file
+#  StandaloneMM firmware version for UEFI's FwVersionDxe (StmmInfoLib),
+#  through gCixMmStmmInfoCommunicateGuid.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = FwVersionStandaloneMm
+  FILE_GUID                      = BC709486-D541-433D-B003-EF8388C380A0
+  MODULE_TYPE                    = MM_STANDALONE
+  VERSION_STRING                 = 1.0
+  PI_SPECIFICATION_VERSION       = 0x00010032
+  ENTRY_POINT                    = FwVersionStandaloneMmInitialize
+
+[Sources]
+  FwVersionStandaloneMm.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  StandaloneMmPkg/StandaloneMmPkg.dec
+  Platform/CIX/Sky1/Sky1.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  MmServicesTableLib
+  PcdLib
+  StandaloneMmDriverEntryPoint
+
+[Guids]
+  gCixMmStmmInfoCommunicateGuid
+
+[Pcd]
+  gEfiMdeModulePkgTokenSpaceGuid.PcdFirmwareVersionString
+
+[Depex]
+  TRUE

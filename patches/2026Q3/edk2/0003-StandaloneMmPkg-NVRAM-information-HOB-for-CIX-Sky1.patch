@@ -1,0 +1,124 @@
+From 8538c79ebbafd5b99ac5612df377130df4ad731c Mon Sep 17 00:00:00 2001
+From: edk2-cix <edk2-cix@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 13:17:04 +0100
+Subject: [PATCH] StandaloneMmPkg: NVRAM information HOB for CIX Sky1
+
+CIX OP-TEE (stmm_sp.c) places the boot-flash location of the UEFI
+variable store, the FTW working block and the FTW spare (three UINT64
+offsets, three UINT32 sizes) right after the CPU information in the
+StandaloneMM boot information buffer.  CIX's StandaloneMM core turns it
+into a GUID HOB (4c8167fc-5a9d-468e-a942-861fb50ab539, 36 bytes) that its
+NOR flash driver and VariablePcdLib (Silicon/CIX/Sky1) read; the public
+core does not.
+
+Add Guid/NvramInformation.h, gNvramInformationHobGuid and build the HOB
+after the MMRAM ranges when the data lies inside the shared buffer.
+---
+ .../Include/Guid/NvramInformation.h           | 31 +++++++++++++++++++
+ .../Arm/CreateHobList.c                       | 14 +++++++++
+ .../StandaloneMmCoreEntryPoint.inf            |  1 +
+ StandaloneMmPkg/StandaloneMmPkg.dec           |  3 ++
+ 4 files changed, 49 insertions(+)
+ create mode 100644 StandaloneMmPkg/Include/Guid/NvramInformation.h
+
+diff --git a/StandaloneMmPkg/Include/Guid/NvramInformation.h b/StandaloneMmPkg/Include/Guid/NvramInformation.h
+new file mode 100644
+index 0000000000..b9e2433094
+--- /dev/null
++++ b/StandaloneMmPkg/Include/Guid/NvramInformation.h
+@@ -0,0 +1,31 @@
++/** @file
++  NVRAM information HOB: where the UEFI variable store and the fault tolerant
++  write areas lie in the boot flash.
++
++  On CIX Sky1 the secure OS (OP-TEE) passes these values to StandaloneMM
++  after the CPU information in the boot information buffer; the MM core turns
++  them into this HOB for the NOR flash driver and VariablePcdLib.
++
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#ifndef NVRAM_INFORMATION_H_
++#define NVRAM_INFORMATION_H_
++
++#define NVRAM_INFORMATION_HOB_GUID \
++  { 0x4c8167fc, 0x5a9d, 0x468e, { 0xa9, 0x42, 0x86, 0x1f, 0xb5, 0x0a, 0xb5, 0x39 } }
++
++#pragma pack (1)
++typedef struct {
++  UINT64    VariableBase;     // flash offsets
++  UINT64    FtwWorkingBase;
++  UINT64    FtwSpareBase;
++  UINT32    VariableSize;
++  UINT32    FtwWorkingSize;
++  UINT32    FtwSpareSize;
++} NVRAM_INFORMATION_HOB_DATA;
++#pragma pack ()
++
++extern EFI_GUID  gNvramInformationHobGuid;
++
++#endif
+diff --git a/StandaloneMmPkg/Library/StandaloneMmCoreEntryPoint/Arm/CreateHobList.c b/StandaloneMmPkg/Library/StandaloneMmCoreEntryPoint/Arm/CreateHobList.c
+index 2ac2d354f0..a381812001 100644
+--- a/StandaloneMmPkg/Library/StandaloneMmCoreEntryPoint/Arm/CreateHobList.c
++++ b/StandaloneMmPkg/Library/StandaloneMmCoreEntryPoint/Arm/CreateHobList.c
+@@ -12,6 +12,7 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
+ #include <PiPei.h>
+ #include <Guid/MmramMemoryReserve.h>
+ #include <Guid/MpInformation.h>
++#include <Guid/NvramInformation.h>
+ 
+ #include <Library/Arm/StandaloneMmCoreEntryPoint.h>
+ #include <Library/ArmMmuLib.h>
+@@ -68,6 +69,8 @@ CreateHobListFromBootInfo (
+   EFI_PROCESSOR_INFORMATION        *ProcInfoBuffer;
+   EFI_SECURE_PARTITION_CPU_INFO    *CpuInfo;
+   ARM_TF_CPU_DRIVER_EP_DESCRIPTOR  *CpuDriverEntryPointDesc;
++  NVRAM_INFORMATION_HOB_DATA       *NvramInfo;
++  NVRAM_INFORMATION_HOB_DATA       *NvramHobData;
+ 
+   // Create a hoblist with a PHIT and EOH
+   HobStart = HobConstructor (
+@@ -201,5 +204,16 @@ CreateHobListFromBootInfo (
+   MmramRanges[5].PhysicalSize  = HobStart->EfiFreeMemoryTop - HobStart->EfiFreeMemoryBottom;
+   MmramRanges[5].RegionState   = EFI_CACHEABLE;
+ 
++  // CIX Sky1: OP-TEE follows the CPU information with the flash location of
++  // the variable store (NVRAM_INFORMATION_HOB_DATA), inside the shared buffer
++  NvramInfo = (NVRAM_INFORMATION_HOB_DATA *)&PayloadBootInfo->CpuInfo[PayloadBootInfo->NumCpus];
++  if (((UINTN)NvramInfo >= PayloadBootInfo->SpSharedBufBase) &&
++      ((UINTN)(NvramInfo + 1) <= PayloadBootInfo->SpSharedBufBase + PayloadBootInfo->SpSharedBufSize) &&
++      (NvramInfo->VariableSize != 0))
++  {
++    NvramHobData = BuildGuidHob (&gNvramInformationHobGuid, sizeof (*NvramHobData));
++    CopyMem (NvramHobData, NvramInfo, sizeof (*NvramHobData));
++  }
++
+   return HobStart;
+ }
+diff --git a/StandaloneMmPkg/Library/StandaloneMmCoreEntryPoint/StandaloneMmCoreEntryPoint.inf b/StandaloneMmPkg/Library/StandaloneMmCoreEntryPoint/StandaloneMmCoreEntryPoint.inf
+index 75cfb98c0e..325f9c1869 100644
+--- a/StandaloneMmPkg/Library/StandaloneMmCoreEntryPoint/StandaloneMmCoreEntryPoint.inf
++++ b/StandaloneMmPkg/Library/StandaloneMmCoreEntryPoint/StandaloneMmCoreEntryPoint.inf
+@@ -50,6 +50,7 @@
+   gEfiMmPeiMmramMemoryReserveGuid
+   gEfiStandaloneMmNonSecureBufferGuid
+   gEfiArmTfCpuDriverEpDescriptorGuid
++  gNvramInformationHobGuid
+ 
+ [FeaturePcd.ARM, FeaturePcd.AARCH64]
+   gArmTokenSpaceGuid.PcdFfaEnable
+diff --git a/StandaloneMmPkg/StandaloneMmPkg.dec b/StandaloneMmPkg/StandaloneMmPkg.dec
+index 46784d94e4..a73c81c7ff 100644
+--- a/StandaloneMmPkg/StandaloneMmPkg.dec
++++ b/StandaloneMmPkg/StandaloneMmPkg.dec
+@@ -48,3 +48,6 @@
+   gEfiStandaloneMmNonSecureBufferGuid      = { 0xf00497e3, 0xbfa2, 0x41a1, { 0x9d, 0x29, 0x54, 0xc2, 0xe9, 0x37, 0x21, 0xc5 }}
+   gEfiArmTfCpuDriverEpDescriptorGuid       = { 0x6ecbd5a1, 0xc0f8, 0x4702, { 0x83, 0x01, 0x4f, 0xc2, 0xc5, 0x47, 0x0a, 0x51 }}
+ 
++  ## Include/Guid/NvramInformation.h
++  gNvramInformationHobGuid                 = { 0x4c8167fc, 0x5a9d, 0x468e, { 0xa9, 0x42, 0x86, 0x1f, 0xb5, 0x0a, 0xb5, 0x39 }}
++
+-- 
+2.56.0
+

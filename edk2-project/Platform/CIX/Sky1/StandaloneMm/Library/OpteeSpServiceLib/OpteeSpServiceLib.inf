@@ -1,0 +1,27 @@
+## @file
+#  FF-A direct requests from StandaloneMM to CIX OP-TEE's StMM services:
+#  the OP-TEE console and SPI NOR transactions on the boot flash.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = OpteeSpServiceLib
+  FILE_GUID                      = 2C3E4F5A-7B8C-4D9E-A0B1-C2D3E4F5A6B7
+  MODULE_TYPE                    = BASE
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = OpteeSpServiceLib|MM_STANDALONE MM_CORE_STANDALONE
+
+[Sources]
+  OpteeSpServiceLib.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  ArmPkg/ArmPkg.dec
+  Platform/CIX/Sky1/StandaloneMm/Sky1StandaloneMm.dec
+
+[LibraryClasses]
+  ArmSvcLib
+  BaseLib
+  BaseMemoryLib

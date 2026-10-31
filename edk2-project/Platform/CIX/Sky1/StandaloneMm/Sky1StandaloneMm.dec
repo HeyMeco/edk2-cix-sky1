@@ -1,0 +1,19 @@
+## @file
+#  StandaloneMM for CIX Sky1: the drivers CIX ships as binaries in its
+#  StandaloneMM image, written here from their interfaces.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  DEC_SPECIFICATION              = 0x0001001A
+  PACKAGE_NAME                   = Sky1StandaloneMm
+  PACKAGE_GUID                   = 6B1D0C1E-6F2D-4C67-9F0A-2E7C3A1B5D40
+  PACKAGE_VERSION                = 1.0
+
+[Includes]
+  Include
+
+[LibraryClasses]
+  ##  @libraryclass  FF-A direct requests to CIX OP-TEE's StMM services
+  OpteeSpServiceLib|Include/Library/OpteeSpServiceLib.h

@@ -1,0 +1,58 @@
+## @file
+#  StandaloneMM image for CIX Sky1 (CFG_STMM_PATH of OP-TEE).  The drivers
+#  have no dependency expressions and run in this order: the NOR flash
+#  driver must come before the FTW and variable drivers, whose
+#  VariablePcdLib finds the variable store through it.
+#
+#  Copyright (c) 2018, ARM Limited. All rights reserved.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[FD.BL32_AP_MM]
+BaseAddress   = 0x1000
+Size          = 0x00200000
+ErasePolarity = 1
+BlockSize     = 0x00001000
+NumBlocks     = 0x0200
+
+0x00000000|0x00200000
+FV = FVMAIN_COMPACT
+
+[FV.FVMAIN_COMPACT]
+FvAlignment        = 8
+ERASE_POLARITY     = 1
+MEMORY_MAPPED      = TRUE
+STICKY_WRITE       = TRUE
+LOCK_CAP           = TRUE
+LOCK_STATUS        = TRUE
+WRITE_DISABLED_CAP = TRUE
+WRITE_ENABLED_CAP  = TRUE
+WRITE_STATUS       = TRUE
+WRITE_LOCK_CAP     = TRUE
+WRITE_LOCK_STATUS  = TRUE
+READ_DISABLED_CAP  = TRUE
+READ_ENABLED_CAP   = TRUE
+READ_STATUS        = TRUE
+READ_LOCK_CAP      = TRUE
+READ_LOCK_STATUS   = TRUE
+
+  INF StandaloneMmPkg/Core/StandaloneMmCore.inf
+  INF Platform/CIX/Sky1/StandaloneMm/Drivers/SerialOutStandaloneMm/SerialOutStandaloneMm.inf
+  INF Platform/CIX/Sky1/StandaloneMm/Drivers/NorFlashStandaloneMm/NorFlashStandaloneMm.inf
+  INF MdeModulePkg/Universal/FaultTolerantWriteDxe/FaultTolerantWriteStandaloneMm.inf
+  INF MdeModulePkg/Universal/Variable/RuntimeDxe/VariableStandaloneMm.inf
+  INF StandaloneMmPkg/Drivers/StandaloneMmCpu/StandaloneMmCpu.inf
+  INF Platform/CIX/Sky1/StandaloneMm/Drivers/FwVersionStandaloneMm/FwVersionStandaloneMm.inf
+
+[Rule.Common.MM_CORE_STANDALONE]
+  FILE SEC = $(NAMED_GUID) FIXED {
+    PE32  PE32 Align = Auto             $(INF_OUTPUT)/$(MODULE_NAME).efi
+  }
+
+[Rule.Common.MM_STANDALONE]
+  FILE MM_STANDALONE = $(NAMED_GUID) {
+    SMM_DEPEX SMM_DEPEX Optional       $(INF_OUTPUT)/$(MODULE_NAME).depex
+    PE32      PE32                     $(INF_OUTPUT)/$(MODULE_NAME).efi
+    UI        STRING="$(MODULE_NAME)" Optional
+  }

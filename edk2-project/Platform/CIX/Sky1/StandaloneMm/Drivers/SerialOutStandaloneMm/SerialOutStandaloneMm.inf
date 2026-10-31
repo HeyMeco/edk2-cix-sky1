@@ -1,0 +1,38 @@
+## @file
+#  UEFI runtime log lines (SerialOutStmmLib) to the OP-TEE console, through
+#  gCixMmSerialOutCommunicateGuid.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = SerialOutStandaloneMm
+  FILE_GUID                      = BE83B8F0-E78B-40D0-BDDD-C173DF5E4256
+  MODULE_TYPE                    = MM_STANDALONE
+  VERSION_STRING                 = 1.0
+  PI_SPECIFICATION_VERSION       = 0x00010032
+  ENTRY_POINT                    = SerialOutStandaloneMmInitialize
+
+[Sources]
+  SerialOutStandaloneMm.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  StandaloneMmPkg/StandaloneMmPkg.dec
+  Silicon/CIX/Sky1/CixPkg.dec
+  Platform/CIX/Sky1/StandaloneMm/Sky1StandaloneMm.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  MmServicesTableLib
+  OpteeSpServiceLib
+  StandaloneMmDriverEntryPoint
+
+[Guids]
+  gCixMmSerialOutCommunicateGuid
+
+[Depex]
+  TRUE

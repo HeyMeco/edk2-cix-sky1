@@ -122,6 +122,33 @@ def edk2_build(cfg, target, version, date, commit, jobs, log_path):
     return fd
 
 
+STMM_DSC = "Platform/CIX/Sky1/StandaloneMm/Sky1StandaloneMm.dsc"
+
+
+def stmm_build(target, version, commit, jobs, log_path):
+    """StandaloneMM from source (edk2-project/Platform/CIX/Sky1/StandaloneMm),
+    for OP-TEE in place of the CIX image."""
+    env = build_env()
+    ensure_basetools(env)
+    (ROOT / "Conf").mkdir(exist_ok=True)
+    # FwVersionDxe shows this; StmmInfoLib takes at most 63 characters
+    stmm_version = f"edk2-cix-{version}-{commit}"[:63]
+    args = ["build", "-a", "AARCH64", "-t", "GCC5", "-b", target, "-p", STMM_DSC, "-n", str(jobs),
+            "-D", f"STMM_VERSION={stmm_version}"]
+    script = f'source edk2/edksetup.sh --reconfig >/dev/null && exec {" ".join(map(shell_quote, args))}'
+    log(f"building {STMM_DSC} ({target})")
+    with open(log_path, "w") as lf:
+        rc = subprocess.run(["bash", "-c", script], cwd=ROOT, env=env, stdout=lf, stderr=subprocess.STDOUT).returncode
+    if rc != 0:
+        tail = Path(log_path).read_text(errors="replace").splitlines()[-40:]
+        sys.stderr.write("\n".join(tail) + "\n")
+        die(f"StandaloneMM build failed, see {log_path}")
+    fd = ROOT / "Build/Sky1StandaloneMm" / f"{target}_GCC5/FV/BL32_AP_MM.fd"
+    if not fd.exists():
+        die(f"{fd} was not produced")
+    return fd
+
+
 def shell_quote(s):
     s = str(s)
     return s if s and all(c.isalnum() or c in "-_./=:,+" for c in s) else "'" + s.replace("'", "'\\''") + "'"
@@ -500,7 +527,12 @@ def main():
                     help="build BL2, BL31 and OP-TEE from source (bootloader1 re-signed, bootloader2, "
                          "bootloader3 certificates); chain-A boards only (docs/open-firmware.md); the "
                          "image is named <board>_<version>_open.bin")
+    ap.add_argument("--vendor-stmm", action="store_true",
+                    help="with --open, embed CIX's StandaloneMM image from the reference bootloader2 "
+                         "instead of the one built from source")
     a = ap.parse_args()
+    if a.vendor_stmm and not a.open:
+        ap.error("--vendor-stmm needs --open")
 
     all_boards = boards()
     if a.list:
@@ -535,10 +567,11 @@ def main():
         boot_fw = a.boot_firmware or cfg.get("boot_firmware", "vendor")
         bl1, bl2, open_info = (None, None, None)
         if a.open:
-            log(f"{n}: building BL2, BL31 and OP-TEE from source")
+            log(f"{n}: building BL2, BL31, OP-TEE and StandaloneMM from source")
             cix_dir = PACKAGE_TOOL / cixfw.CHAINS[cfg["signing_chain"]]["cix_dir"]
             ref = cix_dir / "bootloader2.img" if boot_fw == "cix" else None
-            bl2, open_info = trusted.build_bootloader2(cfg, a.target, outdir / "open", a.jobs, ref)
+            stmm = None if a.vendor_stmm else stmm_build(a.target, version, commit, a.jobs, outdir / "stmm-build.log")
+            bl2, open_info = trusted.build_bootloader2(cfg, a.target, outdir / "open", a.jobs, ref, stmm)
             ref_bl1 = (cix_dir if boot_fw == "cix" else ROOT / cfg["package"] / "Firmwares") / "bootloader1.img"
             bl1, bl1_info = trusted.build_bootloader1(cfg, ref_bl1, a.target, outdir / "open", a.jobs)
             open_info.update(bl1_info)
