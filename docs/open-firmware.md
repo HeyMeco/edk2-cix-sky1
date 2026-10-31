@@ -33,6 +33,38 @@ training) as a relinked binary.  Everything else on the SE, on the
 application cores up to and beside BL33 (TF-A, OP-TEE, StandaloneMM) and
 the sensor fusion hub firmware are built here.
 
+### Tracker
+
+What runs before BL33 on an Orion O6 built with `--open`, by size of the
+image each stage ships (O6, 2026Q3; the boot ROM is in the chip and cannot
+be replaced, so it is not counted):
+
+```
+pre-BL33 firmware                               1509 KB   ███████████████░░░░░  75% open
+├── bootloader1
+│   ├── SE firmware (Cortex-M33)                 149 KB   █████████████░░░░░░░  63% open
+│   │   ├── start-up, eFuse, flash, crypto, key manager,
+│   │   │   SoC bring-up, CI-700, secure boot, services  95 KB   open (firmware/se)
+│   │   ├── DDR driver (DRAM training)            44 KB   closed: CIX's code, relinked
+│   │   └── PVT table (V/F selection data)        11 KB   closed: CIX's data
+│   ├── CSU_PM (Xtensa LX7)                      327 KB   ░░░░░░░░░░░░░░░░░░░░   0% open
+│   └── TF-A BL2                                  92 KB   ████████████████████ 100% open
+├── bootloader2
+│   ├── TF-A BL31                                 94 KB   ████████████████████ 100% open
+│   └── OP-TEE with StandaloneMM                 842 KB   ████████████████████ 100% open
+└── sensor fusion hub firmware (Cortex-M)          4 KB   ████████████████████ 100% open
+
+open    1127 KB  SE (95), BL2 (92), BL31 (94), OP-TEE + StMM (842), SFH (4)
+closed   382 KB  CSU_PM (327), SE DDR driver and PVT table (55)
+```
+
+By stage: 5 of 7 stages fully open (BL2, BL31, OP-TEE, StandaloneMM,
+SFH), the SE open apart from DRAM training, CSU_PM closed. The tools
+around them (bootloader1 container, FIP certificates, SPI packer) are
+open. Data CIX generates (`memory_config`, `pm_config`,
+`trustzone_config`) is built from source where the board package has it
+and is not counted above.
+
 ## Which boards
 
 Only boards whose BL2 trusts keys CIX has published can run code built here
