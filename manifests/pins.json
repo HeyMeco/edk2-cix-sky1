@@ -10,7 +10,8 @@
     "edk2-platforms": "e5cb70f632756654672c66e0c2628d501feffa2c",
     "edk2-non-osi": "e725a1d3fed47cdc7656d1cb4d77120951ce2eb5",
     "arm-trusted-firmware": "114fb20577bcc4038025de4e12bca60e04dd5212",
-    "optee_os": "cc66640f3815da4defc50f72b66ae3bac97cd48a"
+    "optee_os": "cc66640f3815da4defc50f72b66ae3bac97cd48a",
+    "mbedtls": "8b3f26a5ac38d4fdccbc5c5366229f3e01dafcc0"
   },
   "imports": {
     "radxa-edk2-platforms": "14cf7bdcfe1d0e8635a16a25d4209b6e28b18fca",

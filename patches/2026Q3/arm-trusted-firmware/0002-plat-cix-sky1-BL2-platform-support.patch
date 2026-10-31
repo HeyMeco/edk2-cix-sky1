@@ -1,0 +1,1602 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mecid <mecidi.cc@gmail.com>
+Date: Sat, 31 Oct 2026 12:20:03 +0100
+Subject: [PATCH] plat/cix: sky1: BL2 platform support
+
+CIX publishes TF-A for Sky1 without the BL2 platform files its makefiles
+list.  Add them, written from the behaviour of the CIX BL2 the boot ROM
+loads (v2.7-33527c31abbe):
+
+* sky1_bl2_el3_setup.c: console, delay timer, boot flash, BL2 version
+  string for UEFI, watchdog; MMU with the SE key-management page and the
+  non-secure DRAM the SE reports; TZC-400 setup before BL31 is loaded;
+  boot timing records; BL2 RAM log for UEFI's RamLogDumpDxe.
+* cix_io_storage.c: xSPI and SPI NOR (read command from the bootloader1
+  flash table), the two FIPs located through the cix_package_tool
+  firmware header, image policies including NON_TRUSTED_KEY_CERT_ID;
+  btcfg_get_value() and cix_bl_mode_is_backdoor() used by io_fip.c.
+* cix_image_load.c, cix_bl2_mem_params_desc.c: BL31, OP-TEE and BL33 at
+  the addresses and with the entry attributes of the CIX BL2.
+* sky1_trusted_boot.c, sky1_rotpk.S: the root of trust is the hash of
+  ROT_KEY built into BL2; NV counters read 0 (as in the CIX BL2).
+* cix_cot_bl2.c: the TBBR chain of trust with the CIX split root: the
+  bootloader2 trusted key certificate carries the trusted world key, the
+  bootloader3 one (NON_TRUSTED_KEY_CERT_ID) the non-trusted world key.
+  Unlike the CIX BL2, both are verified.
+* platform.mk: mbed TLS for crypto (the CIX crypto-engine library is not
+  public) and the ROT_KEY hash.
+
+Not reproduced: bootloader3 recovery from a backup copy (needs flash
+regions no current layout has) and boot progress codes.
+---
+ .../common/aarch64/cix_bl2_mem_params_desc.c  |  72 ++
+ plat/cix/common/cix_common.mk                 |   3 +-
+ plat/cix/common/cix_cot_bl2.c                 | 724 ++++++++++++++++++
+ plat/cix/common/cix_image_load.c              |  31 +
+ plat/cix/common/cix_io_storage.c              | 459 +++++++++++
+ plat/cix/sky1/platform.mk                     |  17 +
+ plat/cix/sky1/sky1_bl2_el3_setup.c            | 115 +++
+ plat/cix/sky1/sky1_rotpk.S                    |  20 +
+ plat/cix/sky1/sky1_trusted_boot.c             |  47 ++
+ 9 files changed, 1487 insertions(+), 1 deletion(-)
+ create mode 100644 plat/cix/common/aarch64/cix_bl2_mem_params_desc.c
+ create mode 100644 plat/cix/common/cix_cot_bl2.c
+ create mode 100644 plat/cix/common/cix_image_load.c
+ create mode 100644 plat/cix/common/cix_io_storage.c
+ create mode 100644 plat/cix/sky1/sky1_bl2_el3_setup.c
+ create mode 100644 plat/cix/sky1/sky1_rotpk.S
+ create mode 100644 plat/cix/sky1/sky1_trusted_boot.c
+
+diff --git a/plat/cix/common/aarch64/cix_bl2_mem_params_desc.c b/plat/cix/common/aarch64/cix_bl2_mem_params_desc.c
+new file mode 100644
+index 000000000..0c698534b
+--- /dev/null
++++ b/plat/cix/common/aarch64/cix_bl2_mem_params_desc.c
+@@ -0,0 +1,72 @@
++/*
++ * Copyright (c) 2016-2022, ARM Limited and Contributors. All rights reserved.
++ *
++ * SPDX-License-Identifier: BSD-3-Clause
++ */
++
++#include <common/bl_common.h>
++#include <common/desc_image_load.h>
++#include <plat/common/platform.h>
++#include <platform_def.h>
++
++/*******************************************************************************
++ * Images BL2 loads on Sky1, in load order: BL31, the Trusted OS (OP-TEE) and
++ * the UEFI firmware.  Addresses and attributes match the CIX BL2 the boot
++ * ROM loads today, so BL31, OP-TEE and UEFI see the same hand-off.
++ ******************************************************************************/
++static bl_mem_params_node_t bl2_mem_params_descs[] = {
++	/* BL31: runs first, at EL3; loading it triggers bl2_platform_setup() */
++	{
++		.image_id = BL31_IMAGE_ID,
++
++		SET_STATIC_PARAM_HEAD(ep_info, PARAM_EP, VERSION_2,
++				      entry_point_info_t,
++				      SECURE | EXECUTABLE | EP_FIRST_EXE),
++		.ep_info.pc = BL31_BASE,
++		.ep_info.spsr = SPSR_64(MODE_EL3, MODE_SP_ELX,
++					DISABLE_ALL_EXCEPTIONS),
++
++		SET_STATIC_PARAM_HEAD(image_info, PARAM_EP, VERSION_2,
++				      image_info_t, IMAGE_ATTRIB_PLAT_SETUP),
++		.image_info.image_base = BL31_BASE,
++		.image_info.image_max_size = BL31_LIMIT - BL31_BASE,
++
++		.next_handoff_image_id = BL32_IMAGE_ID,
++	},
++
++	/* BL32 (OP-TEE): the OP-TEE dispatcher in BL31 sets its entry state */
++	{
++		.image_id = BL32_IMAGE_ID,
++
++		SET_STATIC_PARAM_HEAD(ep_info, PARAM_EP, VERSION_2,
++				      entry_point_info_t, SECURE | EXECUTABLE),
++		.ep_info.pc = BL32_BASE,
++
++		SET_STATIC_PARAM_HEAD(image_info, PARAM_EP, VERSION_2,
++				      image_info_t, 0),
++		.image_info.image_base = BL32_BASE,
++		.image_info.image_max_size = BL32_LIMIT - BL32_BASE,
++
++		.next_handoff_image_id = BL33_IMAGE_ID,
++	},
++
++	/* BL33 (UEFI): non-secure, entered at EL2 */
++	{
++		.image_id = BL33_IMAGE_ID,
++
++		SET_STATIC_PARAM_HEAD(ep_info, PARAM_EP, VERSION_2,
++				      entry_point_info_t, NON_SECURE | EXECUTABLE),
++		.ep_info.pc = BL33_BASE,
++		.ep_info.spsr = SPSR_64(MODE_EL2, MODE_SP_ELX,
++					DISABLE_ALL_EXCEPTIONS),
++
++		SET_STATIC_PARAM_HEAD(image_info, PARAM_EP, VERSION_2,
++				      image_info_t, 0),
++		.image_info.image_base = BL33_BASE,
++		.image_info.image_max_size = BL33_LIMIT - BL33_BASE,
++
++		.next_handoff_image_id = INVALID_IMAGE_ID,
++	},
++};
++
++REGISTER_BL_IMAGE_DESCS(bl2_mem_params_descs)
+diff --git a/plat/cix/common/cix_common.mk b/plat/cix/common/cix_common.mk
+index db5c5d62f..8509dad53 100644
+--- a/plat/cix/common/cix_common.mk
++++ b/plat/cix/common/cix_common.mk
+@@ -301,8 +301,9 @@ ifneq (${TRUSTED_BOARD_BOOT},0)
+         ifneq (${COT_DESC_IN_DTB},0)
+             BL2_SOURCES	+=	lib/fconf/fconf_cot_getter.c
+         else
++            # TBBR with the CIX split root (NON_TRUSTED_KEY_CERT_ID)
+             BL2_SOURCES	+=	drivers/auth/tbbr/tbbr_cot_common.c	\
+-				drivers/auth/tbbr/tbbr_cot_bl2.c
++				plat/cix/common/cix_cot_bl2.c
+         endif
+     else ifeq (${COT},dualroot)
+         AUTH_SOURCES	+=	drivers/auth/dualroot/cot.c
+diff --git a/plat/cix/common/cix_cot_bl2.c b/plat/cix/common/cix_cot_bl2.c
+new file mode 100644
+index 000000000..e580c6c93
+--- /dev/null
++++ b/plat/cix/common/cix_cot_bl2.c
+@@ -0,0 +1,724 @@
++/*
++ * Copyright (c) 2015-2022, Arm Limited and Contributors. All rights reserved.
++ *
++ * SPDX-License-Identifier: BSD-3-Clause
++ */
++
++/*
++ * Chain of trust of the CIX Sky1 BL2: the TBBR chain (tbbr_cot_bl2.c) with
++ * the root split in two, as CIX lays out its two FIPs.
++ *
++ *  - bootloader2: the trusted key certificate (TRUSTED_KEY_CERT_ID) carries
++ *    only the trusted world key and certifies the BL31 and BL32 chains.
++ *  - bootloader3: its own trusted key certificate (NON_TRUSTED_KEY_CERT_ID,
++ *    file trusted_key_no.crt), signed by the same root of trust and without
++ *    NV counter, carries the non-trusted world key for the BL33 chain.
++ *
++ * Both are verified against the root of trust; the CIX BL2 skips the
++ * signature check of NON_TRUSTED_KEY_CERT_ID.
++ */
++
++#include <stddef.h>
++
++#include <platform_def.h>
++#include MBEDTLS_CONFIG_FILE
++
++#include <drivers/auth/auth_mod.h>
++#include <drivers/auth/tbbr_cot_common.h>
++#if USE_TBBR_DEFS
++#include <tools_share/tbbr_oid.h>
++#else
++#include <platform_oid.h>
++#endif
++
++static unsigned char soc_fw_hash_buf[HASH_DER_LEN];
++static unsigned char tos_fw_hash_buf[HASH_DER_LEN];
++static unsigned char tos_fw_extra1_hash_buf[HASH_DER_LEN];
++static unsigned char tos_fw_extra2_hash_buf[HASH_DER_LEN];
++static unsigned char trusted_world_pk_buf[PK_DER_LEN];
++static unsigned char non_trusted_world_pk_buf[PK_DER_LEN];
++static unsigned char content_pk_buf[PK_DER_LEN];
++static unsigned char soc_fw_config_hash_buf[HASH_DER_LEN];
++static unsigned char tos_fw_config_hash_buf[HASH_DER_LEN];
++static unsigned char nt_fw_config_hash_buf[HASH_DER_LEN];
++#if defined(SPD_spmd)
++static unsigned char sp_pkg_hash_buf[MAX_SP_IDS][HASH_DER_LEN];
++#endif /* SPD_spmd */
++
++static auth_param_type_desc_t non_trusted_nv_ctr = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_NV_CTR, NON_TRUSTED_FW_NVCOUNTER_OID);
++static auth_param_type_desc_t trusted_world_pk = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_PUB_KEY, TRUSTED_WORLD_PK_OID);
++static auth_param_type_desc_t non_trusted_world_pk = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_PUB_KEY, NON_TRUSTED_WORLD_PK_OID);
++static auth_param_type_desc_t scp_fw_content_pk = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_PUB_KEY, SCP_FW_CONTENT_CERT_PK_OID);
++static auth_param_type_desc_t soc_fw_content_pk = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_PUB_KEY, SOC_FW_CONTENT_CERT_PK_OID);
++static auth_param_type_desc_t tos_fw_content_pk = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_PUB_KEY, TRUSTED_OS_FW_CONTENT_CERT_PK_OID);
++static auth_param_type_desc_t nt_fw_content_pk = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_PUB_KEY, NON_TRUSTED_FW_CONTENT_CERT_PK_OID);
++static auth_param_type_desc_t scp_fw_hash = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_HASH, SCP_FW_HASH_OID);
++static auth_param_type_desc_t soc_fw_hash = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_HASH, SOC_AP_FW_HASH_OID);
++static auth_param_type_desc_t soc_fw_config_hash = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_HASH, SOC_FW_CONFIG_HASH_OID);
++static auth_param_type_desc_t tos_fw_hash = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_HASH, TRUSTED_OS_FW_HASH_OID);
++static auth_param_type_desc_t tos_fw_config_hash = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_HASH, TRUSTED_OS_FW_CONFIG_HASH_OID);
++static auth_param_type_desc_t tos_fw_extra1_hash = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_HASH, TRUSTED_OS_FW_EXTRA1_HASH_OID);
++static auth_param_type_desc_t tos_fw_extra2_hash = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_HASH, TRUSTED_OS_FW_EXTRA2_HASH_OID);
++static auth_param_type_desc_t nt_world_bl_hash = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_HASH, NON_TRUSTED_WORLD_BOOTLOADER_HASH_OID);
++static auth_param_type_desc_t nt_fw_config_hash = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_HASH, NON_TRUSTED_FW_CONFIG_HASH_OID);
++#if defined(SPD_spmd)
++static auth_param_type_desc_t sp_pkg1_hash = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_HASH, SP_PKG1_HASH_OID);
++static auth_param_type_desc_t sp_pkg2_hash = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_HASH, SP_PKG2_HASH_OID);
++static auth_param_type_desc_t sp_pkg3_hash = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_HASH, SP_PKG3_HASH_OID);
++static auth_param_type_desc_t sp_pkg4_hash = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_HASH, SP_PKG4_HASH_OID);
++static auth_param_type_desc_t sp_pkg5_hash = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_HASH, SP_PKG5_HASH_OID);
++static auth_param_type_desc_t sp_pkg6_hash = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_HASH, SP_PKG6_HASH_OID);
++static auth_param_type_desc_t sp_pkg7_hash = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_HASH, SP_PKG7_HASH_OID);
++static auth_param_type_desc_t sp_pkg8_hash = AUTH_PARAM_TYPE_DESC(
++		AUTH_PARAM_HASH, SP_PKG8_HASH_OID);
++#endif /* SPD_spmd */
++
++/*
++ * Trusted key certificate
++ */
++static const auth_img_desc_t trusted_key_cert = {
++	.img_id = TRUSTED_KEY_CERT_ID,
++	.img_type = IMG_CERT,
++	.parent = NULL,
++	.img_auth_methods = (const auth_method_desc_t[AUTH_METHOD_NUM]) {
++		[0] = {
++			.type = AUTH_METHOD_SIG,
++			.param.sig = {
++				.pk = &subject_pk,
++				.sig = &sig,
++				.alg = &sig_alg,
++				.data = &raw_data
++			}
++		},
++		[1] = {
++			.type = AUTH_METHOD_NV_CTR,
++			.param.nv_ctr = {
++				.cert_nv_ctr = &trusted_nv_ctr,
++				.plat_nv_ctr = &trusted_nv_ctr
++			}
++		}
++	},
++	.authenticated_data = (const auth_param_desc_t[COT_MAX_VERIFIED_PARAMS]) {
++		[0] = {
++			.type_desc = &trusted_world_pk,
++			.data = {
++				.ptr = (void *)trusted_world_pk_buf,
++				.len = (unsigned int)PK_DER_LEN
++			}
++		},
++	}
++};
++/*
++ * Trusted key certificate of the BL33 FIP (trusted_key_no.crt)
++ */
++static const auth_img_desc_t non_trusted_key_cert = {
++	.img_id = NON_TRUSTED_KEY_CERT_ID,
++	.img_type = IMG_CERT,
++	.parent = NULL,
++	.img_auth_methods = (const auth_method_desc_t[AUTH_METHOD_NUM]) {
++		[0] = {
++			.type = AUTH_METHOD_SIG,
++			.param.sig = {
++				.pk = &subject_pk,
++				.sig = &sig,
++				.alg = &sig_alg,
++				.data = &raw_data
++			}
++		}
++	},
++	.authenticated_data = (const auth_param_desc_t[COT_MAX_VERIFIED_PARAMS]) {
++		[0] = {
++			.type_desc = &non_trusted_world_pk,
++			.data = {
++				.ptr = (void *)non_trusted_world_pk_buf,
++				.len = (unsigned int)PK_DER_LEN
++			}
++		}
++	}
++};
++/*
++ * SCP Firmware
++ */
++static const auth_img_desc_t scp_fw_key_cert = {
++	.img_id = SCP_FW_KEY_CERT_ID,
++	.img_type = IMG_CERT,
++	.parent = &trusted_key_cert,
++	.img_auth_methods = (const auth_method_desc_t[AUTH_METHOD_NUM]) {
++		[0] = {
++			.type = AUTH_METHOD_SIG,
++			.param.sig = {
++				.pk = &trusted_world_pk,
++				.sig = &sig,
++				.alg = &sig_alg,
++				.data = &raw_data
++			}
++		},
++		[1] = {
++			.type = AUTH_METHOD_NV_CTR,
++			.param.nv_ctr = {
++				.cert_nv_ctr = &trusted_nv_ctr,
++				.plat_nv_ctr = &trusted_nv_ctr
++			}
++		}
++	},
++	.authenticated_data = (const auth_param_desc_t[COT_MAX_VERIFIED_PARAMS]) {
++		[0] = {
++			.type_desc = &scp_fw_content_pk,
++			.data = {
++				.ptr = (void *)content_pk_buf,
++				.len = (unsigned int)PK_DER_LEN
++			}
++		}
++	}
++};
++static const auth_img_desc_t scp_fw_content_cert = {
++	.img_id = SCP_FW_CONTENT_CERT_ID,
++	.img_type = IMG_CERT,
++	.parent = &scp_fw_key_cert,
++	.img_auth_methods = (const auth_method_desc_t[AUTH_METHOD_NUM]) {
++		[0] = {
++			.type = AUTH_METHOD_SIG,
++			.param.sig = {
++				.pk = &scp_fw_content_pk,
++				.sig = &sig,
++				.alg = &sig_alg,
++				.data = &raw_data
++			}
++		},
++		[1] = {
++			.type = AUTH_METHOD_NV_CTR,
++			.param.nv_ctr = {
++				.cert_nv_ctr = &trusted_nv_ctr,
++				.plat_nv_ctr = &trusted_nv_ctr
++			}
++		}
++	},
++	.authenticated_data = (const auth_param_desc_t[COT_MAX_VERIFIED_PARAMS]) {
++		[0] = {
++			.type_desc = &scp_fw_hash,
++			.data = {
++				.ptr = (void *)scp_fw_hash_buf,
++				.len = (unsigned int)HASH_DER_LEN
++			}
++		}
++	}
++};
++static const auth_img_desc_t scp_bl2_image = {
++	.img_id = SCP_BL2_IMAGE_ID,
++	.img_type = IMG_RAW,
++	.parent = &scp_fw_content_cert,
++	.img_auth_methods = (const auth_method_desc_t[AUTH_METHOD_NUM]) {
++		[0] = {
++			.type = AUTH_METHOD_HASH,
++			.param.hash = {
++				.data = &raw_data,
++				.hash = &scp_fw_hash
++			}
++		}
++	}
++};
++/*
++ * SoC Firmware
++ */
++static const auth_img_desc_t soc_fw_key_cert = {
++	.img_id = SOC_FW_KEY_CERT_ID,
++	.img_type = IMG_CERT,
++	.parent = &trusted_key_cert,
++	.img_auth_methods = (const auth_method_desc_t[AUTH_METHOD_NUM]) {
++		[0] = {
++			.type = AUTH_METHOD_SIG,
++			.param.sig = {
++				.pk = &trusted_world_pk,
++				.sig = &sig,
++				.alg = &sig_alg,
++				.data = &raw_data
++			}
++		},
++		[1] = {
++			.type = AUTH_METHOD_NV_CTR,
++			.param.nv_ctr = {
++				.cert_nv_ctr = &trusted_nv_ctr,
++				.plat_nv_ctr = &trusted_nv_ctr
++			}
++		}
++	},
++	.authenticated_data = (const auth_param_desc_t[COT_MAX_VERIFIED_PARAMS]) {
++		[0] = {
++			.type_desc = &soc_fw_content_pk,
++			.data = {
++				.ptr = (void *)content_pk_buf,
++				.len = (unsigned int)PK_DER_LEN
++			}
++		}
++	}
++};
++static const auth_img_desc_t soc_fw_content_cert = {
++	.img_id = SOC_FW_CONTENT_CERT_ID,
++	.img_type = IMG_CERT,
++	.parent = &soc_fw_key_cert,
++	.img_auth_methods = (const auth_method_desc_t[AUTH_METHOD_NUM]) {
++		[0] = {
++			.type = AUTH_METHOD_SIG,
++			.param.sig = {
++				.pk = &soc_fw_content_pk,
++				.sig = &sig,
++				.alg = &sig_alg,
++				.data = &raw_data
++			}
++		},
++		[1] = {
++			.type = AUTH_METHOD_NV_CTR,
++			.param.nv_ctr = {
++				.cert_nv_ctr = &trusted_nv_ctr,
++				.plat_nv_ctr = &trusted_nv_ctr
++			}
++		}
++	},
++	.authenticated_data = (const auth_param_desc_t[COT_MAX_VERIFIED_PARAMS]) {
++		[0] = {
++			.type_desc = &soc_fw_hash,
++			.data = {
++				.ptr = (void *)soc_fw_hash_buf,
++				.len = (unsigned int)HASH_DER_LEN
++			}
++		},
++		[1] = {
++			.type_desc = &soc_fw_config_hash,
++			.data = {
++				.ptr = (void *)soc_fw_config_hash_buf,
++				.len = (unsigned int)HASH_DER_LEN
++			}
++		}
++	}
++};
++static const auth_img_desc_t bl31_image = {
++	.img_id = BL31_IMAGE_ID,
++	.img_type = IMG_RAW,
++	.parent = &soc_fw_content_cert,
++	.img_auth_methods = (const auth_method_desc_t[AUTH_METHOD_NUM]) {
++		[0] = {
++			.type = AUTH_METHOD_HASH,
++			.param.hash = {
++				.data = &raw_data,
++				.hash = &soc_fw_hash
++			}
++		}
++	}
++};
++/* SOC FW Config */
++static const auth_img_desc_t soc_fw_config = {
++	.img_id = SOC_FW_CONFIG_ID,
++	.img_type = IMG_RAW,
++	.parent = &soc_fw_content_cert,
++	.img_auth_methods = (const auth_method_desc_t[AUTH_METHOD_NUM]) {
++		[0] = {
++			.type = AUTH_METHOD_HASH,
++			.param.hash = {
++				.data = &raw_data,
++				.hash = &soc_fw_config_hash
++			}
++		}
++	}
++};
++/*
++ * Trusted OS Firmware
++ */
++static const auth_img_desc_t trusted_os_fw_key_cert = {
++	.img_id = TRUSTED_OS_FW_KEY_CERT_ID,
++	.img_type = IMG_CERT,
++	.parent = &trusted_key_cert,
++	.img_auth_methods = (const auth_method_desc_t[AUTH_METHOD_NUM]) {
++		[0] = {
++			.type = AUTH_METHOD_SIG,
++			.param.sig = {
++				.pk = &trusted_world_pk,
++				.sig = &sig,
++				.alg = &sig_alg,
++				.data = &raw_data
++			}
++		},
++		[1] = {
++			.type = AUTH_METHOD_NV_CTR,
++			.param.nv_ctr = {
++				.cert_nv_ctr = &trusted_nv_ctr,
++				.plat_nv_ctr = &trusted_nv_ctr
++			}
++		}
++	},
++	.authenticated_data = (const auth_param_desc_t[COT_MAX_VERIFIED_PARAMS]) {
++		[0] = {
++			.type_desc = &tos_fw_content_pk,
++			.data = {
++				.ptr = (void *)content_pk_buf,
++				.len = (unsigned int)PK_DER_LEN
++			}
++		}
++	}
++};
++static const auth_img_desc_t trusted_os_fw_content_cert = {
++	.img_id = TRUSTED_OS_FW_CONTENT_CERT_ID,
++	.img_type = IMG_CERT,
++	.parent = &trusted_os_fw_key_cert,
++	.img_auth_methods = (const auth_method_desc_t[AUTH_METHOD_NUM]) {
++		[0] = {
++			.type = AUTH_METHOD_SIG,
++			.param.sig = {
++				.pk = &tos_fw_content_pk,
++				.sig = &sig,
++				.alg = &sig_alg,
++				.data = &raw_data
++			}
++		},
++		[1] = {
++			.type = AUTH_METHOD_NV_CTR,
++			.param.nv_ctr = {
++				.cert_nv_ctr = &trusted_nv_ctr,
++				.plat_nv_ctr = &trusted_nv_ctr
++			}
++		}
++	},
++	.authenticated_data = (const auth_param_desc_t[COT_MAX_VERIFIED_PARAMS]) {
++		[0] = {
++			.type_desc = &tos_fw_hash,
++			.data = {
++				.ptr = (void *)tos_fw_hash_buf,
++				.len = (unsigned int)HASH_DER_LEN
++			}
++		},
++		[1] = {
++			.type_desc = &tos_fw_extra1_hash,
++			.data = {
++				.ptr = (void *)tos_fw_extra1_hash_buf,
++				.len = (unsigned int)HASH_DER_LEN
++			}
++		},
++		[2] = {
++			.type_desc = &tos_fw_extra2_hash,
++			.data = {
++				.ptr = (void *)tos_fw_extra2_hash_buf,
++				.len = (unsigned int)HASH_DER_LEN
++			}
++		},
++		[3] = {
++			.type_desc = &tos_fw_config_hash,
++			.data = {
++				.ptr = (void *)tos_fw_config_hash_buf,
++				.len = (unsigned int)HASH_DER_LEN
++			}
++		}
++	}
++};
++static const auth_img_desc_t bl32_image = {
++	.img_id = BL32_IMAGE_ID,
++	.img_type = IMG_RAW,
++	.parent = &trusted_os_fw_content_cert,
++	.img_auth_methods = (const auth_method_desc_t[AUTH_METHOD_NUM]) {
++		[0] = {
++			.type = AUTH_METHOD_HASH,
++			.param.hash = {
++				.data = &raw_data,
++				.hash = &tos_fw_hash
++			}
++		}
++	}
++};
++static const auth_img_desc_t bl32_extra1_image = {
++	.img_id = BL32_EXTRA1_IMAGE_ID,
++	.img_type = IMG_RAW,
++	.parent = &trusted_os_fw_content_cert,
++	.img_auth_methods = (const auth_method_desc_t[AUTH_METHOD_NUM]) {
++		[0] = {
++			.type = AUTH_METHOD_HASH,
++			.param.hash = {
++				.data = &raw_data,
++				.hash = &tos_fw_extra1_hash
++			}
++		}
++	}
++};
++static const auth_img_desc_t bl32_extra2_image = {
++	.img_id = BL32_EXTRA2_IMAGE_ID,
++	.img_type = IMG_RAW,
++	.parent = &trusted_os_fw_content_cert,
++	.img_auth_methods = (const auth_method_desc_t[AUTH_METHOD_NUM]) {
++		[0] = {
++			.type = AUTH_METHOD_HASH,
++			.param.hash = {
++				.data = &raw_data,
++				.hash = &tos_fw_extra2_hash
++			}
++		}
++	}
++};
++/* TOS FW Config */
++static const auth_img_desc_t tos_fw_config = {
++	.img_id = TOS_FW_CONFIG_ID,
++	.img_type = IMG_RAW,
++	.parent = &trusted_os_fw_content_cert,
++	.img_auth_methods = (const auth_method_desc_t[AUTH_METHOD_NUM]) {
++		[0] = {
++			.type = AUTH_METHOD_HASH,
++			.param.hash = {
++				.data = &raw_data,
++				.hash = &tos_fw_config_hash
++			}
++		}
++	}
++};
++/*
++ * Non-Trusted Firmware
++ */
++static const auth_img_desc_t non_trusted_fw_key_cert = {
++	.img_id = NON_TRUSTED_FW_KEY_CERT_ID,
++	.img_type = IMG_CERT,
++	.parent = &non_trusted_key_cert,
++	.img_auth_methods = (const auth_method_desc_t[AUTH_METHOD_NUM]) {
++		[0] = {
++			.type = AUTH_METHOD_SIG,
++			.param.sig = {
++				.pk = &non_trusted_world_pk,
++				.sig = &sig,
++				.alg = &sig_alg,
++				.data = &raw_data
++			}
++		},
++		[1] = {
++			.type = AUTH_METHOD_NV_CTR,
++			.param.nv_ctr = {
++				.cert_nv_ctr = &non_trusted_nv_ctr,
++				.plat_nv_ctr = &non_trusted_nv_ctr
++			}
++		}
++	},
++	.authenticated_data = (const auth_param_desc_t[COT_MAX_VERIFIED_PARAMS]) {
++		[0] = {
++			.type_desc = &nt_fw_content_pk,
++			.data = {
++				.ptr = (void *)content_pk_buf,
++				.len = (unsigned int)PK_DER_LEN
++			}
++		}
++	}
++};
++static const auth_img_desc_t non_trusted_fw_content_cert = {
++	.img_id = NON_TRUSTED_FW_CONTENT_CERT_ID,
++	.img_type = IMG_CERT,
++	.parent = &non_trusted_fw_key_cert,
++	.img_auth_methods = (const auth_method_desc_t[AUTH_METHOD_NUM]) {
++		[0] = {
++			.type = AUTH_METHOD_SIG,
++			.param.sig = {
++				.pk = &nt_fw_content_pk,
++				.sig = &sig,
++				.alg = &sig_alg,
++				.data = &raw_data
++			}
++		},
++		[1] = {
++			.type = AUTH_METHOD_NV_CTR,
++			.param.nv_ctr = {
++				.cert_nv_ctr = &non_trusted_nv_ctr,
++				.plat_nv_ctr = &non_trusted_nv_ctr
++			}
++		}
++	},
++	.authenticated_data = (const auth_param_desc_t[COT_MAX_VERIFIED_PARAMS]) {
++		[0] = {
++			.type_desc = &nt_world_bl_hash,
++			.data = {
++				.ptr = (void *)nt_world_bl_hash_buf,
++				.len = (unsigned int)HASH_DER_LEN
++			}
++		},
++		[1] = {
++			.type_desc = &nt_fw_config_hash,
++			.data = {
++				.ptr = (void *)nt_fw_config_hash_buf,
++				.len = (unsigned int)HASH_DER_LEN
++			}
++		}
++	}
++};
++static const auth_img_desc_t bl33_image = {
++	.img_id = BL33_IMAGE_ID,
++	.img_type = IMG_RAW,
++	.parent = &non_trusted_fw_content_cert,
++	.img_auth_methods = (const auth_method_desc_t[AUTH_METHOD_NUM]) {
++		[0] = {
++			.type = AUTH_METHOD_HASH,
++			.param.hash = {
++				.data = &raw_data,
++				.hash = &nt_world_bl_hash
++			}
++		}
++	}
++};
++/* NT FW Config */
++static const auth_img_desc_t nt_fw_config = {
++	.img_id = NT_FW_CONFIG_ID,
++	.img_type = IMG_RAW,
++	.parent = &non_trusted_fw_content_cert,
++	.img_auth_methods = (const auth_method_desc_t[AUTH_METHOD_NUM]) {
++		[0] = {
++			.type = AUTH_METHOD_HASH,
++			.param.hash = {
++				.data = &raw_data,
++				.hash = &nt_fw_config_hash
++			}
++		}
++	}
++};
++/* Secure Partitions */
++#if defined(SPD_spmd)
++static const auth_img_desc_t sip_sp_content_cert = {
++	.img_id = SIP_SP_CONTENT_CERT_ID,
++	.img_type = IMG_CERT,
++	.parent = &trusted_key_cert,
++	.img_auth_methods = (const auth_method_desc_t[AUTH_METHOD_NUM]) {
++		[0] = {
++			.type = AUTH_METHOD_SIG,
++			.param.sig = {
++				.pk = &trusted_world_pk,
++				.sig = &sig,
++				.alg = &sig_alg,
++				.data = &raw_data
++			}
++		},
++		[1] = {
++			.type = AUTH_METHOD_NV_CTR,
++			.param.nv_ctr = {
++				.cert_nv_ctr = &trusted_nv_ctr,
++				.plat_nv_ctr = &trusted_nv_ctr
++			}
++		}
++	},
++	.authenticated_data = (const auth_param_desc_t[COT_MAX_VERIFIED_PARAMS]) {
++		[0] = {
++			.type_desc = &sp_pkg1_hash,
++			.data = {
++				.ptr = (void *)sp_pkg_hash_buf[0],
++				.len = (unsigned int)HASH_DER_LEN
++			}
++		},
++		[1] = {
++			.type_desc = &sp_pkg2_hash,
++			.data = {
++				.ptr = (void *)sp_pkg_hash_buf[1],
++				.len = (unsigned int)HASH_DER_LEN
++			}
++		},
++		[2] = {
++			.type_desc = &sp_pkg3_hash,
++			.data = {
++				.ptr = (void *)sp_pkg_hash_buf[2],
++				.len = (unsigned int)HASH_DER_LEN
++			}
++		},
++		[3] = {
++			.type_desc = &sp_pkg4_hash,
++			.data = {
++				.ptr = (void *)sp_pkg_hash_buf[3],
++				.len = (unsigned int)HASH_DER_LEN
++			}
++		},
++		[4] = {
++			.type_desc = &sp_pkg5_hash,
++			.data = {
++				.ptr = (void *)sp_pkg_hash_buf[4],
++				.len = (unsigned int)HASH_DER_LEN
++			}
++		},
++		[5] = {
++			.type_desc = &sp_pkg6_hash,
++			.data = {
++				.ptr = (void *)sp_pkg_hash_buf[5],
++				.len = (unsigned int)HASH_DER_LEN
++			}
++		},
++		[6] = {
++			.type_desc = &sp_pkg7_hash,
++			.data = {
++				.ptr = (void *)sp_pkg_hash_buf[6],
++				.len = (unsigned int)HASH_DER_LEN
++			}
++		},
++		[7] = {
++			.type_desc = &sp_pkg8_hash,
++			.data = {
++				.ptr = (void *)sp_pkg_hash_buf[7],
++				.len = (unsigned int)HASH_DER_LEN
++			}
++		}
++	}
++};
++
++DEFINE_SIP_SP_PKG(1);
++DEFINE_SIP_SP_PKG(2);
++DEFINE_SIP_SP_PKG(3);
++DEFINE_SIP_SP_PKG(4);
++DEFINE_SIP_SP_PKG(5);
++DEFINE_SIP_SP_PKG(6);
++DEFINE_SIP_SP_PKG(7);
++DEFINE_SIP_SP_PKG(8);
++#endif /* SPD_spmd */
++
++static const auth_img_desc_t * const cot_desc[] = {
++	[TRUSTED_BOOT_FW_CERT_ID]		=	&trusted_boot_fw_cert,
++	[HW_CONFIG_ID]				=	&hw_config,
++	[TRUSTED_KEY_CERT_ID]			=	&trusted_key_cert,
++	[SCP_FW_KEY_CERT_ID]			=	&scp_fw_key_cert,
++	[SCP_FW_CONTENT_CERT_ID]		=	&scp_fw_content_cert,
++	[SCP_BL2_IMAGE_ID]			=	&scp_bl2_image,
++	[SOC_FW_KEY_CERT_ID]			=	&soc_fw_key_cert,
++	[SOC_FW_CONTENT_CERT_ID]		=	&soc_fw_content_cert,
++	[BL31_IMAGE_ID]				=	&bl31_image,
++	[SOC_FW_CONFIG_ID]			=	&soc_fw_config,
++	[TRUSTED_OS_FW_KEY_CERT_ID]		=	&trusted_os_fw_key_cert,
++	[TRUSTED_OS_FW_CONTENT_CERT_ID]		=	&trusted_os_fw_content_cert,
++	[BL32_IMAGE_ID]				=	&bl32_image,
++	[BL32_EXTRA1_IMAGE_ID]			=	&bl32_extra1_image,
++	[BL32_EXTRA2_IMAGE_ID]			=	&bl32_extra2_image,
++	[TOS_FW_CONFIG_ID]			=	&tos_fw_config,
++	[NON_TRUSTED_KEY_CERT_ID]		=	&non_trusted_key_cert,
++	[NON_TRUSTED_FW_KEY_CERT_ID]		=	&non_trusted_fw_key_cert,
++	[NON_TRUSTED_FW_CONTENT_CERT_ID]	=	&non_trusted_fw_content_cert,
++	[BL33_IMAGE_ID]				=	&bl33_image,
++	[NT_FW_CONFIG_ID]			=	&nt_fw_config,
++#if defined(SPD_spmd)
++	[SIP_SP_CONTENT_CERT_ID]		=	&sip_sp_content_cert,
++	[SP_PKG1_ID]				=	&sp_pkg1,
++	[SP_PKG2_ID]				=	&sp_pkg2,
++	[SP_PKG3_ID]				=	&sp_pkg3,
++	[SP_PKG4_ID]				=	&sp_pkg4,
++	[SP_PKG5_ID]				=	&sp_pkg5,
++	[SP_PKG6_ID]				=	&sp_pkg6,
++	[SP_PKG7_ID]				=	&sp_pkg7,
++	[SP_PKG8_ID]				=       &sp_pkg8,
++#endif
++};
++
++/* Register the CoT in the authentication module */
++REGISTER_COT(cot_desc);
+diff --git a/plat/cix/common/cix_image_load.c b/plat/cix/common/cix_image_load.c
+new file mode 100644
+index 000000000..830eaade5
+--- /dev/null
++++ b/plat/cix/common/cix_image_load.c
+@@ -0,0 +1,31 @@
++/*
++ * Copyright (c) 2016-2022, ARM Limited and Contributors. All rights reserved.
++ *
++ * SPDX-License-Identifier: BSD-3-Clause
++ */
++
++#include <common/bl_common.h>
++#include <common/desc_image_load.h>
++#include <plat/common/platform.h>
++
++/*
++ * BL2 hands the images described in cix_bl2_mem_params_desc.c to the next
++ * stage unchanged: OP-TEE's entry state is set up by the OP-TEE dispatcher in
++ * BL31 and BL33's comes from the descriptor, so the pre/post image load hooks
++ * keep their (empty) weak defaults.
++ */
++
++void plat_flush_next_bl_params(void)
++{
++	flush_bl_params_desc();
++}
++
++struct bl_load_info *plat_get_bl_image_load_info(void)
++{
++	return get_bl_load_info_from_mem_params_desc();
++}
++
++struct bl_params *plat_get_next_bl_params(void)
++{
++	return get_next_bl_params_from_mem_params_desc();
++}
+diff --git a/plat/cix/common/cix_io_storage.c b/plat/cix/common/cix_io_storage.c
+new file mode 100644
+index 000000000..f1b13c10d
+--- /dev/null
++++ b/plat/cix/common/cix_io_storage.c
+@@ -0,0 +1,459 @@
++/*
++ * Copyright (c) 2015-2022, ARM Limited and Contributors. All rights reserved.
++ *
++ * SPDX-License-Identifier: BSD-3-Clause
++ */
++
++/*
++ * BL2 image storage on Sky1: the SPI NOR behind the Cadence xSPI controller.
++ *
++ * The flash holds two FIPs: bootloader2 (BL31, BL32 and their certificates)
++ * and bootloader3 (BL33 and its certificates, including the CIX
++ * NON_TRUSTED_KEY_CERT_ID trusted key certificate).  Their offsets come from
++ * the firmware header that cix_package_tool writes at 1 MiB (2 MiB when the
++ * boot ROM reports the second copy), with the CIX defaults as a fallback.
++ */
++
++#include <assert.h>
++#include <string.h>
++
++#include <common/debug.h>
++#include <drivers/io/io_driver.h>
++#include <drivers/io/io_fip.h>
++#include <drivers/io/io_mtd.h>
++#include <drivers/io/io_storage.h>
++#include <drivers/spi_mem.h>
++#include <drivers/spi_nor.h>
++#include <lib/mmio.h>
++#include <lib/utils.h>
++#include <plat/common/platform.h>
++#include <tools_share/firmware_image_package.h>
++
++#include <plat_cix.h>
++#include <platform_def.h>
++
++/* Firmware header (cix_package_tool) */
++#define CIX_FW_HEADER_MAGIC		0x55AA55AAU
++#define CIX_FW_HEADER_BASE		0x100000U
++#define CIX_FW_HEADER_BASE_ALT		0x200000U
++#define CIX_FW_HEADER_MAX_ENTRIES	256U
++#define CIX_FW_TYPE_BOOTLOADER2		2U
++#define CIX_FW_TYPE_BOOTLOADER3		7U
++/* Bit 0: the boot ROM booted from the copy whose header is at 2 MiB */
++#define CIX_BOOT_COPY_STATUS_REG	0x05040060U
++
++/* Supported SPI flash table in bootloader1, read by the boot ROM as well */
++#define CIX_BL1_FLASH_TABLE		0x188800U
++#define CIX_BL1_FLASH_TABLE_ENTRY	16U
++#define CIX_BL1_FLASH_TABLE_MAX		64U
++
++/* xSPI pads: switch the IOMUX to the FCH xSPI controller */
++#define CIX_IOMUX_S5_XSPI_PADS		0x160070F0U
++#define CIX_IOMUX_S5_XSPI_PAD_CNT	6U
++#define CIX_IOMUX_S5_XSPI_FUNC		0xDCU
++
++#define SKY1_SPI_NOR_SIZE		0x1000000U
++
++/* Cadence xSPI driver (drivers/cadence/xspi/xspi.c) */
++int cdns_xspi_init(void);
++void set_xspi_bus_clock(uint8_t xspi_clk_index);
++
++typedef struct {
++	uint32_t magic;
++	uint32_t version;
++	uint32_t count;
++	uint32_t reserved;
++	struct {
++		uint32_t type;
++		uint32_t address;
++		uint32_t length;
++		uint32_t reserved;
++	} entry[CIX_FW_HEADER_MAX_ENTRIES];
++} cix_fw_header_t;
++
++static cix_fw_header_t fw_header;
++
++static const io_dev_connector_t *fip_dev_con;
++static uintptr_t fip_dev_handle;
++static uintptr_t fip_uefi_dev_handle;
++
++static const io_dev_connector_t *mtd_dev_con;
++static uintptr_t mtd_dev_handle;
++
++static io_mtd_dev_spec_t spi_nor_dev_spec = {
++	.ops = {
++		.init = spi_nor_init,
++		.read = spi_nor_read,
++	},
++};
++
++static io_block_spec_t fip_block_spec = {
++	.offset = PLAT_CIX_SPI_NOR_FIP_IMAGE_BASE,
++	.length = PLAT_CIX_SPI_NOR_FLASH_IMAGE_MAX_SIZE,
++};
++
++static io_block_spec_t fip_uefi_block_spec = {
++	.offset = PLAT_CIX_SPI_NOR_FIP_UEFI_IMAGE_BASE,
++	.length = PLAT_CIX_SPI_NOR_FLASH_IMAGE_MAX_SIZE,
++};
++
++static const io_uuid_spec_t bl31_uuid_spec = {
++	.uuid = UUID_EL3_RUNTIME_FIRMWARE_BL31,
++};
++static const io_uuid_spec_t bl32_uuid_spec = {
++	.uuid = UUID_SECURE_PAYLOAD_BL32,
++};
++static const io_uuid_spec_t bl33_uuid_spec = {
++	.uuid = UUID_NON_TRUSTED_FIRMWARE_BL33,
++};
++#if TRUSTED_BOARD_BOOT
++static const io_uuid_spec_t trusted_key_cert_uuid_spec = {
++	.uuid = UUID_TRUSTED_KEY_CERT,
++};
++static const io_uuid_spec_t soc_fw_key_cert_uuid_spec = {
++	.uuid = UUID_SOC_FW_KEY_CERT,
++};
++static const io_uuid_spec_t tos_fw_key_cert_uuid_spec = {
++	.uuid = UUID_TRUSTED_OS_FW_KEY_CERT,
++};
++static const io_uuid_spec_t nt_fw_key_cert_uuid_spec = {
++	.uuid = UUID_NON_TRUSTED_FW_KEY_CERT,
++};
++static const io_uuid_spec_t soc_fw_cert_uuid_spec = {
++	.uuid = UUID_SOC_FW_CONTENT_CERT,
++};
++static const io_uuid_spec_t tos_fw_cert_uuid_spec = {
++	.uuid = UUID_TRUSTED_OS_FW_CONTENT_CERT,
++};
++static const io_uuid_spec_t nt_fw_cert_uuid_spec = {
++	.uuid = UUID_NON_TRUSTED_FW_CONTENT_CERT,
++};
++#endif /* TRUSTED_BOARD_BOOT */
++
++static int open_fip(const uintptr_t spec);
++static int open_fip_uefi(const uintptr_t spec);
++static int open_mtd(const uintptr_t spec);
++
++struct plat_io_policy {
++	uintptr_t *dev_handle;
++	uintptr_t image_spec;
++	int (*check)(const uintptr_t spec);
++};
++
++/* By image id: bootloader2 images from the first FIP, BL33 from the second */
++static const struct plat_io_policy policies[] = {
++	[FIP_IMAGE_ID] = {
++		&mtd_dev_handle, (uintptr_t)&fip_block_spec, open_mtd
++	},
++	[FIP_UEFI_IMAGE_ID] = {
++		&mtd_dev_handle, (uintptr_t)&fip_uefi_block_spec, open_mtd
++	},
++	[BL31_IMAGE_ID] = {
++		&fip_dev_handle, (uintptr_t)&bl31_uuid_spec, open_fip
++	},
++	[BL32_IMAGE_ID] = {
++		&fip_dev_handle, (uintptr_t)&bl32_uuid_spec, open_fip
++	},
++	[BL33_IMAGE_ID] = {
++		&fip_uefi_dev_handle, (uintptr_t)&bl33_uuid_spec, open_fip_uefi
++	},
++#if TRUSTED_BOARD_BOOT
++	[TRUSTED_KEY_CERT_ID] = {
++		&fip_dev_handle, (uintptr_t)&trusted_key_cert_uuid_spec,
++		open_fip
++	},
++	[SOC_FW_KEY_CERT_ID] = {
++		&fip_dev_handle, (uintptr_t)&soc_fw_key_cert_uuid_spec,
++		open_fip
++	},
++	[TRUSTED_OS_FW_KEY_CERT_ID] = {
++		&fip_dev_handle, (uintptr_t)&tos_fw_key_cert_uuid_spec,
++		open_fip
++	},
++	[SOC_FW_CONTENT_CERT_ID] = {
++		&fip_dev_handle, (uintptr_t)&soc_fw_cert_uuid_spec, open_fip
++	},
++	[TRUSTED_OS_FW_CONTENT_CERT_ID] = {
++		&fip_dev_handle, (uintptr_t)&tos_fw_cert_uuid_spec, open_fip
++	},
++	/* bootloader3 carries its own trusted key certificate */
++	[NON_TRUSTED_KEY_CERT_ID] = {
++		&fip_uefi_dev_handle, (uintptr_t)&trusted_key_cert_uuid_spec,
++		open_fip_uefi
++	},
++	[NON_TRUSTED_FW_KEY_CERT_ID] = {
++		&fip_uefi_dev_handle, (uintptr_t)&nt_fw_key_cert_uuid_spec,
++		open_fip_uefi
++	},
++	[NON_TRUSTED_FW_CONTENT_CERT_ID] = {
++		&fip_uefi_dev_handle, (uintptr_t)&nt_fw_cert_uuid_spec,
++		open_fip_uefi
++	},
++#endif /* TRUSTED_BOARD_BOOT */
++};
++
++static int open_fip_dev(uintptr_t dev_handle, unsigned int backend_id,
++			const uintptr_t spec)
++{
++	uintptr_t local_image_handle;
++	int result;
++
++	result = io_dev_init(dev_handle, (uintptr_t)backend_id);
++	if (result == 0) {
++		result = io_open(dev_handle, spec, &local_image_handle);
++		if (result == 0) {
++			io_close(local_image_handle);
++		}
++	}
++	return result;
++}
++
++static int open_fip(const uintptr_t spec)
++{
++	return open_fip_dev(fip_dev_handle, FIP_IMAGE_ID, spec);
++}
++
++static int open_fip_uefi(const uintptr_t spec)
++{
++	return open_fip_dev(fip_uefi_dev_handle, FIP_UEFI_IMAGE_ID, spec);
++}
++
++static int open_mtd(const uintptr_t spec)
++{
++	uintptr_t local_image_handle;
++	int result;
++
++	result = io_dev_init(mtd_dev_handle, (uintptr_t)NULL);
++	if (result == 0) {
++		result = io_open(mtd_dev_handle, spec, &local_image_handle);
++		if (result == 0) {
++			io_close(local_image_handle);
++		}
++	}
++	return result;
++}
++
++/*
++ * Read command for the SPI NOR from the bootloader1 flash table, as the CIX
++ * BL2 does: each 16-byte entry holds the JEDEC ID (byte-reversed in bytes
++ * 0-2), the xSPI clock index (byte 4), the data bus mode (byte 5, 2: quad)
++ * and the dummy cycles (byte 6).  Flashes not in the table use single-line
++ * reads at the default clock.
++ */
++int plat_get_nor_data(struct nor_device *device)
++{
++	uint8_t id[3] = { 0 };
++	uint8_t table[CIX_BL1_FLASH_TABLE_ENTRY * CIX_BL1_FLASH_TABLE_MAX];
++	uint8_t count = 0;
++	struct spi_mem_op op;
++	uint8_t clk_index = 0;
++	unsigned int i;
++	int ret;
++
++	device->size = SKY1_SPI_NOR_SIZE;
++
++	zeromem(&op, sizeof(op));
++	op.cmd.opcode = SPI_NOR_OP_READ_ID;
++	op.cmd.buswidth = SPI_MEM_BUSWIDTH_1_LINE;
++	op.data.buswidth = SPI_MEM_BUSWIDTH_1_LINE;
++	op.data.dir = SPI_MEM_DATA_IN;
++	op.data.nbytes = sizeof(id);
++	op.data.buf = id;
++	ret = spi_mem_exec_op(&op);
++
++	zeromem(&op, sizeof(op));
++	op.cmd.opcode = SPI_NOR_OP_READ;
++	op.cmd.buswidth = SPI_MEM_BUSWIDTH_1_LINE;
++	op.addr.nbytes = 3U;
++	op.addr.buswidth = SPI_MEM_BUSWIDTH_1_LINE;
++	op.addr.val = CIX_BL1_FLASH_TABLE;
++	op.data.buswidth = SPI_MEM_BUSWIDTH_1_LINE;
++	op.data.dir = SPI_MEM_DATA_IN;
++	op.data.nbytes = 1U;
++	op.data.buf = &count;
++	if ((ret == 0) && (spi_mem_exec_op(&op) == 0) && (count != 0U)) {
++		if (count > CIX_BL1_FLASH_TABLE_MAX) {
++			count = CIX_BL1_FLASH_TABLE_MAX;
++		}
++		op.addr.val = CIX_BL1_FLASH_TABLE + 4U;
++		op.data.nbytes = count * CIX_BL1_FLASH_TABLE_ENTRY;
++		op.data.buf = table;
++		if (spi_mem_exec_op(&op) == 0) {
++			for (i = 0U; i < count; i++) {
++				const uint8_t *e = &table[i * CIX_BL1_FLASH_TABLE_ENTRY];
++
++				if ((e[2] != id[0]) || (e[1] != id[1]) ||
++				    (e[0] != id[2])) {
++					continue;
++				}
++				clk_index = e[4];
++				if (e[5] == 2U) {
++					device->read_op.data.buswidth =
++						SPI_MEM_BUSWIDTH_4_LINE;
++				}
++				device->read_op.dummy.nbytes = e[6] >> 3;
++				INFO("SPI NOR %02x%02x%02x: clock %u, mode %u, %u dummy cycles\n",
++				     id[0], id[1], id[2], e[4], e[5], e[6]);
++				break;
++			}
++		}
++	}
++
++	set_xspi_bus_clock(clk_index);
++	return 0;
++}
++
++static int cix_xspi_init(void)
++{
++	unsigned int i;
++	int ret;
++
++	for (i = 0U; i < CIX_IOMUX_S5_XSPI_PAD_CNT; i++) {
++		mmio_write_32(CIX_IOMUX_S5_XSPI_PADS + 4U * i,
++			      CIX_IOMUX_S5_XSPI_FUNC);
++	}
++	ret = cdns_xspi_init();
++	if (ret < 0) {
++		ERROR("CIX: xspi init failed\n");
++	}
++	return ret;
++}
++
++static int cix_fw_header_find(uint32_t type, io_block_spec_t *spec)
++{
++	unsigned int i;
++
++	for (i = 0U; i < fw_header.count && i < CIX_FW_HEADER_MAX_ENTRIES; i++) {
++		if (fw_header.entry[i].type == type) {
++			spec->offset = fw_header.entry[i].address;
++			spec->length = fw_header.entry[i].length;
++			return 0;
++		}
++	}
++	return -1;
++}
++
++static int cix_read_fw_header(void)
++{
++	uint32_t base = CIX_FW_HEADER_BASE;
++	size_t length = 0U;
++	int ret;
++
++	if ((mmio_read_32(CIX_BOOT_COPY_STATUS_REG) & 1U) != 0U) {
++		base = CIX_FW_HEADER_BASE_ALT;
++	}
++	ret = spi_nor_read(base, (uintptr_t)&fw_header, sizeof(fw_header),
++			   &length);
++	if ((ret != 0) || (length != sizeof(fw_header)) ||
++	    (fw_header.magic != CIX_FW_HEADER_MAGIC)) {
++		return -1;
++	}
++	if ((cix_fw_header_find(CIX_FW_TYPE_BOOTLOADER2, &fip_block_spec) != 0) ||
++	    (cix_fw_header_find(CIX_FW_TYPE_BOOTLOADER3, &fip_uefi_block_spec) != 0)) {
++		return -1;
++	}
++	return 0;
++}
++
++int cix_io_setup(void)
++{
++	int io_result;
++
++	io_result = register_io_dev_fip(&fip_dev_con);
++	if (io_result < 0) {
++		return io_result;
++	}
++	io_result = io_dev_open(fip_dev_con, (uintptr_t)NULL, &fip_dev_handle);
++	if (io_result < 0) {
++		return io_result;
++	}
++	io_result = io_dev_open(fip_dev_con, (uintptr_t)NULL,
++				&fip_uefi_dev_handle);
++	if (io_result < 0) {
++		return io_result;
++	}
++
++	io_result = cix_xspi_init();
++	if (io_result < 0) {
++		return io_result;
++	}
++	io_result = register_io_dev_mtd(&mtd_dev_con);
++	if (io_result < 0) {
++		return io_result;
++	}
++	io_result = io_dev_open(mtd_dev_con, (uintptr_t)&spi_nor_dev_spec,
++				&mtd_dev_handle);
++	if (io_result < 0) {
++		return io_result;
++	}
++
++	if (cix_read_fw_header() != 0) {
++		WARN("get bootloader address from cix_flash_all.bin header fail, use deault value\n");
++		fip_block_spec.offset = PLAT_CIX_SPI_NOR_FIP_IMAGE_BASE;
++		fip_block_spec.length = PLAT_CIX_SPI_NOR_FLASH_IMAGE_MAX_SIZE;
++		fip_uefi_block_spec.offset = PLAT_CIX_SPI_NOR_FIP_UEFI_IMAGE_BASE;
++		fip_uefi_block_spec.length = PLAT_CIX_SPI_NOR_FLASH_IMAGE_MAX_SIZE;
++	}
++	INFO("bootloader2 at 0x%lx, bootloader3 at 0x%lx\n",
++	     fip_block_spec.offset, fip_uefi_block_spec.offset);
++	return 0;
++}
++
++void plat_cix_io_setup(void)
++{
++	if (cix_io_setup() != 0) {
++		ERROR("BL2: cannot set up the boot flash\n");
++		panic();
++	}
++}
++
++/* Return an IO device handle and specification which can be used to access
++ * an image. Use this to enforce platform load policy */
++int plat_get_image_source(unsigned int image_id, uintptr_t *dev_handle,
++			  uintptr_t *image_spec)
++{
++	const struct plat_io_policy *policy;
++	int result;
++
++	assert(image_id < ARRAY_SIZE(policies));
++
++	policy = &policies[image_id];
++	if (policy->check == NULL) {
++		return -ENOENT;
++	}
++	result = policy->check(policy->image_spec);
++	if (result != 0) {
++		return result;
++	}
++
++	*image_spec = policy->image_spec;
++	*dev_handle = *(policy->dev_handle);
++	return 0;
++}
++
++/*
++ * Boot-time configuration items the SE leaves in csec_km_meta_t.boot_cfg:
++ * 16-byte entries of a NUL-terminated name and a 32-bit value.
++ */
++uint32_t btcfg_get_value(void *base, char *item, uint32_t *value)
++{
++	const mntr_boot_cfg_item *cfg = base;
++	unsigned int i;
++
++	for (i = 0U; i < BOOT_CFG_MAX / sizeof(*cfg); i++) {
++		if (cfg[i].cmd_string[0] == '\0') {
++			break;
++		}
++		if (strncmp(cfg[i].cmd_string, item, CMD_STR_MAX) == 0) {
++			*value = cfg[i].val;
++			return 0;
++		}
++	}
++	return 0x9101U;
++}
++
++/* The images always come from the boot flash. */
++bool cix_bl_mode_is_backdoor(void)
++{
++	return false;
++}
+diff --git a/plat/cix/sky1/platform.mk b/plat/cix/sky1/platform.mk
+index 1ffab7574..de79f2086 100644
+--- a/plat/cix/sky1/platform.mk
++++ b/plat/cix/sky1/platform.mk
+@@ -100,6 +100,23 @@ override ARM_PLAT_MT	:=	0
+ # Using cix csec lib for trust boot and image parse
+ CIX_SEC_LIB := 1
+ 
++ifneq (${TRUSTED_BOARD_BOOT},0)
++# The CIX crypto-engine library is not public: verify with mbed TLS
++include drivers/auth/mbedtls/mbedtls_crypto.mk
++include drivers/auth/mbedtls/mbedtls_x509.mk
++
++# Root of trust: SHA-256 of the ROT_KEY public key, built into BL2
++ifndef ROT_KEY
++$(error TRUSTED_BOARD_BOOT needs ROT_KEY, the root of trust key (PEM))
++endif
++SKY1_ROTPK_HASH		:=	$(BUILD_PLAT)/sky1_rotpk_sha256.bin
++$(eval $(call add_define_val,SKY1_ROTPK_HASH,'"$(SKY1_ROTPK_HASH)"'))
++BL2_SOURCES		+=	plat/cix/sky1/sky1_rotpk.S
++$(BUILD_PLAT)/bl2/sky1_rotpk.o: $(SKY1_ROTPK_HASH)
++$(SKY1_ROTPK_HASH): $(ROT_KEY) FORCE | $(BUILD_PLAT)
++	openssl pkey -in $< -pubout -outform DER | openssl dgst -sha256 -binary > $@
++endif
++
+ SKY1_BASE	=	plat/cix/sky1
+ 
+ PLAT_INCLUDES		+=	-I${SKY1_BASE}/include/	\
+diff --git a/plat/cix/sky1/sky1_bl2_el3_setup.c b/plat/cix/sky1/sky1_bl2_el3_setup.c
+new file mode 100644
+index 000000000..7a63b907c
+--- /dev/null
++++ b/plat/cix/sky1/sky1_bl2_el3_setup.c
+@@ -0,0 +1,115 @@
++/*
++ * Copyright (c) 2017-2022, ARM Limited and Contributors. All rights reserved.
++ *
++ * SPDX-License-Identifier: BSD-3-Clause
++ */
++
++/*
++ * BL2 at EL3 on Sky1.  The SE firmware has trained DRAM, loaded BL2 to
++ * BL2_BASE and left two things for it: the key-management block at
++ * OEM_ROTPK_DDR_BASE_ADDRESS_AP and the DRAM description at
++ * MEM_OUTPUT_BUFFER_ADDR.  BL2 sets up the console, the boot flash and the
++ * MMU, programs the TZC-400s and loads BL31, OP-TEE and UEFI.
++ */
++
++#include <string.h>
++
++#include <arch_helpers.h>
++#include <common/bl_common.h>
++#include <common/debug.h>
++#include <drivers/generic_delay_timer.h>
++#include <lib/rlog.h>
++#include <lib/xlat_tables/xlat_tables_compat.h>
++#include <plat/common/platform.h>
++
++#include <cix_fw_boot_perf.h>
++#include <drivers/watchdog.h>
++#include <plat_cix.h>
++#include <platform_def.h>
++
++static const mmap_region_t sky1_bl2_mmap[] = {
++	SKY1_MAP_DEVICE,
++	MAP_REGION_FLAT(BL31_BASE, BL31_LIMIT - BL31_BASE,
++			MT_MEMORY | MT_RW | MT_SECURE),
++	MAP_REGION_FLAT(BL32_BASE, BL32_LIMIT - BL32_BASE,
++			MT_MEMORY | MT_RW | MT_SECURE),
++	{0}
++};
++
++#if RAM_LOG_SUPPORT
++static unsigned long long sky1_rlog_get_tick(void)
++{
++	return read_cntpct_el0();
++}
++
++/* BL2 log in DRAM, shown by UEFI's RamLogDumpDxe as BL31's is */
++static ramlog_ops sky1_bl2_rlog_ops = {
++	.flush = flush_dcache_range,
++	.get_tick = sky1_rlog_get_tick,
++};
++#endif
++
++void bl2_el3_early_platform_setup(u_register_t arg0 __unused,
++				  u_register_t arg1 __unused,
++				  u_register_t arg2 __unused,
++				  u_register_t arg3 __unused)
++{
++	cix_boot_perf_init(PBL_PHASE);
++	cix_set_boot_phase(PBL_PHASE, RECORD_START);
++
++	cix_console_boot_init();
++	generic_delay_timer_init();
++
++	plat_cix_io_setup();
++
++	/* Shown by UEFI next to the BL31 version */
++	strlcpy((void *)BL2_SHMEM_VER_STR, shmem_version_string,
++		SHMEM_VER_STR_LEN);
++
++	plat_watchdog_init();
++}
++
++void bl2_el3_plat_arch_setup(void)
++{
++	const mmap_region_t bl_regions[] = {
++		MAP_REGION_FLAT(BL2_BASE, BL2_END - BL2_BASE,
++				MT_MEMORY | MT_RW | MT_SECURE),
++		MAP_REGION_FLAT(BL_CODE_BASE, BL_CODE_END - BL_CODE_BASE,
++				MT_CODE | MT_SECURE),
++		MAP_REGION_FLAT(BL_RO_DATA_BASE,
++				BL_RO_DATA_END - BL_RO_DATA_BASE,
++				MT_RO_DATA | MT_SECURE),
++		/* SE key-management block (ROTPK hash, boot config) */
++		MAP_REGION_FLAT(OEM_ROTPK_DDR_BASE_ADDRESS_AP, PAGE_SIZE,
++				MT_DEVICE | MT_RW | MT_SECURE),
++		{0}
++	};
++	MEM_INIT_OUTPUT_BUFFER *mem = GetMemOutputBuffer();
++	unsigned long long ns_size;
++
++	/* Non-secure DRAM below 4 GiB that BL2 loads UEFI into */
++	ns_size = (unsigned long long)mem->AvailableSize * 0x100000ULL;
++	ns_size -= SKY1_TZC_DRAM1_SIZE;
++	mmap_add_region(SKY1_NS_DRAM1_BASE, SKY1_NS_DRAM1_BASE, ns_size,
++			MT_MEMORY | MT_RW | MT_SECURE);
++
++	setup_page_tables(bl_regions, sky1_bl2_mmap);
++	enable_mmu_el3(0);
++
++#if RAM_LOG_SUPPORT
++	rlog_init_printf((char *)RAM_LOG_BL2_ADDR, RAM_LOG_BL2_SIZE,
++			 &sky1_bl2_rlog_ops);
++#endif
++}
++
++/* Runs before the first image marked IMAGE_ATTRIB_PLAT_SETUP (BL31) */
++void bl2_platform_setup(void)
++{
++	plat_cix_security_setup();
++}
++
++void bl2_el3_plat_prepare_exit(void)
++{
++	cix_set_boot_phase(PBL_PHASE, RECORD_END);
++	cix_boot_perf_uninit(PBL_PHASE);
++}
+diff --git a/plat/cix/sky1/sky1_rotpk.S b/plat/cix/sky1/sky1_rotpk.S
+new file mode 100644
+index 000000000..ee90a9036
+--- /dev/null
++++ b/plat/cix/sky1/sky1_rotpk.S
+@@ -0,0 +1,20 @@
++/*
++ * Copyright (c) 2022, ARM Limited and Contributors. All rights reserved.
++ *
++ * SPDX-License-Identifier: BSD-3-Clause
++ */
++
++/*
++ * Root of trust public key hash as a DER DigestInfo (SHA-256), the form
++ * plat_get_rotpk_info() returns with ROTPK_IS_HASH.  SKY1_ROTPK_HASH is the
++ * 32-byte hash file generated from ROT_KEY (platform.mk).
++ */
++	.global sky1_rotpk_hash_der_header
++	.global sky1_rotpk_hash_der_end
++	.section .rodata.sky1_rotpk_hash, "a"
++
++sky1_rotpk_hash_der_header:
++	.byte 0x30, 0x31, 0x30, 0x0D, 0x06, 0x09, 0x60, 0x86, 0x48
++	.byte 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20
++	.incbin SKY1_ROTPK_HASH
++sky1_rotpk_hash_der_end:
+diff --git a/plat/cix/sky1/sky1_trusted_boot.c b/plat/cix/sky1/sky1_trusted_boot.c
+new file mode 100644
+index 000000000..c099d1ed1
+--- /dev/null
++++ b/plat/cix/sky1/sky1_trusted_boot.c
+@@ -0,0 +1,47 @@
++/*
++ * Copyright (c) 2015-2022, ARM Limited and Contributors. All rights reserved.
++ *
++ * SPDX-License-Identifier: BSD-3-Clause
++ */
++
++/*
++ * Trusted board boot on Sky1.
++ *
++ * Root of trust: the SHA-256 of the ROT_KEY public key, built into BL2
++ * (sky1_rotpk.S).  It anchors both FIPs: bootloader2's trusted key
++ * certificate and bootloader3's (NON_TRUSTED_KEY_CERT_ID, see cix_cot_bl2.c).
++ * The CIX BL2 instead takes a hash the SE leaves in the key-management block
++ * and authenticates nothing on chips without secure boot fused; this BL2 is
++ * signed into bootloader1 by the board owner, so its built-in key is the
++ * trust anchor.
++ *
++ * There is no rollback protection: the NV counters read 0 and are not
++ * updated, as in the CIX BL2.
++ */
++
++#include <stdint.h>
++
++#include <plat/common/platform.h>
++
++extern unsigned char sky1_rotpk_hash_der_header[];
++extern unsigned char sky1_rotpk_hash_der_end[];
++
++int plat_get_rotpk_info(void *cookie __unused, void **key_ptr,
++			unsigned int *key_len, unsigned int *flags)
++{
++	*key_ptr = sky1_rotpk_hash_der_header;
++	*key_len = sky1_rotpk_hash_der_end - sky1_rotpk_hash_der_header;
++	*flags = ROTPK_IS_HASH;
++	return 0;
++}
++
++int plat_get_nv_ctr(void *cookie __unused, unsigned int *nv_ctr)
++{
++	*nv_ctr = 0U;
++	return 0;
++}
++
++int plat_set_nv_ctr(void *cookie __unused, unsigned int nv_ctr __unused)
++{
++	return 0;
++}
