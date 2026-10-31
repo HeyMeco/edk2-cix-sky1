@@ -99,8 +99,9 @@ class SkySoc(Soc):
     crypto engine's status, the PM's handshakes.  DRAM training is not
     modelled (the DDR driver's entry points are stubbed by the caller)."""
 
-    def __init__(self, flash, life_cycle=4, boot_reason=2, jedec=(0xef, 0x60, 0x18)):
+    def __init__(self, flash, life_cycle=4, boot_reason=2, jedec=(0xef, 0x60, 0x18), efuse=None):
         super().__init__(flash)
+        self.efuse = efuse or {}             # byte address -> bytes
         self.flash = bytearray(flash)
         self.life_cycle = life_cycle
         self.boot_reason = boot_reason
@@ -114,10 +115,17 @@ class SkySoc(Soc):
         self.rng = 0x12345678
         self.ppu = {}
         self.mbox_pending = None
+        self.window = 0
 
     def reset_state(self, uc):
-        # the boot ROM leaves the bootloader1 header in SRAM
+        # the boot ROM leaves the bootloader1 header in SRAM, and the fuses in the fuse SRAM
         uc.mem_write(0x2007e800, bytes(self.flash[BL1_HEADER:BL1_HEADER + 0x1000]))
+        for addr, data in self.efuse.items():
+            page = (0xb0040000 + addr) & ~0xffff
+            if page not in self.se.mapped:
+                uc.mem_map(page, 0x10000)
+                self.se.mapped.add(page)
+            uc.mem_write(0xb0040000 + addr, bytes(data))
 
     # QSPI: indirect mode on the flash image
     def qspi_start(self):
@@ -148,7 +156,17 @@ class SkySoc(Soc):
         ds = (self.mem(QSPI + 0x0c) >> 20) & 3
         return {3: 4, 1: 2, 0: 1}.get(ds, 1)
 
+    def pm_alias(self, addr):
+        """With the SYSHUB window on the PM (SoC 0x1c90000000), its first
+        MiB is the PM's SRAM, which the SE also sees at 0x46a10000."""
+        if self.window == 0x392 and 0x60000000 <= addr < 0x60108000:
+            return addr - 0x60000000 + 0x46a10000
+        return None
+
     def read(self, addr, size):
+        alias = self.pm_alias(addr)
+        if alias is not None:
+            return int.from_bytes(self.se.uc.mem_read(alias, size), "little")
         if QSPI <= addr < QSPI + 0x100:
             off = addr - QSPI
             if off == 0x04:
@@ -200,7 +218,7 @@ class SkySoc(Soc):
         if addr == 0x4f030008 or (0x4f080008 <= addr < 0x50000000 and (addr - 0x4f080008) % 0x100000 == 0):
             return self.mem(addr - 8)
         # CI-700: SLC flush and MTE tag flush done
-        if addr & 0xffff == 0x0f68 or addr & 0xffff == 0x0a38:
+        if 0x50000000 <= addr < 0x54000000 and addr & 0xffff in (0x0f68, 0x0a38):
             return self.mem(addr) | 1
         # SRAM repair controllers: chunk taken, data received, repaired
         if addr - 0x40000010 in MEMR_BASES:
@@ -212,6 +230,11 @@ class SkySoc(Soc):
         return None
 
     def write(self, addr, size, value):
+        alias = self.pm_alias(addr)
+        if alias is not None:
+            self.se.uc.mem_write(alias, value.to_bytes(size, "little"))
+        if addr == 0xb0030100:
+            self.window = value
         if addr == QSPI and value & 2:
             self.qspi_start()
         elif addr == QSPI + 0x1c and self.qspi_cmd and self.qspi_cmd[0] == 0x02:
@@ -241,8 +264,8 @@ class Se:
         uc.mem_map(SRAM, SRAM_SIZE)
         for addr, data in self.elf.segments:
             uc.mem_write(addr, data)
-        self.soc.reset_state(uc)
         self.mapped = set()
+        self.soc.reset_state(uc)
         self.writes = []         # (function, address, size, value)
         self.calls = []          # function entries, in order (with trace)
         self.trace = trace
@@ -257,6 +280,7 @@ class Se:
         self.stop_write = None
         self.wfi = 0
         self.wfi_seen = set()
+        self.poll_limit = 200_000
         self.wfi_hook = None
         uc.hook_add(UC_HOOK_MEM_UNMAPPED, self.on_unmapped)
         for lo, hi in ((0, SRAM - 1), (SRAM + SRAM_SIZE, 0xFFFFFFFF)):
@@ -309,7 +333,7 @@ class Se:
         if self.trace and addr in self.entries:
             self.calls.append(self.entries[addr])
         self.blocks[addr] += 1
-        if self.blocks[addr] > 200_000:
+        if self.blocks[addr] > self.poll_limit:
             self.poll = (self.elf.func_at(addr), addr, getattr(self, "last_read", None))
             uc.emu_stop()
 
