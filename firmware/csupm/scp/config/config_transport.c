@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
 /*
  * SCMI shared memory in the mailboxes' data words (TF-A's mailbox_mem_t);
- * the PM initialises the a2p ones, the TF-A channel is secure.
+ * the PM initialises the a2p ones once SYSTOP reports on, the TF-A
+ * channel is secure.
  */
 #include <mod_cix_mbox.h>
 #include <mod_transport.h>
@@ -21,7 +22,8 @@
 		.policies = MOD_TRANSPORT_POLICY_INIT_MAILBOX | (pol),		\
 		.out_band_mailbox_address = MBOX_DATA(i, 0),			\
 		.out_band_mailbox_size = 32 * 4,					\
-		.pd_source_id = FWK_ID_NONE_INIT,					\
+		.pd_source_id = FWK_ID_ELEMENT_INIT(FWK_MODULE_IDX_POWER_DOMAIN,	\
+						    SCP_PD_SYSTOP),			\
 		.driver_id = FWK_ID_ELEMENT_INIT(FWK_MODULE_IDX_CIX_MBOX, i),		\
 		.driver_api_id = FWK_ID_API_INIT(FWK_MODULE_IDX_CIX_MBOX,		\
 						 MOD_CIX_MBOX_API_IDX_TRANSPORT_DRIVER), \

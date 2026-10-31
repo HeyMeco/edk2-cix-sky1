@@ -42,4 +42,12 @@ enum scp_service {
 	SCP_SVC_COUNT,
 };
 
+/* Power domains (the first two are SCMI's 0 and 1) */
+enum scp_pd {
+	SCP_PD_ISP0,
+	SCP_PD_GPUTOP,
+	SCP_PD_SYSTOP,
+	SCP_PD_COUNT,
+};
+
 #endif
