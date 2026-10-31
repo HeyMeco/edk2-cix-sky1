@@ -1,0 +1,74 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Orion Unofficial <orion-unofficial@protonmail.com>
+Date: Thu, 15 Oct 2026 14:20:02 +0100
+Subject: [PATCH] Stop StandaloneMM on a failed CIX NOR transaction
+
+---
+ core/arch/arm/kernel/stmm_sp.c | 22 ++++++++++++++++------
+ 1 file changed, 16 insertions(+), 6 deletions(-)
+
+diff --git a/core/arch/arm/kernel/stmm_sp.c b/core/arch/arm/kernel/stmm_sp.c
+index 6cc73ed3..205969ad 100644
+--- a/core/arch/arm/kernel/stmm_sp.c
++++ b/core/arch/arm/kernel/stmm_sp.c
+@@ -877,7 +877,7 @@ static void stmm_handle_debug_message_service(struct thread_svc_regs *regs)
+ 
+ #define CIX_SIP_NOR_STORAGE  0xC200000B
+ 
+-static void stmm_handle_nor_flash_service(struct thread_svc_regs *regs)
++static bool stmm_handle_nor_flash_service(struct thread_svc_regs *regs)
+ {
+ 	uint32_t stmm_rc = STMM_RET_SUCCESS;
+ 	struct thread_smc_args args = {
+@@ -898,7 +898,17 @@ static void stmm_handle_nor_flash_service(struct thread_svc_regs *regs)
+ 
+ 	DMSG_RAW("%s exit\n", __func__);
+ 
+-   service_compose_direct_resp(regs, stmm_rc);
++	/* The vendor NOR driver ignores a failed direct response. Do not resume
++	 * it after a failed transaction: its RAM shadow may no longer match NOR.
++	 * TF-A returns spi_mem_exec_op() status in a0 (zero means success).
++	 */
++	if (args.a0) {
++		EMSG("NOR transaction failed: %#lx", args.a0);
++		return_from_sp_helper(true, TEE_ERROR_STORAGE_NOT_AVAILABLE, regs);
++		return false;
++	}
++	service_compose_direct_resp(regs, stmm_rc);
++	return true;
+ }
+ 
+ static void spm_eret_error(int32_t error_code, struct thread_svc_regs *regs)
+@@ -1000,7 +1010,7 @@ err:
+ 
+ #endif
+ 
+-static void spm_handle_direct_req(struct thread_svc_regs *regs)
++static bool spm_handle_direct_req(struct thread_svc_regs *regs)
+ {
+ 	uint16_t dst_id = SVC_REGS_A1(regs) & UINT16_MAX;
+ 
+@@ -1011,11 +1021,12 @@ static void spm_handle_direct_req(struct thread_svc_regs *regs)
+ 	} else if (dst_id == ffa_debug_message_id) {
+ 		stmm_handle_debug_message_service(regs);
+ 	} else if (dst_id == ffa_nor_flash_id) {
+-		stmm_handle_nor_flash_service(regs);
++		return stmm_handle_nor_flash_service(regs);
+ 	} else {
+ 		EMSG("Undefined endpoint id %#"PRIx16, dst_id);
+ 		spm_eret_error(STMM_RET_INVALID_PARAM, regs);
+ 	}
++	return true;
+ }
+ 
+ /* Return true if returning to SP, false if returning to caller */
+@@ -1062,8 +1073,7 @@ static bool spm_handle_svc(struct thread_svc_regs *regs)
+ 		return_from_sp_helper(false, 0, regs);
+ 		return false;
+ 	case __FFA_MSG_SEND_DIRECT_REQ:
+-		spm_handle_direct_req(regs);
+-		return true;
++		return spm_handle_direct_req(regs);
+ 	default:
+ #if CFG_STMM_FFA_VERSION == 12
+ 		spm_eret_error(FFA_NOT_SUPPORTED, regs);

@@ -24,6 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         bc bison build-essential ca-certificates curl file flex git m4 \
         python3 python3-yaml python-is-python3 uuid-dev xz-utils \
         libssl3 openssl zlib1g rsync zip mtools \
+        libssl-dev python3-pyelftools python3-cryptography \
     && rm -rf /var/lib/apt/lists/*
 
 # Arm GNU toolchain (aarch64-none-elf)

@@ -1,0 +1,74 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mecid <mecidi.cc@gmail.com>
+Date: Sat, 31 Oct 2026 09:13:15 +0100
+Subject: [PATCH] cert_create: allow leaving out the non-trusted world key
+
+CIX's bootloader2 FIP carries a trusted key certificate with only the
+trusted world public key (ext 302); the non-trusted world key (303) is in
+the separate trusted_key_no.crt of the BL33 FIP.  Mark the non-trusted
+world key extension optional: when --non-trusted-world-key is not given it
+is left out.  Keys that no requested certificate needs no longer have to
+be given either.
+---
+ tools/cert_create/src/main.c         | 18 +++++++++++++++---
+ tools/cert_create/src/tbbr/tbb_ext.c |  3 ++-
+ 2 files changed, 17 insertions(+), 4 deletions(-)
+
+diff --git a/tools/cert_create/src/main.c b/tools/cert_create/src/main.c
+index b39378ca9..9a505d650 100644
+--- a/tools/cert_create/src/main.c
++++ b/tools/cert_create/src/main.c
+@@ -231,6 +231,10 @@ static void check_cmd_params(void)
+ 			case EXT_TYPE_PKEY:
+ 				/* Key filename must be specified */
+ 				key = &keys[ext->attr.key];
++				if (ext->optional && key->fn == NULL) {
++					/* Left out of the certificate */
++					break;
++				}
+ 				if (!new_keys && key->fn == NULL) {
+ 					ERROR("Key '%s' required by '%s' not "
+ 					      "specified\n", key->desc,
+@@ -461,10 +465,13 @@ int main(int argc, char *argv[])
+ 		} else {
+ 			if (err_code == KEY_ERR_OPEN) {
+ 				ERROR("Error opening '%s'\n", keys[i].fn);
+-			} else {
+-				ERROR("Key '%s' not specified\n", keys[i].desc);
++				exit(1);
+ 			}
+-			exit(1);
++			/*
++			 * No file given: check_cmd_params() has made sure that
++			 * every key a requested certificate needs is given, so
++			 * this one is unused or an optional extension.
++			 */
+ 		}
+ 	}
+ 
+@@ -530,6 +537,11 @@ int main(int argc, char *argv[])
+ 						md_len));
+ 				break;
+ 			case EXT_TYPE_PKEY:
++				if (ext->optional &&
++				    keys[ext->attr.key].fn == NULL) {
++					/* Optional key not given: omit it */
++					continue;
++				}
+ 				CHECK_NULL(cert_ext, ext_new_key(ext_nid,
+ 					EXT_CRIT, keys[ext->attr.key].key));
+ 				break;
+diff --git a/tools/cert_create/src/tbbr/tbb_ext.c b/tools/cert_create/src/tbbr/tbb_ext.c
+index 60bafb4be..4b30dc73b 100644
+--- a/tools/cert_create/src/tbbr/tbb_ext.c
++++ b/tools/cert_create/src/tbbr/tbb_ext.c
+@@ -93,7 +93,8 @@ static ext_t tbb_ext[] = {
+ 		.ln = "Non-Trusted World Public Key",
+ 		.asn1_type = V_ASN1_OCTET_STRING,
+ 		.type = EXT_TYPE_PKEY,
+-		.attr.key = NON_TRUSTED_WORLD_KEY
++		.attr.key = NON_TRUSTED_WORLD_KEY,
++		.optional = 1
+ 	},
+ 	[SCP_FW_CONTENT_CERT_PK_EXT] = {
+ 		.oid = SCP_FW_CONTENT_CERT_PK_OID,

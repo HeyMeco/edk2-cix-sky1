@@ -13,8 +13,8 @@ prove identical code, and nothing here has been built or boot-tested.
 |---|---|---|---|
 | `bootloader1.img` #1 | SE firmware (Cortex-M) | none | no |
 | `bootloader1.img` #2 | CSU_PM firmware (Xtensa, Arm SCP-firmware based) | SCP-firmware framework only | only with large reverse engineering |
-| `bootloader1.img` #3 | TF-A BL2 | cixtech TF-A, with gaps | yes, if BL1 can be re-signed |
-| `bootloader2.img` | TF-A FIP: BL31 + OP-TEE BL32 (with StandaloneMM) | cixtech TF-A and OP-TEE, with gaps | yes |
+| `bootloader1.img` #3 | TF-A BL2 | cixtech TF-A, 5 platform files missing | after those are written; O6/O6N BL1 can be re-signed ([open firmware](open-firmware.md#bl2)) |
+| `bootloader2.img` | TF-A FIP: BL31 + OP-TEE BL32 (with StandaloneMM) | cixtech TF-A and OP-TEE, with gaps | **built** for O6/O6N with `--open` (StMM still binary) |
 | `csu_pm_config.bin` | PM configuration | `pm_config` generator | yes, byte-identical for both Orange Pi boards |
 | `memory_config.bin` | DRAM configuration | `mem_config` generator | Radxa/Minisforum: built; Orange Pi: not yet decoded |
 | `trustzone_config.bin` | TZC configuration | `trustzone_config` generator | yes |
@@ -22,8 +22,9 @@ prove identical code, and nothing here has been built or boot-tested.
 | `sfh_fw.bin` | 17 KB Cortex-M image (vectors at `0x2007fff0`, mailbox) | none | no counterpart; small enough to clean-room |
 | `ec_fw.bin` | ITE 8051 EC firmware (`ITE EC-V00.1`, `EC V1.13`) | none | no |
 | `Silicon/CIX/Sky1/Drivers/*.efi`, `Platform/CIX/Sky1/Library/*.lib` | CIX DXE drivers and libraries (CIX Jenkins build paths in the debug directory) | none, except `NorFlashStmmRuntimeDxe`, `I2cDxe`, `SpiDxe` in `edk2-platforms` | small drivers could be clean-roomed; PCIe, TypeC PHY, DPU, CDNSP are large |
-| `fiptool`, `cert_create` | host tools | TF-A `tools/` | yes |
-| `cix_package_tool`, `cert_uefi_create_rsa` | host tools | binaries only (`cixtech/cix_package-tool`) | packer simple enough to reimplement |
+| `fiptool`, `cert_create` | host tools | TF-A `tools/` | built from `arm-trusted-firmware` for `--open` |
+| `cix_package_tool` | host tool | binary only | **replaced** by `scripts/open/cixfw.py pack` (byte-identical) |
+| `cert_uefi_create_rsa` | host tool | binary only | TF-A `cert_create` can replace it |
 
 Public CIX trees (no license file; GitHub reports `NOASSERTION`; upstream parts
 are BSD-3-Clause for TF-A and BSD-2-Clause for OP-TEE):
@@ -63,10 +64,13 @@ The embedded StandaloneMM is CIX's build, not ours: the secure-world variable
 driver comes from this blob, not from the UEFI tree built here. A rebuilt BL32
 would take our own StMM FV through `CFG_STMM_PATH`.
 
-Signing is not a blocker: BL2 checks the FIP certificate chain against the
-same trusted-key certificate and default CIX OEM key that already sign BL33
-(see [architecture](architecture.md#build-flow-scriptsbuildpy)), and TF-A's
-`cert_create` produces the certificates.
+Signing: BL2 checks the bootloader2 certificate chain against a root key of
+its own, separate from the BL33 chain. On the Orion O6/O6N (and the CIX
+default images) that root is CIX's published `cix_privatekey.pem`
+(`33d47f74`), which also signs every certificate in the vendor FIP (NV
+counter 31). On the Orange Pi boards and the retail MS-R1 the root is
+`0d999213`, whose private key is not public. `--open` builds and signs
+bootloader2 for the first group; see [open firmware](open-firmware.md).
 
 ### Builds per board
 
@@ -122,9 +126,10 @@ A signed `CIXBTFF!` container:
 | `0x1c` | RSA-3072 public key 1 (root), exponent at `0x19c` |
 | `0x324` | RSA-3072 public key 2 (OEM), exponent at `0x4a4` |
 | `0x800` | supported SPI flash table (JEDEC IDs, Winbond/GigaDevice) |
-| `0x9e4` | image table: 3 entries of type, offset, size, load address |
-| `0xb6c` | SHA-256 per image |
-| `0xe00` | RSA-3072 signature |
+| `0x9e8` | image count, then 24-byte entries from `0x9ec`: type, flag, 0, offset, size, load address |
+| `0xb7c` | SHA-256 of each image's data, every `0x48` bytes |
+| `0xe00` | signature length (`0x180`), RSA-3072 PSS signature by key 1 over `[0, 0xe00)` |
+| end of each image slot | `0x200` before the next 4 KiB boundary: length and PSS signature by key 2 over the slot |
 
 | # | Offset (CIX default) | Load | Contents |
 |---|---|---|---|
@@ -145,6 +150,14 @@ CIX 2026Q3 `Firmwares2/bootloader1.img` carries the same three images as
 `Firmwares/` (identical SHA-256), signed with the `fb3f60e4` chain instead.
 It may therefore start on the Orange Pi and retail MS-R1 boards; not tested.
 
+The private keys of the CIX default chain are public (`cixtech/edk2-non-osi`
+`94368c7c`, `Platform/CIX/Sky1/PackageTool/Keys`): `oem_privatekey.pem` is
+key 1 (`c6d0e93f`), `cix_privatekey.pem` key 2 (`5672dfd9`). A modified BL1
+re-signed with them has been reported booting on an Orion O6
+([Neol00/edk2-cix-unlocked#12](https://github.com/Neol00/edk2-cix-unlocked/issues/12));
+`scripts/open/cixfw.py bl1` verifies and re-signs the container. For the
+`fb3f60e4` chain no key is public.
+
 The SE firmware verifies a two-step chain (`Verify Cix ROTPK successful`,
 `Verify OEM ROTPK successful`). Orange Pi ships a different key, self-certified
 in both slots, and those boards boot it. Together with the strings
@@ -153,10 +166,9 @@ in both slots, and those boards boot it. Together with the strings
 ROTPK verification.` (BL2), this suggests that a chip with an empty OEM
 ROTPK hash in eFuse trusts the key embedded in the image, so a container
 signed with our own key would boot on unfused boards. The first check is in
-the mask ROM, so this cannot be confirmed from the binaries. The test is to
-re-sign an unmodified Orange Pi BL1 with a new key and boot it on a board
-that can be recovered with an SPI programmer. The CIX package tool does not
-build this container; a packer would have to be written.
+the mask ROM, so this cannot be confirmed from the binaries. The retail MS-R1
+does not start a BL1 of the CIX default chain, so at least those chips have
+a key fused.
 
 ### Builds per board
 

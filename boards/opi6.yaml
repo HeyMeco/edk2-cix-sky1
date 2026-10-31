@@ -28,3 +28,4 @@ acpi_parity:
           \_SB.PRC0, \_SB.PRC2, \_SB.PRC4]
 capsule: true                        # CIX signed capsule (.cap) for in-OS / ESRT updates
 trusted_key_cert: regenerate            # signed with the OEM key, as in the vendor image
+signing_chain: vendor                # BL1/FIP keys not public: only BL33 can be rebuilt

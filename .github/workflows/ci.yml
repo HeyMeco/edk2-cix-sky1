@@ -30,15 +30,20 @@ jobs:
         with:
           submodules: true
       - name: Script syntax
-        run: python3 -m py_compile scripts/*.py scripts/extract/*.py scripts/acpi/*.py
+        run: python3 -m py_compile scripts/*.py scripts/extract/*.py scripts/acpi/*.py scripts/open/*.py
+      - name: Open tools
+        run: python3 scripts/open/test_cixfw.py
       - name: Import manifest
         run: python3 scripts/imports.py --check
       - name: Patch queue applies
         run: |
           release=$(python3 -c 'import json; print(json.load(open("manifests/pins.json"))["bios_version"])')
-          for p in patches/$release/edk2-platforms/*.patch; do
-            git -C edk2-platforms apply --check --whitespace=nowarn "../$p" || exit 1
-            git -C edk2-platforms apply --whitespace=nowarn "../$p"
+          for sub in edk2 edk2-platforms arm-trusted-firmware optee_os; do
+            for p in patches/$release/$sub/*.patch; do
+              [ -e "$p" ] || continue
+              git -C $sub apply --check --whitespace=nowarn "../$p" || exit 1
+              git -C $sub apply --whitespace=nowarn "../$p"
+            done
           done
 
   build:
@@ -51,3 +56,17 @@ jobs:
     with:
       board: ${{ matrix.board }}
       version: ci-${{ github.run_number }}
+
+  # bootloader2 (TF-A BL31 + OP-TEE) from source, for the boards on the CIX
+  # signing chain (docs/open-firmware.md)
+  build-open:
+    needs: checks
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [orion-o6, orion-o6n]
+    uses: ./.github/workflows/build-board.yml
+    with:
+      board: ${{ matrix.board }}
+      version: ci-${{ github.run_number }}
+      open: true

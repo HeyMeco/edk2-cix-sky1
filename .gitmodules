@@ -10,3 +10,11 @@
 	path = edk2-non-osi
 	url = https://github.com/cixtech/cix_opensource__release__edk2-non-osi
 	branch = cix_p1_dev
+[submodule "arm-trusted-firmware"]
+	path = arm-trusted-firmware
+	url = https://github.com/cixtech/cix_opensource__arm-trusted-firmware
+	branch = cix_p1_k6.6_2025q3_tfa_open_dev
+[submodule "optee_os"]
+	path = optee_os
+	url = https://github.com/cixtech/cix_opensource__tee__op-tee
+	branch = cix_p1_k6.6_2025q3_tfa_open_dev

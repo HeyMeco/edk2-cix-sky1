@@ -1,0 +1,43 @@
+{
+  "_comment": "Private keys CIX published in cixtech/edk2-non-osi (Platform/CIX/Sky1/PackageTool/Keys). They sign the CIX default boot chain (signing_chain: cix): oem_privatekey is BL1 key 1 (modulus c6d0e93f), cix_privatekey is BL1 key 2 (5672dfd9) and the FIP root of trust (SPKI 33d47f74). Not secret; fetched and verified by scripts/open/trusted.py.",
+  "url": "https://github.com/cixtech/edk2-non-osi",
+  "commit": "94368c7c2f254528634fdb518e21545bf6c8f0b1",
+  "path": "Platform/CIX/Sky1/PackageTool/Keys",
+  "keys": [
+    {
+      "name": "cix_privatekey.pem",
+      "size": 2459,
+      "sha256": "0f09cb62ae4f6e407cf2d389e5e37065968ef7f7ce144f794398123dbdb37f3e"
+    },
+    {
+      "name": "oem_privatekey.pem",
+      "size": 2455,
+      "sha256": "675a9b4e5e02931bab05cb27f0c616c2ba4a03549dad424fd4cadfc1675e8d0d"
+    },
+    {
+      "name": "trusted_world_privatekey.pem",
+      "size": 2459,
+      "sha256": "01346dc66d6867058ccd5751bff9e70517b48a5a4f9b92d5e00e09189b77331d"
+    },
+    {
+      "name": "bl31_privatekey.pem",
+      "size": 2455,
+      "sha256": "48e057e53bddb9aca995c01cb932e371d991ba9257c0e539b3b8f435314fa045"
+    },
+    {
+      "name": "bl32_privatekey.pem",
+      "size": 2455,
+      "sha256": "a3c9e8a6614e1f8810433575a8063f1eb1f1d24d301c8f50a224b02356780072"
+    },
+    {
+      "name": "non_trusted_world_privatekey.pem",
+      "size": 2455,
+      "sha256": "ee67b84c5e156ae0f7bc21458a477eb093cf7c0c135e9d39e821627b8ec9338f"
+    },
+    {
+      "name": "bl33_privatekey.pem",
+      "size": 2455,
+      "sha256": "26dfdbba3f29b56e2fc51eb3ddd6c216b465dd15e189f7031cea28bbfc95256d"
+    }
+  ]
+}

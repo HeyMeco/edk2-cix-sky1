@@ -31,6 +31,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import ROOT, board, boards, die, git, host_arch, load_json, log, patch_dir, run, sha256  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / "open"))
+import cixfw  # noqa: E402
+import trusted  # noqa: E402
+
 PACKAGE_TOOL = ROOT / "edk2-non-osi/Platform/CIX/Sky1/PackageTool"
 PACKAGES_PATH = ["edk2-project", "edk2", "edk2-platforms", "edk2-non-osi", "edk2-platforms/Silicon/Intel"]
 IMAGE_TYPES = {1: "bootloader1", 2: "bootloader2", 3: "memory_config", 4: "pm_config", 6: "se_config",
@@ -186,7 +190,7 @@ def check_certificates(cfg, pr):
             die(f"{cfg['board']}: {crt} uses PSS salt length {salts}, expected 0x20")
 
 
-def package(cfg, fd, outdir):
+def package(cfg, fd, outdir, bootloader2=None):
     pkg = ROOT / cfg["package"]
     pr = outdir / "pr"
     shutil.rmtree(pr, ignore_errors=True)
@@ -211,9 +215,11 @@ def package(cfg, fd, outdir):
     for f in sorted((pkg / "Firmwares").glob("*")):
         if f.is_file() and not f.name.startswith("."):
             shutil.copyfile(f, fw / f.name)
+    if bootloader2:
+        shutil.copyfile(bootloader2, fw / "bootloader2.img")     # --open: BL31 + OP-TEE from source
 
     # 4. tools (host architecture, see CIX_TOOL_FIXES), keys and flash layouts
-    for tool in ("cert_uefi_create_rsa", "cix_package_tool", "fiptool", "cix_regen_trusted_key_cert"):
+    for tool in ("cert_uefi_create_rsa", "fiptool", "cix_regen_trusted_key_cert"):
         stage_cix_tool(tool, pr / tool)
     for k in (PACKAGE_TOOL / "Keys").glob("*.pem"):
         shutil.copyfile(k, pr / "Keys" / k.name)
@@ -246,11 +252,15 @@ def package(cfg, fd, outdir):
          "--nt-fw", nt_fw, "Firmwares/bootloader3.img"), cwd=pr, capture=True)
     check_certificates(cfg, pr)
 
-    # 6. SPI images
-    run(cix_tool("cix_package_tool", "-c", "spi_flash_config_all.json", "-o", "cix_flash_all.bin"), cwd=pr, capture=True)
-    run(cix_tool("cix_package_tool", "-c", "spi_flash_config_ota.json", "-O", "cix_flash_ota.bin"), cwd=pr, capture=True)
-    for f in ("cix_flash_all.bin", "cix_flash_ota.bin"):
-        shutil.copyfile(pr / f, outdir / f)
+    # 6. SPI images, with the open packer (scripts/open/cixfw.py; its output
+    #    is byte-identical to cix_package_tool)
+    for cfg_name, out, pack in (("spi_flash_config_all.json", "cix_flash_all.bin", cixfw.pack_all),
+                                ("spi_flash_config_ota.json", "cix_flash_ota.bin", cixfw.pack_ota)):
+        try:
+            img = pack(json.loads((pr / cfg_name).read_text()), pr)
+        except cixfw.PackError as e:
+            die(f"{cfg['board']}: {cfg_name}: {e}")
+        (outdir / out).write_bytes(img)
 
 
 CAPSULE_GUID = "351c9808-4b53-4363-9314-d339386e5685"   # CIX system firmware FMP
@@ -337,7 +347,7 @@ def check_nv_store(cfg, layout):
     die(f"{cfg['board']}: variable store {start:#x}-{end:#x} is not inside a reserved region of the flash layout")
 
 
-def write_manifest(cfg, outdir, target, version, date, layout, capsules=()):
+def write_manifest(cfg, outdir, target, version, date, layout, capsules=(), open_info=None):
     files = {}
     for f in ("cix_flash_all.bin", "cix_flash_ota.bin", "SKY1_BL33_UEFI.fd", *capsules):
         p = outdir / f
@@ -361,6 +371,8 @@ def write_manifest(cfg, outdir, target, version, date, layout, capsules=()):
         "staged_firmware": staged,
         "flash_layout": layout,
     }
+    if open_info:
+        m["open"] = open_info
     (outdir / "manifest.json").write_text(json.dumps(m, indent=2) + "\n")
     return m
 
@@ -392,6 +404,8 @@ status.
 
 def release_name(cfg, manifest):
     stem = f"{cfg['board']}_{manifest['version']}"
+    if manifest.get("open"):
+        stem += "_open"
     if manifest["target"] != "RELEASE":
         stem += f"_{manifest['target'].lower()}"
     return stem
@@ -450,6 +464,9 @@ def main():
     ap.add_argument("--skip-prepare", action="store_true")
     ap.add_argument("--extras", action="store_true",
                     help="also pack OTA image, capsules, FD and manifest into dist/extras/")
+    ap.add_argument("--open", action="store_true",
+                    help="build bootloader2 (TF-A BL31 + OP-TEE) from source; CIX-chain boards only "
+                         "(see docs/open-firmware.md); the image is named <board>_<version>_open.bin")
     a = ap.parse_args()
 
     all_boards = boards()
@@ -461,7 +478,8 @@ def main():
     if not names:
         ap.error("name at least one board, or use --all / --list")
     for n in names:
-        board(n)
+        if board(n).get("signing_chain") != "cix" and a.open:
+            die(f"--open: {n} is not on the CIX signing chain; its BL2 would reject a source-built bootloader2")
 
     if not a.skip_prepare:
         run([sys.executable, str(ROOT / "scripts/prepare.py")])
@@ -480,10 +498,14 @@ def main():
         shutil.rmtree(outdir, ignore_errors=True)
         outdir.mkdir(parents=True)
         fd = edk2_build(cfg, a.target, version, date, commit, a.jobs, outdir / "build.log")
-        package(cfg, fd, outdir)
+        bl2, open_info = (None, None)
+        if a.open:
+            log(f"{n}: building bootloader2 from source")
+            bl2, open_info = trusted.build_bootloader2(cfg, a.target, outdir / "open", a.jobs)
+        package(cfg, fd, outdir, bl2)
         layout = check_layout(cfg, outdir)
         capsules = make_capsules(cfg, outdir)
-        manifest = write_manifest(cfg, outdir, a.target, version, date, layout, capsules)
+        manifest = write_manifest(cfg, outdir, a.target, version, date, layout, capsules, open_info)
         log(f"{n}: cix_flash_all.bin {manifest['outputs']['cix_flash_all.bin']['sha256']}")
         write_release_binary(cfg, outdir, manifest)
         if a.extras:
