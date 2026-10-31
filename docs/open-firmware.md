@@ -440,8 +440,13 @@ the core and `pm_emu.py` models the SoC around it (I2C and PMICs, PLLs,
 mailboxes, interrupts, the SE handshake): CIX's image boots there to its
 idle task and answers SCMI on the AP's channels. `test_pm.py` compares an
 image against CIX's (register writes, I2C transfers, the answers to 185
-SCMI commands). The firmware itself is still CIX's binary; the plan is in the
-[README](../firmware/csupm/README.md).
+SCMI commands). The open firmware boots in the emulator and completes the
+SE handshake: CIX's power-on sequence, the interconnect counters, PVT
+sensors and mailboxes, then SCP-firmware v2.11.0 (submodule) with the SCMI
+base, power-domain, system-power and sensor protocols on CIX's channels
+(every answer on TF-A's channel matches CIX's). Clocks and performance
+(DVFS) are next; until then bootloader1 keeps CIX's binary. The plan is in
+the [README](../firmware/csupm/README.md).
 
 ## Roadmap
 
@@ -451,10 +456,11 @@ SCMI commands). The firmware itself is still CIX's binary; the plan is in the
    Then make it the default for the chain-A boards.
 2. Boot-test the open SE (UART5 log; `--vendor-se` to compare), then
    suspend/resume and the SFH.
-3. CSU_PM from source. The toolchain works (`make -C firmware/csupm
-   check`), CIX's image boots and answers SCMI in an emulator of the core
-   and the SoC around it, and `test_pm.py` compares against it; next is
-   the firmware itself ([plan](../firmware/csupm/README.md#plan)).
+3. CSU_PM from source. CIX's image boots and answers SCMI in an emulator
+   of the core and the SoC around it, `test_pm.py` compares against it,
+   and the open firmware runs there with SCMI base, power domains, system
+   power and sensors; next are the clock tree and DVFS
+   ([plan](../firmware/csupm/README.md#plan)).
 
 ## Debugging
 

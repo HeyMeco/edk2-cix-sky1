@@ -5,9 +5,9 @@ LX7 core that runs from PM SRAM once the SE has loaded and verified it
 (bootloader1 image `pm`). It owns DVFS and the OPP tables, PMIC and EDP
 limits, PLLs and the clock tree, power domains, thermal and fan control,
 DDR frequency changes, suspend/resume and the SCMI channels the AP talks
-to. This directory will rebuild it from source; for now it holds the
-toolchain, and `scripts/open` has the tools to decode CIX's image, run it on
-a model of the SoC and compare ours against it.
+to. This directory rebuilds it from source, a part at a time;
+`scripts/open` has the tools to decode CIX's image, run it on a model of
+the SoC and compare ours against it.
 
 ## Reference material
 
@@ -140,49 +140,77 @@ python3 scripts/open/test_pm.py OURS.elf --scmi        # ours against it
 ## Firmware
 
 Built in the container with `make` (`make check` also runs the
-instruction-set check on the image):
+instruction-set check on the image); SCP-firmware is the submodule
+`SCP-firmware` (v2.11.0):
 
 ```sh
+git submodule update --init firmware/csupm/SCP-firmware
 make -C firmware/csupm O=/tmp/csupm all check
 ```
 
-* [`pm.ld`](pm.ld): CIX's memory map (IRAM `0x20000000`-`0x20030000`,
-  DRAM0 `0x20040000`-`0x20050000`, DRAM1 `0x20080000`-`0x200be700`, the
-  stack at its top; above it the eFuse copy, scratch and BIOS
-  configuration areas that other agents use), VECBASE `0x20000400`.
-* [`arch/vectors.S`](arch/vectors.S): reset, the register-window vectors
-  and the exception vectors; start-up enables coprocessor 0, clears .bss
-  (the SE does not) and calls `main`.
-* [`src/main.c`](src/main.c): the power-on sequence (CIX's
-  `ss_por_enter`) as far as it goes, the SE handshake, then idle;
-  [`src/lcru.c`](src/lcru.c) the core's clock and reset block and the
-  local watchdog, [`src/uart.c`](src/uart.c) the debug UART,
-  [`src/i2c.c`](src/i2c.c) the Cadence I2C controllers,
-  [`src/pmic.c`](src/pmic.c) the PMICs: the board's layout found by
-  probing as CIX does (CIX's eight layouts of which buck feeds which EDP
-  domain), each rail at its boot voltage.
-* `csupm.xbin` is the bootloader1 image ("pm"):
-  [`scripts/open/xbin.py`](../../scripts/open/xbin.py) writes CIX's XBIN
-  format (header, one entry per program header, data), checked by
-  rebuilding the images in both vendor bootloader1 files byte for byte.
+What runs, in CIX's order:
+
+1. Power-on (CIX's `ss_por_enter`, [`src/main.c`](src/main.c)): core
+   clock, AxPROT, local watchdog off, mailbox reset, debug UART, the I2C
+   controllers, the PMICs ([`src/pmic.c`](src/pmic.c): the board found by
+   probing as CIX does, each EDP rail at its boot voltage), then `0x5c5a`
+   to the SE and a wait for its `0x55ca`.
+2. Init (`ss_init_enter`): the interconnect counters stopped and cleared
+   ([`src/pmu.c`](src/pmu.c): NI-700 hubs, CI-700 DTC and XP watchpoints,
+   DFD trace, AMU, MPMM gears; static layouts from CIX's topology tables).
+3. Run (`ss_run_enter`): the counters again, the PVT sensors
+   ([`src/pvt.c`](src/pvt.c): eFuse trims, weights, thresholds), the ten
+   mailboxes cleared and routed ([`src/mbox.c`](src/mbox.c)).
+4. SCP-firmware's modules ([`scp/`](scp)): initialised, bound and
+   started, then `0x5a5c` tells the SE to start the AP, and the PM serves
+   interrupts and events, sleeping in WAITI.
+
+SCP-firmware is built as its CMake would build it (the module index and
+list are generated from `SCP_MODULES` in the Makefile) with
+`BUILD_HAS_SUB_SYSTEM_MODE`, so `fwk_arch_init` returns once the modules
+have started. Interrupt vectors ([`arch/vectors.S`](arch/vectors.S)) only
+mask a pending line and note it; [`scp/src/arch_interrupt.c`](scp/src/arch_interrupt.c)
+runs the handlers from the loop (lines 32 and up exist only there, for
+drivers that hand an interrupt on). Modules, upstream and ours:
+
+| Module | From | What |
+|---|---|---|
+| `transport`, `scmi` | upstream | SCMI over the mailboxes' data words (TF-A's `mailbox_mem_t`) |
+| `cix_mbox` | ours | the mailboxes' doorbells under `transport` (CIX's `ipc_arbiter` merges both) |
+| `power_domain`, `scmi_power_domain`, `scmi_system_power` | upstream | ISP0, GPUTOP under SYSTOP |
+| `rcsu` | ours, CIX's `extmodules/rcsu` | the RCSU power controls (SRAM repair, power bits) |
+| `timer` | upstream | alarms |
+| `xt_timer` | ours | CCOUNT extended to 64 bits, CCOMPARE2 |
+| `sensor`, `scmi_sensor` | upstream | 20 temperatures |
+| `soc_sensor` | ours, CIX's changed `reg_sensor` | the PVT sensors and the board's temperatures |
+| `resource_perms` | upstream | which agent may use which protocol |
+
+The configurations in [`scp/config`](scp/config) are CIX's, read from its
+image with [`scripts/open/dwarf_dump.py`](../../scripts/open/dwarf_dump.py)
+(a variable as a C initializer, from the DWARF; values from a RAM image
+saved by `pm_emu` for tables CIX builds at run time). Where CIX's
+configuration is odd it is kept and says so: its power-domain table makes
+ISP0 the parent of ISP0 and GPUTOP, so CIX's firmware answers DENIED to
+powering either on, and so does ours.
+
+[`lib`](lib) is the C library the firmware and SCP-firmware need (string
+functions, a heap, `vsnprintf`, 64-bit division: the toolchain's libgcc is
+built for the other endianness). `csupm.xbin` is the bootloader1 image
+("pm"): [`scripts/open/xbin.py`](../../scripts/open/xbin.py) writes CIX's
+XBIN format (header, one entry per program header, data), checked by
+rebuilding the images in both vendor bootloader1 files byte for byte.
 
 Against CIX's image in `test_pm.py` (CIX's boot: 1329 registers, 8 pages
 of shared memory, 33 I2C transfers, then 185 SCMI answers): it boots and
-completes the handshake, 30 of the 33 I2C transfers match in order (the
-other three are DVFS changes later in boot), and 5 registers match so
-far. Next by size are the interconnect PMU set-up behind the bandwidth
-monitoring (`perf_stream_init`: 755 registers of the NI-700 instances at
-`0x4d000000` and the CI-700 nodes at `0x50000000`-`0x53ffffff`), the clock
-tree and the DVFS levels. To read CIX's code,
-[`scripts/open/xtensa_dis.py`](../../scripts/open/xtensa_dis.py) gives
-objdump's listing with the FLIX bundles and the instructions GNU's
-description lacks.
-
-The rest builds on SCP-firmware v2.11.0, the upstream
-release closest to CIX's framework and modules (their DWARF has the
-fewest functions upstream lacks and upstream has the fewest CIX lacks,
-of v2.9 to v2.14); CIX changed `fwk_core.c` to run inside FreeRTOS and
-added `ipc_arbiter` and `iotunnel` for the mailbox transport.
+completes the handshake; of the 1425 registers either image writes, 1159
+get the same values in the same order (the 266 others are mostly the
+clock tree and PLLs, the DVFS levels, the RCSU locks and the RTT window); 30 of the 33 I2C transfers match in order (the other three are
+DVFS changes); 59 of the SCMI answers match: base, power domains, system
+power and sensors on every channel, so every answer on TF-A's. What is
+left of SCMI is performance (8 domains) and clocks (273), both built on
+CIX's clock tree (`clk_tree.c`, `pll_ctrl.c`, `div_ctrl.c`,
+`pll_policy.c`, `clk_nodes.c`), which comes next, then DVFS (`dvfs`,
+`psu`, `pmic`, `sky1soc_perf`, `locked_perf`, `scmi_perf`).
 
 ### What CIX's image does before it idles
 
@@ -209,8 +237,12 @@ in order; the shared-memory ones counted by 4 KiB page):
 | Differential test harness (`test_pm.py`: register writes, I2C, SCMI answers) | done; suspend/resume to add |
 | Start-up, vectors, libc, XBIN image; stage 1 boots and does the SE handshake | done |
 | Power-on: clock and reset block, watchdog, UART, I2C, PMICs (30 of 33 boot I2C transfers) | done |
-| Interrupts (aggregator, mailboxes), timer, idle with WAITI | to do |
-| SCP-firmware framework and modules (upstream plus CIX's changes), CIX modules and configuration | to do |
+| Interconnect counters, PVT sensors, mailboxes | done |
+| Interrupts (aggregator, mailboxes), timer, idle with WAITI | done |
+| SCP-firmware framework and modules: transport, SCMI base, power domains, system power, sensors, permissions | done |
+| Clock tree and PLLs, SCMI clocks | to do |
+| DVFS: PMIC, PSU, DVFS, performance plugins, SCMI perf | to do |
+| System power sequence (shutdown, reset, suspend), RTT, logs, PCC tables | to do |
 | CIX `Source/common` and `Source/projects/sky1`, without the debug CLI | to do |
 | Our image passes `test_pm.py` | to do |
 | `build.sh --open` puts it in bootloader1 | to do |
