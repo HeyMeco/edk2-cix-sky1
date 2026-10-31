@@ -41,7 +41,6 @@
 
 [Guids]
   gEfiEventReadyToBootGuid
-  gRadxaSetupVariableGuid
 
 [Pcd]
   gRadxaTokenSpaceGuid.PcdBoardId

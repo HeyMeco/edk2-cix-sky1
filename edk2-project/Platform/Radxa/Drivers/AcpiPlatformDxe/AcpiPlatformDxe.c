@@ -13,7 +13,6 @@
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiRuntimeServicesTableLib.h>
 #include <Protocol/PlatformConfigParamsManageProtocol.h>
-#include <RadxaSetupVar.h>
 #include <PlatformInfoTypes.h>
 
 EFI_GUID  pAcpiPlatformTableStorageGuid = {
@@ -31,22 +30,8 @@ AcpiHookFunctionOnReadyToBoot (
   CIX_PLATFORM_CONFIG_PARAMS_MANAGE_PROTOCOL  *PlatformConfigManage;
   CHAR8               *SsdtTableId = "ORIONO6";
   UINT8               BoardId;
-  RADXA_SETUP_DATA    RadxaSetupVar;
-  UINTN               VarSize;
 
   DEBUG ((DEBUG_INFO, "Enter %a\n", __func__));
-
-  VarSize = sizeof (RADXA_SETUP_DATA);
-  Status = gRT->GetVariable (
-                  RADXA_SETUP_VAR,
-                  &gRadxaSetupVariableGuid,
-                  NULL,
-                  &VarSize,
-                  &RadxaSetupVar
-                  );
-  if (EFI_ERROR (Status)) {
-    DEBUG ((DEBUG_ERROR, "%a: EfiGetVariable failed for gRadxaSetupVariableGuid - %r\n", __FUNCTION__, Status));
-  }
 
   Status = gBS->LocateProtocol (&gCixPlatformConfigParamsManageProtocolGuid, NULL, (VOID **)&PlatformConfigManage);
   if (EFI_ERROR (Status)) {
@@ -62,11 +47,6 @@ AcpiHookFunctionOnReadyToBoot (
         DEBUG ((DEBUG_ERROR, "%a: Update ECFM failed, Status=%r\n", __FUNCTION__, Status));
       }
       break;
-  }
-
-  Status = UpdateNameAslCode (SIGNATURE_32 ('S','C','M','S'), &(RadxaSetupVar.EnableAcpiScmi), sizeof (RadxaSetupVar.EnableAcpiScmi));
-  if (EFI_ERROR (Status)) {
-    DEBUG ((DEBUG_ERROR, "%a: Update SCMS failed, Status=%r\n", __FUNCTION__, Status));
   }
 
   //

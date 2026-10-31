@@ -1,0 +1,101 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mecid <mecidi.cc@gmail.com>
+Date: Sat, 31 Oct 2026 11:13:28 +0100
+Subject: [PATCH] Platform/CIX/Sky1: SetupManagerDxe: UFS power mode option
+
+Boards with a switchable UFS module socket (BOARD_UFS_POWER in
+VFRPP_FLAGS) get "UFS Power Mode" on the Platform page: Auto (power the
+socket if a module is detected at boot), Always On, Always Off.  The
+value is appended to PLATFORM_SETUP_DATA as UfsPowerMode; setup variables
+from builds without it keep their settings and read Auto.  The board's
+platform code acts on it (Orion O6N: Radxa's former UFS power option).
+---
+ .../PlatformSetupVariableInitDxe.c                     | 10 +++++++---
+ .../Drivers/SetupManagerDxe/PlatformMenu/Platform.hfr  |  9 +++++++++
+ .../Drivers/SetupManagerDxe/PlatformMenu/Platform.uni  |  8 ++++++++
+ Platform/CIX/Sky1/Include/PlatformSetupVar.h           |  9 +++++++++
+ 4 files changed, 33 insertions(+), 3 deletions(-)
+
+diff --git a/Platform/CIX/Sky1/Drivers/PlatformSetupVariableInitDxe/PlatformSetupVariableInitDxe.c b/Platform/CIX/Sky1/Drivers/PlatformSetupVariableInitDxe/PlatformSetupVariableInitDxe.c
+index 5a92e1ed..43de0df3 100644
+--- a/Platform/CIX/Sky1/Drivers/PlatformSetupVariableInitDxe/PlatformSetupVariableInitDxe.c
++++ b/Platform/CIX/Sky1/Drivers/PlatformSetupVariableInitDxe/PlatformSetupVariableInitDxe.c
+@@ -562,10 +562,14 @@ PlatformSetupVariableInit (
+     return Status;
+   }
+ 
+-  if (!EFI_ERROR (Status) && (VarSize == OFFSET_OF (PLATFORM_SETUP_DATA, PcieBarWindow))) {
++  if (!EFI_ERROR (Status) &&
++      ((VarSize == OFFSET_OF (PLATFORM_SETUP_DATA, PcieBarWindow)) ||
++       (VarSize == OFFSET_OF (PLATFORM_SETUP_DATA, UfsPowerMode))))
++  {
+     //
+-    // Written by a build that predates the PCIe window option: same layout,
+-    // without the appended field.  Keep the settings, the option is Auto.
++    // Written by a build that predates an appended option (PCIe window, UFS
++    // power): same layout, without the later fields.  Keep the settings;
++    // the new options are 0, i.e. Auto.
+     //
+     ZeroMem ((UINT8 *)&PlatformSetupVar + VarSize, sizeof (PlatformSetupVar) - VarSize);
+   } else {
+diff --git a/Platform/CIX/Sky1/Drivers/SetupManagerDxe/PlatformMenu/Platform.hfr b/Platform/CIX/Sky1/Drivers/SetupManagerDxe/PlatformMenu/Platform.hfr
+index 20f45ebf..642a130c 100644
+--- a/Platform/CIX/Sky1/Drivers/SetupManagerDxe/PlatformMenu/Platform.hfr
++++ b/Platform/CIX/Sky1/Drivers/SetupManagerDxe/PlatformMenu/Platform.hfr
+@@ -110,6 +110,15 @@ endif;
+         option text = STRING_TOKEN(STR_PERF_MODE), value = 1, flags = RESET_REQUIRED;
+       endoneof;
+ #endif
++#ifdef BOARD_UFS_POWER
++      oneof varid   = PlatformSetupVar.UfsPowerMode,
++        prompt      = STRING_TOKEN(STR_UFS_POWER_MODE_PROMPT),
++        help        = STRING_TOKEN(STR_UFS_POWER_MODE_HELP),
++        option text = STRING_TOKEN(STR_UFS_POWER_AUTO),       value = 0, flags = DEFAULT | RESET_REQUIRED;
++        option text = STRING_TOKEN(STR_UFS_POWER_ALWAYS_ON),  value = 1, flags = RESET_REQUIRED;
++        option text = STRING_TOKEN(STR_UFS_POWER_ALWAYS_OFF), value = 2, flags = RESET_REQUIRED;
++      endoneof;
++#endif
+ #ifdef DEBUG_MODE_SUPPORT
+       oneof varid   = PlatformSetupVar.DebugMode,
+         prompt      = STRING_TOKEN(STR_DEBUG_MODE_PROMPT),
+diff --git a/Platform/CIX/Sky1/Drivers/SetupManagerDxe/PlatformMenu/Platform.uni b/Platform/CIX/Sky1/Drivers/SetupManagerDxe/PlatformMenu/Platform.uni
+index 5edd7eb0..46b78ce7 100644
+--- a/Platform/CIX/Sky1/Drivers/SetupManagerDxe/PlatformMenu/Platform.uni
++++ b/Platform/CIX/Sky1/Drivers/SetupManagerDxe/PlatformMenu/Platform.uni
+@@ -136,6 +136,14 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
+ #string STR_EC_FAN_MODE_PROMPT                           #language en-US "EC Fan Mode"
+ #string STR_EC_FAN_MODE_PROMPT_HELP                      #language en-US "Select the default EC fan mode."
+ #string STR_AUTO_MODE                                    #language en-US "Auto Mode"
++#string STR_UFS_POWER_MODE_PROMPT                        #language en-US "UFS Power Mode"
++#string STR_UFS_POWER_MODE_HELP                          #language en-US "Power of the UFS module socket.\n\n"
++                                                                         "<Auto Mode> powers it if a module is detected during boot.\n\n"
++                                                                         "<Always On> keeps it powered; without a module the OS shows an empty block device.\n\n"
++                                                                         "<Always Off> keeps it unpowered."
++#string STR_UFS_POWER_AUTO                               #language en-US "Auto Mode"
++#string STR_UFS_POWER_ALWAYS_ON                          #language en-US "Always On"
++#string STR_UFS_POWER_ALWAYS_OFF                         #language en-US "Always Off"
+ #string STR_PERF_MODE                                    #language en-US "Performance Mode"
+ 
+ #string STR_DEBUG_MODE_PROMPT                            #language en-US "Debug Mode"
+diff --git a/Platform/CIX/Sky1/Include/PlatformSetupVar.h b/Platform/CIX/Sky1/Include/PlatformSetupVar.h
+index 28b10f19..8453bb2c 100644
+--- a/Platform/CIX/Sky1/Include/PlatformSetupVar.h
++++ b/Platform/CIX/Sky1/Include/PlatformSetupVar.h
+@@ -140,8 +140,17 @@ typedef struct {
+   // Keep last: variables written by older builds stop before it.
+   //
+   UINT8     PcieBarWindow;
++  //
++  // Power of a UFS module socket (boards with BOARD_UFS_POWER):
++  // PLATFORM_SETUP_UFS_POWER_*.  Appended like PcieBarWindow.
++  //
++  UINT8     UfsPowerMode;
+ } PLATFORM_SETUP_DATA;
+ 
++#define PLATFORM_SETUP_UFS_POWER_AUTO  0    // on if a module is detected at boot
++#define PLATFORM_SETUP_UFS_POWER_ON    1
++#define PLATFORM_SETUP_UFS_POWER_OFF   2
++
+ typedef struct {
+   UINT8    SystemTableSelect;
+ } SYSTEM_TABLE;

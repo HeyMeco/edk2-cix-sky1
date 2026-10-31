@@ -54,6 +54,7 @@
   DEFINE BOARD_LOGO_DXE             = Platform/Radxa/Drivers/Logo/LogoDxe.inf
   DEFINE LINUX_ACPI_CONFIG_OVERRIDE = TRUE
   DEFINE PCIE_RP0_X4_SLOT           = TRUE     # x8 root port wired to an x4 M.2 slot
+  DEFINE BOARD_UFS_POWER            = TRUE     # UFS socket power: detect GPIO 27, switch GPIO 14
   DEFINE BOARD_EC_LIB               = Platform/CIX/Library/EcLibNull/EcLibNull.inf
   DEFINE BOARD_FDF_DXE              = $(BOARD_DIR)/BoardDxe.fdf.inc
 ##################################################
@@ -221,7 +222,7 @@
   gCixPlatformTokenSpaceGuid.PcdAcpiPrefPmProf|0x01  # Desktop
   gCixTokenSpaceGuid.PcdAcpiCsiDmaEnable|FALSE
 
-  gRadxaTokenSpaceGuid.PcdUFSPowerMode|0x00
+  gRadxaTokenSpaceGuid.PcdUFSPowerMode|0x00   # not 0xFF: ACPI describes the UFS 5 V regulator
   gRadxaTokenSpaceGuid.PcdUFSPowerDetectGPIO|27
   gRadxaTokenSpaceGuid.PcdUFSPowerControlGPIO|14
 

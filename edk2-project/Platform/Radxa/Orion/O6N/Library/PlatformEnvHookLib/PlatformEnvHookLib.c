@@ -18,7 +18,6 @@
 #include <Library/CixPostCodeLib.h>
 #include <Guid/NetworkStackSetup.h>
 #include <PlatformSetupVar.h>
-#include <RadxaSetupVar.h>
 
 // {3F7B73C7-FB70-4e91-86E7-34EAD76AC74D}
 EFI_GUID  gEfiFarmEnableFlagGuid = {
@@ -332,28 +331,32 @@ SetUFSPower (
   IN VOID       *Context
   )
 {
-  EFI_STATUS          Status = EFI_SUCCESS;
-  UINTN               VarSize;
-  RADXA_SETUP_DATA    RadxaSetupVar;
-  IO_INOUT_VALUE_SEL  PinVal = INOUT_VALUE_DEFAULT;
-  UINT8               DetectionPin, PowerPin;
+  EFI_STATUS           Status = EFI_SUCCESS;
+  UINTN                VarSize;
+  PLATFORM_SETUP_DATA  PlatformSetupVar;
+  UINT8                UfsPowerMode;
+  IO_INOUT_VALUE_SEL   PinVal = INOUT_VALUE_DEFAULT;
+  UINT8                DetectionPin, PowerPin;
 
-  VarSize = sizeof (RADXA_SETUP_DATA);
-  Status = gRT->GetVariable (
-                  RADXA_SETUP_VAR,
-                  &gRadxaSetupVariableGuid,
-                  NULL,
-                  &VarSize,
-                  &RadxaSetupVar
-                  );
-  if (EFI_ERROR (Status)) {
-    //
-    // The shared CIX setup interface has no UFS option and nothing writes
-    // RadxaSetupVar any more: use the board default (Auto unless changed).
-    //
-    RadxaSetupVar.UFSPowerMode = FixedPcdGet8 (PcdUFSPowerMode);
+  //
+  // "UFS Power Mode" in setup (Platform page).  Before the setup variable
+  // exists (first boot), or when an older build wrote it without the
+  // field, the mode is Auto.
+  //
+  UfsPowerMode = PLATFORM_SETUP_UFS_POWER_AUTO;
+  VarSize      = sizeof (PLATFORM_SETUP_DATA);
+  Status       = gRT->GetVariable (
+                        PLATFORM_SETUP_VAR,
+                        &gPlatformSetupVariableGuid,
+                        NULL,
+                        &VarSize,
+                        &PlatformSetupVar
+                        );
+  if (!EFI_ERROR (Status) && (VarSize > OFFSET_OF (PLATFORM_SETUP_DATA, UfsPowerMode))) {
+    UfsPowerMode = PlatformSetupVar.UfsPowerMode;
   }
-  DEBUG ((DEBUG_INFO, "%a: EfiGetVariable Success for gRadxaSetupVariableGuid - %r\n", __FUNCTION__, Status));
+
+  DEBUG ((DEBUG_INFO, "%a: UFS power mode %u\n", __FUNCTION__, UfsPowerMode));
 
   DetectionPin = FixedPcdGet8 (PcdUFSPowerDetectGPIO);
   PowerPin     = FixedPcdGet8 (PcdUFSPowerControlGPIO);
@@ -366,8 +369,8 @@ SetUFSPower (
   }
   DEBUG ((DEBUG_INFO, "%a: DetectionPin = %u, PowerPin = %u\n", __FUNCTION__, DetectionPin, PowerPin));
 
-  switch (RadxaSetupVar.UFSPowerMode) {
-    case RADXA_SETUP_UFS_POWER_AUTO:
+  switch (UfsPowerMode) {
+    case PLATFORM_SETUP_UFS_POWER_AUTO:
       DEBUG ((DEBUG_INFO, "%a: UFS Auto Mode\n", __FUNCTION__));
       Status = GpioGet(DetectionPin, &PinVal);
       if (EFI_ERROR (Status)) {
@@ -389,14 +392,14 @@ SetUFSPower (
         }
       }
       break;
-    case RADXA_SETUP_UFS_POWER_ON:
+    case PLATFORM_SETUP_UFS_POWER_ON:
       DEBUG ((DEBUG_INFO, "%a: UFS Always On\n", __FUNCTION__));
       Status = GpioConfig (PowerPin, OUTPUT, INOUT_HIGH, INTERRUPT_DISABLE, INTERRUPT_TYPE_DEFAULT);
       if (EFI_ERROR (Status)) {
         DEBUG ((DEBUG_ERROR, "%a: Failed to set UFS power pin - %r\n", __FUNCTION__, Status));
       }
       break;
-    case RADXA_SETUP_UFS_POWER_OFF:
+    case PLATFORM_SETUP_UFS_POWER_OFF:
       DEBUG ((DEBUG_INFO, "%a: UFS Always Off\n", __FUNCTION__));
       Status = GpioConfig (PowerPin, OUTPUT, INOUT_LOW, INTERRUPT_DISABLE, INTERRUPT_TYPE_DEFAULT);
       if (EFI_ERROR (Status)) {
@@ -561,6 +564,16 @@ CixFwBootPerfInit (
   return Status;
 }
 
+STATIC
+EFI_STATUS
+InitUfsPower (
+  IN OUT ENV_HOOK_PARAMS_DATA_BLOCK  *ConfigData
+  )
+{
+  SetUFSPower (NULL, ConfigData);
+  return EFI_SUCCESS;
+}
+
 STATIC PLATFORM_ENV_INIT_TABLE  mPlatformEnvInitTable[] = {
   { NULL,                        NULL,                 InitPinmux              },
   { NULL,                        NULL,                 InitGpio                },
@@ -568,7 +581,7 @@ STATIC PLATFORM_ENV_INIT_TABLE  mPlatformEnvInitTable[] = {
   { NULL,                        NULL,                 WakeupSourceInit        },
   { NULL,                        NULL,                 OnboardDevicePowerOff   },
   { NULL,                        NULL,                 RtcWakupEnable          },
-  { &gRadxaSetupVariableGuid,    SetUFSPower,          NULL                    },
+  { NULL,                        NULL,                 InitUfsPower            },
   { &gEfiI2cMasterProtocolGuid,  InstallRtcProtocol,   NULL                    },
   { NULL,                        NULL,                 CixFwBootPerfInit               },
   // add platform initialization routines on ENV phase BEFORE this line, and they were invoked from top to down.
