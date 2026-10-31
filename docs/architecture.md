@@ -251,11 +251,19 @@ git checkout --detach <pinned-commit>
 
    | Board | `trusted_key_no.crt` |
    |---|---|
-   | O6, O6N, OPI6 Plus, MS-R1 | pregenerated, CIX root key `1e0b4d…` (`radxa/edk2-non-osi` `certs/`), as in Radxa's releases and the Plus and MS-R1 vendor images (Minisforum's own `certs/` copy, root key `898ddc…`, pairs with the BL2 in its public tree, not with retail boards) |
-   | OPI6 | regenerated from the OEM key pair (`cix_regen_trusted_key_cert`), as in the vendor image |
+   | O6, O6N, OPI6 Plus, MS-R1 | pregenerated `2a25ee2b…` (`radxa/edk2-non-osi` `certs/`), as in Radxa's releases and the Plus and MS-R1 vendor images: self-signed by the chain-B key (SPKI `0d999213…`, modulus `fb3f60e4…`, the key in the chain-B BL1 headers) |
+   | OPI6 | regenerated from the OEM key pair (`cix_regen_trusted_key_cert`), as in the vendor image: self-signed by the OEM key (SPKI `27d49f04…`) |
 
-   All of them certify the default CIX OEM key, which signs the UEFI
-   certificates; the build checks that every certificate uses a 32-byte salt.
+   Minisforum's own `certs/` copy (`6a940e72…`) is signed by `cix_privatekey`
+   (SPKI `33d47f74…`, the chain-A FIP root); it pairs with the BL2 in its
+   public tree, not with retail boards.
+
+   All of them carry the default CIX OEM key (`oem_publickey.pem`, SPKI
+   `27d49f04…`) as the non-trusted-world key (extension
+   `1.3.6.1.4.1.4128.2100.303`) and no trusted-world key, so they authorise
+   BL33 only. The OEM private key is public, so the UEFI certificates and
+   BL33 can be signed by anyone; BL31/BL32 cannot. The build checks that
+   every certificate uses a 32-byte salt.
 6. Layout check: every firmware-header entry is in the layout, fits its region,
    holds the staged file, and no regions overlap.
 7. `manifest.json` (submodule SHAs, patches, tool versions, hashes, layout).
