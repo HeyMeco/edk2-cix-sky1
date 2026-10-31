@@ -15,7 +15,7 @@ mask ROM ─▶ SE firmware ─▶ CSU_PM ─▶ TF-A BL2 ─▶ BL31 + OP-TEE (
 | Stage | Source | Status here |
 |---|---|---|
 | SE firmware (Cortex-M33: SoC bring-up, eFuse, image checks, AP services) | [firmware/se](../firmware/se); CIX's DDR driver relinked from their debug build | **built from source** (`--open`; `--vendor-se` keeps CIX's); same register writes and memory contents as CIX's in [test_se.py](../scripts/open/test_se.py) ([below](#se-firmware)) |
-| CSU_PM (Xtensa, Arm SCP-firmware based) | framework only | binary |
+| CSU_PM (Xtensa LX7, Arm SCP-firmware based) | SCP-firmware framework; toolchain in [firmware/csupm](../firmware/csupm) | binary (toolchain for its core works, `make -C firmware/csupm check`) |
 | TF-A BL2 | `arm-trusted-firmware` + patch 0002 | **built from source** (`--open`, chain A), re-signed into bootloader1 |
 | TF-A BL31 | `arm-trusted-firmware` + patches 0004-0007 | **built from source** (`--open`) |
 | OP-TEE BL32 | `optee_os` + patch queue | **built from source** (`--open`) |
@@ -427,11 +427,19 @@ SE has not been boot-tested on hardware.
 
 ### CSU_PM
 
-CSU_PM (`csupm_sky1`, 00.12.001, in the same repository) is Xtensa LX7
-(`cix_lx7`, Cadence XtensaTools 14.10 clang): FreeRTOS, Arm SCP-firmware
-(public) and about 130 KB of CIX code (DPM, clock tree, CLI,
-CI-700/NI-700, PMIC, I2C, sensors). Building it needs an Xtensa compiler
-for that core configuration.
+CSU_PM (`csupm_sky1`, 00.12.001, in the same repository, with full DWARF)
+is Xtensa LX7 (core `pm_core_v1`, Cadence XtensaTools 14.10 clang):
+FreeRTOS, Arm SCP-firmware (public) and about 130 KB of CIX code (DPM,
+clock tree, CLI, CI-700/NI-700, PMIC, I2C, sensors).
+[firmware/csupm](../firmware/csupm) has the toolchain: the core has no
+user TIE, so Espressif's GCC builds for it with a core description made
+from the instruction set CIX's own build uses (`xtensa_core.py`), and
+`xtensa_isa.py check` keeps every build inside that set.
+`xtensa_flix.py` decodes the core's FLIX bundles and `xt_emu.py` runs
+CIX's image from reset into its drivers, where it stops for lack of a
+SoC model (it polls an I2C controller that nothing answers). The
+firmware itself is still CIX's binary; the plan is in the
+[README](../firmware/csupm/README.md).
 
 ## Roadmap
 
@@ -441,7 +449,10 @@ for that core configuration.
    Then make it the default for the chain-A boards.
 2. Boot-test the open SE (UART5 log; `--vendor-se` to compare), then
    suspend/resume and the SFH.
-3. CSU_PM from source, once an Xtensa toolchain for its core works.
+3. CSU_PM from source. The toolchain works (`make -C firmware/csupm
+   check`), the FLIX formats are decoded and an emulator runs CIX's
+   image into its drivers; next is the SoC model around it, then the
+   firmware ([plan](../firmware/csupm/README.md#plan)).
 
 ## Debugging
 
