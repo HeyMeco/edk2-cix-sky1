@@ -20,6 +20,19 @@ pmic (O6N): the bus of big cluster 0's rail hangs while the OS asks for the
 sensor (MS-R1): the bus of the board's TMP75s hangs; voltage changes go on
   (their worker and bus are not the sensors') and so does the DPM.
 
+raise: a frequency never goes up on a voltage that failed.  Big cluster 0
+  asked for its highest level by message (dvfs) and by its fast channel
+  (sky1soc_perf) while its PMIC's bus fails: NACKs; loses the voltage
+  writes (they reach the regulator, the transfer fails: the CIX driver's
+  "failed, read back as set"); dies after the page is selected.  On the
+  MP5475 (O6N), the MP2845 (Orange Pi 6, bucks shared) and an AU4683 (the
+  Orange Pi 6's configuration with AU4683s, modelled here).  Its PLL is
+  not written and keeps its registers; once the bus is healthy the same
+  request writes the voltage, then the PLL.  Then lowers whose voltage
+  writes were lost (the rail lower than the firmware was told), each
+  followed by a raise of the cluster or, on a shared buck, of big cluster
+  1: no PLL write before a voltage write.
+
 The stacks' high-water marks are checked at the end of each (the tasks'
 stacks are filled with 0xa5 when created).  A check that fails prints
 FAIL; the exit status is the number of them.
@@ -34,7 +47,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pm_emu  # noqa: E402
 import test_pm  # noqa: E402
 
-GPU, LITTLE, BIG0 = 0, 2, 3            # SCMI performance domains (test_pm.PERF_SET_DOMAINS)
+GPU, LITTLE, BIG0, BIG1 = 0, 2, 3, 4    # SCMI performance domains (test_pm.PERF_SET_DOMAINS)
 SMT_STATUS, SMT_LEN, SMT_PAYLOAD = pm_emu.SMT_STATUS, pm_emu.SMT_LEN, pm_emu.SMT_PAYLOAD
 STACK_MARGIN = 256                     # bytes a stack must have left
 
@@ -299,6 +312,240 @@ def sensor_scenario(elf):
     stacks(cpu, "sensor")
 
 
+# --- raises whose voltage fails ------------------------------------------------------
+#
+# A frequency must never go up on a rail whose voltage write failed.  The
+# requests go two ways: an SCMI PERFORMANCE_LEVEL_SET message (scmi_perf ->
+# dvfs: voltage, then clock) and the OS's fast channel (scmi_perf's pass ->
+# sky1soc_perf's queue, which drives the CPU clusters and the DSU itself).
+# What is checked is the clock generator: the writes a healthy raise of the
+# cluster makes (its PLL's block), and the PLL's registers.
+
+PLL_BLOCK = 0x100
+VOUT_LEN = 3                           # a voltage write: register and two bytes (MP5475, VOUT_COMMAND)
+
+
+class Au4683(pm_emu.Mp2845):
+    """An AU4683 as CIX's dev_au4683.c uses it (src/pmic.c): paged like the
+    MP2845; VOUT_COMMAND 0x21 ((mV - 245) / 5, 12 bits), READ_VOUT 0x8b in
+    PMBus LINEAR11 (exponent -10 here), revision 0x9b.  Modelled, not known."""
+
+    PAGED = (0x21, 0x8b)
+
+    def __init__(self, name):
+        super().__init__(name)
+        self.regs[0x9b] = 1
+
+    def write(self, byte):
+        super().write(byte)
+        if self.ptr == 0x21 and self.n == 2:
+            r = self.paged[(self.page, 0x21)]
+            mv = (r[0] | (r[1] & 0xf) << 8) * 5 + 245
+            mant = min(round(mv * 1000 / 977), 0x7ff)
+            self.paged[(self.page, 0x8b)] = bytearray((mant & 0xff, (0x16 << 3) | mant >> 8, 0))
+
+
+def au4683_config():
+    """The Orange Pi 6's PM configuration with its MP2845s (type 2, 0x45)
+    as AU4683s (type 3, 0x21): CIX's other paged regulator, its own
+    formats; the bucks shared as on the Orange Pi 6."""
+    blk = bytearray(test_pm.board_config("opi6"))
+    for d in range(8):
+        off = 0x18 + 0x1e + 8 * d
+        w0 = struct.unpack_from("<I", blk, off)[0]
+        if w0 & 7 == 2:
+            w0 = (w0 & ~(7 | 0x7f << 22)) | 3 | 0x21 << 22
+            struct.pack_into("<I", blk, off, w0)
+    n = struct.unpack_from("<I", blk, 8)[0]
+    blk[0x10:0x18] = bytes(8)
+    a = b = 0
+    for i in range(0, n, 4):
+        a = (a + struct.unpack_from("<I", blk, i)[0]) & 0xffffffff
+        b = (b + a) & 0xffffffff
+    blk[0x10:0x18] = struct.pack("<II", a, b)
+    return bytes(blk)
+
+
+def boot_cfg(elf, name, cfg):
+    """boot() with a configuration's bytes (None: as boot(elf, name))."""
+    if cfg is None:
+        return boot(elf, name)
+    auto = pm_emu.auto_device
+    pm_emu.auto_device = lambda n, addr: Au4683(n) if addr == 0x21 else auto(n, addr)
+    test_pm.BOARD = cfg
+    cpu, soc, why, _ = test_pm.boot(elf)
+    check(why == "idle", f"boot ({name}): {why}")
+    pm_emu.run_for(cpu, soc, 150)
+    return cpu, soc
+
+
+class BusFault:
+    """Transfers on an I2C bus from the after-th on fail: "nack" (no device
+    answers), "lost" (a voltage write reaches the regulator, then is NACKed:
+    set, but the write failed; reads answer).  Logs each transfer with the
+    number of register writes before it (cpu.writes), to order the I2C
+    against the clock generator."""
+
+    def __init__(self, cpu, soc, bus):
+        self.cpu, self.c = cpu, soc.i2c[bus]
+        self.mode, self.after, self.n, self.log = None, 0, 0, []
+        self.c.transfer = self.transfer
+
+    def arm(self, mode, after=0):
+        self.mode, self.after, self.n = mode, after, 0
+
+    def transfer(self, addr):
+        c = self.c
+        write = not c.r[pm_emu.CR] & pm_emu.CR_RW
+        self.log.append((len(self.cpu.writes), addr, write, bytes(c.tx)))
+        n, self.n = self.n, self.n + 1
+        if self.mode is None or n < self.after:
+            return pm_emu.CadenceI2c.transfer(c, addr)
+        if self.mode == "nack":
+            c.fault = "nack"
+            pm_emu.CadenceI2c.transfer(c, addr)
+            c.fault = None
+            return None
+        vout = write and len(c.tx) >= VOUT_LEN
+        pm_emu.CadenceI2c.transfer(c, addr)
+        if vout:
+            c.isr |= pm_emu.ISR_NACK
+        return None
+
+
+def cgc_writes(cpu, since, blocks):
+    return [(a, v) for _, a, _, v in cpu.writes[since:] if a & ~(PLL_BLOCK - 1) in blocks]
+
+
+def pll_regs(cpu, blocks):
+    return {b: tuple(cpu.read(b + o, 4) for o in range(0, PLL_BLOCK, 4)) for b in blocks}
+
+
+def vout_writes(fault, since=0):
+    """Voltage writes logged by fault from entry since: (writes before it, bytes)."""
+    return [(w, tx) for w, _, wr, tx in fault.log[since:] if wr and len(tx) >= VOUT_LEN]
+
+
+def request(cpu, soc, path, d, lv, ms=60):
+    """Level lv on domain d by path ("dvfs": the message; "fc": big0's fast channel)."""
+    if path == "fc":
+        assert d == BIG0
+        test_pm.ask(cpu, soc, 0, None, "fc", (test_pm.BIG0_FC, lv))
+    else:
+        send(cpu, soc, 0, 0x13, 7, (d, lv))
+        wait_answer(cpu, soc, 0, 50)
+    pm_emu.run_for(cpu, soc, ms)
+
+
+def calibrate(cpu, soc, path, d, lv):
+    """A healthy raise of d from its lowest level to its highest: the bus of
+    its rail, the clock generator blocks it writes.  d is left at its lowest."""
+    request(cpu, soc, path, d, lv[0])
+    nw, ni = len(cpu.writes), len(soc.i2c_log)
+    request(cpu, soc, path, d, lv[-1])
+    blocks = sorted({a & ~(PLL_BLOCK - 1) for _, a, _, _ in cpu.writes[nw:]
+                     if test_pm.CGC[0] <= a < test_pm.CGC[1]})
+    buses = i2c_buses(soc, ni)
+    request(cpu, soc, path, d, lv[0])
+    return (int(buses[0][3:]) if buses else None), blocks
+
+
+def raise_failed(elf, name, cfg, path, mode, after=0, d=BIG0):
+    """d at its lowest asked for its highest level while its PMIC's bus
+    fails (mode, from the after-th transfer): no clock generator write to
+    d's PLL, its registers as they were; once the bus is healthy, the same
+    request sets the voltage and then the frequency."""
+    tag = f"raise {name} {path} {mode}{f' after {after}' if after else ''}"
+    cpu, soc = boot_cfg(elf, name, cfg)
+    lv = levels(cpu, soc, d)
+    bus, blocks = calibrate(cpu, soc, path, d, lv)
+    if bus is None or not blocks:
+        check(False, f"{tag}: a healthy raise writes I2C {bus}, clock generator {blocks}")
+        return
+    fault = BusFault(cpu, soc, bus)
+    regs0, nw = pll_regs(cpu, blocks), len(cpu.writes)
+    fault.arm(mode, after)
+    request(cpu, soc, path, d, lv[-1], ms=200)
+    got = cgc_writes(cpu, nw, blocks)
+    tried = len(fault.log)
+    check(tried > 0 and not got and pll_regs(cpu, blocks) == regs0,
+          f"{tag}: I2C {bus} failing ({tried} transfers): PLL {[hex(b) for b in blocks]} "
+          f"{'untouched' if not got else f'written {len(got)} times, first {got[0][0]:#x}={got[0][1]:#x}'}")
+    cur = level(cpu, soc, d)
+    check(cur != lv[-1], f"{tag}: level read back {cur} (asked {lv[-1]})")
+    fault.arm(None)
+    pm_emu.run_for(cpu, soc, 2100)             # the bus's back-off, if it went down
+    nw, nl = len(cpu.writes), len(fault.log)
+    request(cpu, soc, path, d, lv[-1])
+    first, v = first_pll_write(cpu, nw, blocks), vout_writes(fault, nl)
+    check(first is not None and bool(v) and v[0][0] <= first,
+          f"{tag}: bus healthy again: {len(v)} voltage writes, the PLL "
+          + ("not written" if first is None else
+             "written after them" if v and v[0][0] <= first else "written first"))
+
+
+def first_pll_write(cpu, since, blocks):
+    """Index in cpu.writes of the first write to blocks from since, or None."""
+    return next((i for i, (_, a, _, _) in enumerate(cpu.writes[since:], since)
+                 if a & ~(PLL_BLOCK - 1) in blocks), None)
+
+
+def lower_lost_then_raise(elf, name, cfg, path, target, d=BIG0, then=None):
+    """d at its highest lowered to its lowest while the voltage writes are
+    lost (they reach the regulator, the transfer fails: the rail at the
+    lower voltage, the write failed); the bus healthy again, a level
+    (target: index in d's levels) on d, or on domain then (sharing d's
+    buck), from its lowest: no PLL write of the raised domain before a
+    voltage write."""
+    raised = d if then is None else then
+    tag = (f"lower lost {name} {path}: domain {d} lowered, "
+           f"domain {raised} to its level [{target}]")
+    cpu, soc = boot_cfg(elf, name, cfg)
+    lv = levels(cpu, soc, d)
+    bus, _ = calibrate(cpu, soc, path, d, lv)
+    rlv = levels(cpu, soc, raised)
+    rbus, blocks = calibrate(cpu, soc, "dvfs" if then is not None else path, raised, rlv)
+    if bus is None or rbus != bus or not blocks:
+        check(False, f"{tag}: rails on I2C {bus} and {rbus}, clock generator {blocks}")
+        return
+    fault = BusFault(cpu, soc, bus)
+    request(cpu, soc, path, d, lv[-1])
+    fault.arm("lost")
+    nl = len(fault.log)
+    request(cpu, soc, path, d, lv[0], ms=200)
+    lost = vout_writes(fault, nl)
+    fault.arm(None)
+    pm_emu.run_for(cpu, soc, 50)
+    nw, nl = len(cpu.writes), len(fault.log)
+    request(cpu, soc, "dvfs" if then is not None else path, raised, rlv[target])
+    first, v = first_pll_write(cpu, nw, blocks), vout_writes(fault, nl)
+    ok = first is None or (bool(v) and v[0][0] <= first)
+    check(bool(lost) and ok,
+          f"{tag}: {len(lost)} voltage writes lost; then "
+          + ("no PLL write" if first is None else
+             f"PLL written after {'no voltage write' if not v else ('a voltage write' if v[0][0] <= first else 'the PLL, voltage after it')}"))
+
+
+def raise_scenarios(elf):
+    au = au4683_config()
+    # MP5475 (O6N), MP2845 and AU4683 (generic paged driver, shared bucks)
+    for name, cfg in (("o6n", None), ("opi6", None), ("opi6-au4683", au)):
+        for path in ("dvfs", "fc"):
+            raise_failed(elf, name, cfg, path, "nack")
+    # a write that reaches the regulator but fails: set, not known to be
+    raise_failed(elf, "o6n", None, "fc", "lost")
+    raise_failed(elf, "opi6", None, "dvfs", "lost")
+    # the bus dies after the first transfer: the page selected, VOUT not
+    raise_failed(elf, "opi6", None, "dvfs", "nack", after=1)
+    raise_failed(elf, "opi6-au4683", au, "fc", "nack", after=1)
+    # a lower whose writes were lost, then a raise
+    lower_lost_then_raise(elf, "o6n", None, "dvfs", -2)
+    lower_lost_then_raise(elf, "o6n", None, "fc", -1)
+    lower_lost_then_raise(elf, "opi6", None, "dvfs", -2)
+    # the buck shared: big 0 lowered with its writes lost, big 1 raised
+    lower_lost_then_raise(elf, "opi6", None, "dvfs", -2, d=BIG0, then=BIG1)
+
+
 def main():
     global verbose
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
@@ -308,6 +555,7 @@ def main():
     verbose = a.v
     pmic_scenario(a.elf, "o6n")          # fans the PM drives
     sensor_scenario(a.elf)
+    raise_scenarios(a.elf)
     print(f"{failures} failed")
     return min(failures, 125)
 

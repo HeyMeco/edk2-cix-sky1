@@ -865,6 +865,18 @@ static int dvfs_handle_psu_set_voltage_resp(
         (struct mod_psu_driver_response *)event->params;
 
     if (psu_response->status != FWK_SUCCESS) {
+        /*
+         * CSU_PM (open): a lower voltage after the frequency (SET_OPP_DONE)
+         * that failed.  The clock is at the new rate and the rail anywhere
+         * from the old voltage to the new one (a PMIC write can fail and
+         * still be set): the new OPP is taken as the current one, so that
+         * the next higher OPP sets its voltage before its frequency.
+         * (Upstream and CIX keep the old OPP, from which a level with the
+         * same or a lower voltage only sets the clock.)
+         */
+        if (ctx->state == DVFS_DOMAIN_SET_OPP_DONE) {
+            ctx->current_opp = ctx->request.new_opp;
+        }
         return dvfs_complete(ctx, NULL, psu_response->status);
     }
 
