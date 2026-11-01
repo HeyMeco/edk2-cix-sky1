@@ -24,3 +24,6 @@
 [submodule "firmware/csupm/SCP-firmware"]
 	path = firmware/csupm/SCP-firmware
 	url = https://github.com/ARM-software/SCP-firmware
+[submodule "firmware/csupm/FreeRTOS-Kernel"]
+	path = firmware/csupm/FreeRTOS-Kernel
+	url = https://github.com/FreeRTOS/FreeRTOS-Kernel

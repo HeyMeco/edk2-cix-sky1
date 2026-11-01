@@ -58,14 +58,22 @@ static uint64_t counter(void)
 	return (uint64_t)xt_timer.high << 32 | c;
 }
 
-/* Program CCOMPARE for the target, or half a wrap ahead if it is later */
+/*
+ * Program CCOMPARE for the target, or half a wrap ahead if it is later.
+ * A target closer than MARGIN cycles counts as due: CCOUNT could pass it
+ * before the write lands, and CCOMPARE only matches when CCOUNT equals it,
+ * so the alarm would wait for the next wrap (an alarm asked for 0 ms from
+ * now, as pm_svc's for a timer already due, came that close).
+ */
+#define MARGIN		256u
+
 static void program(void)
 {
 	uint64_t now = counter();
 	uint32_t c = (uint32_t)now;
 
-	if (xt_timer.enabled && xt_timer.target <= now)
-		wsr_ccompare(c + 64);			/* due: fire right away */
+	if (xt_timer.enabled && xt_timer.target < now + MARGIN)
+		wsr_ccompare(c + MARGIN);		/* due: fire right away */
 	else if (xt_timer.enabled && xt_timer.target - now < HALF)
 		wsr_ccompare((uint32_t)xt_timer.target);
 	else

@@ -12,7 +12,8 @@
     "arm-trusted-firmware": "114fb20577bcc4038025de4e12bca60e04dd5212",
     "optee_os": "cc66640f3815da4defc50f72b66ae3bac97cd48a",
     "mbedtls": "8b3f26a5ac38d4fdccbc5c5366229f3e01dafcc0",
-    "firmware/csupm/SCP-firmware": "635697544170b78167ed698393a72d6e522032e1"
+    "firmware/csupm/SCP-firmware": "635697544170b78167ed698393a72d6e522032e1",
+    "firmware/csupm/FreeRTOS-Kernel": "dbf70559b27d39c1fdb68dfb9a32140b6a6777a0"
   },
   "imports": {
     "radxa-edk2-platforms": "352108383b2ceb3f88673f2f60a550ac35db181d",

@@ -19,6 +19,7 @@
 
 #include "board/board.h"
 #include "i2c.h"
+#include "rtos.h"
 
 #define BOARD_SENSORS		SOC_SENSOR_BOARD_N
 #define BOARD_SENSOR_US		200000u
@@ -91,9 +92,33 @@ static bool i2c_read_ti_tmp75(uint8_t ctrl, uint8_t addr, uint8_t raddr, float *
 	return true;
 }
 
-/* CIX's read_board_sensor, every 200 ms */
+/* the TMP75s, on the sensor worker (src/rtos.c) */
+static bool sensor_job_queued;
+
+static void read_i2c_sensors(void *arg)
+{
+	(void)arg;
+	for (unsigned i = 0; i < BOARD_SENSORS; i++) {
+		if (!(bs_config[i].valid & 1) && bs_config[i].valid >> 1 == SENSOR_I2C &&
+		    bs_config[i].sensor_type == SENSOR_TYPE_TMP75)
+			(void)i2c_read_ti_tmp75(bs_config[i].i2c_ctrl, bs_config[i].i2c_addr,
+						bs_config[i].reg_addr, &soc_sensor_board_temp[i]);
+	}
+}
+
+static void read_i2c_sensors_done(void *arg)
+{
+	(void)arg;
+	sensor_job_queued = false;
+}
+
+/* CIX's read_board_sensor, every 200 ms: the I2C sensors read by the
+ * sensor worker (a read still under way is not asked again), the EC's
+ * registers here */
 static void read_board_sensor(void *arg)
 {
+	bool i2c = false;
+
 	(void)arg;
 	for (unsigned i = 0; i < BOARD_SENSORS; i++) {
 		uint32_t type = bs_config[i].valid >> 1;
@@ -101,8 +126,7 @@ static void read_board_sensor(void *arg)
 		if (bs_config[i].valid & 1)
 			continue;
 		if (type == SENSOR_I2C && bs_config[i].sensor_type == SENSOR_TYPE_TMP75) {
-			(void)i2c_read_ti_tmp75(bs_config[i].i2c_ctrl, bs_config[i].i2c_addr,
-						bs_config[i].reg_addr, &soc_sensor_board_temp[i]);
+			i2c = true;
 		} else if (type == SENSOR_EC_REG) {
 			uint8_t reg = bs_config[i].i2c_ctrl;	/* reg_id's low byte */
 
@@ -111,6 +135,11 @@ static void read_board_sensor(void *arg)
 					(float)((double)(float)DEV_REG[reg][1] * (1.0 / 256) +
 						(double)(float)DEV_REG[reg][0]);
 		}
+	}
+	if (i2c && !sensor_job_queued) {
+		sensor_job_queued = true;
+		if (!rtos_submit(RTOS_SENSOR, read_i2c_sensors, NULL, read_i2c_sensors_done))
+			sensor_job_queued = false;
 	}
 }
 

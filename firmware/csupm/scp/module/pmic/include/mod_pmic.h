@@ -46,9 +46,11 @@ enum mod_pmic_api_idx {
 	MOD_PMIC_API_IDX_COUNT,
 };
 
-/* Internal: a voltage change, run after the request returns */
+/* Internal: a voltage change, run after the request returns (on the PMIC
+ * worker, src/rtos.c), then its end */
 enum mod_pmic_event_idx {
 	MOD_PMIC_EVENT_IDX_SWITCH,
+	MOD_PMIC_EVENT_IDX_DONE,
 	MOD_PMIC_EVENT_IDX_COUNT,
 };
 

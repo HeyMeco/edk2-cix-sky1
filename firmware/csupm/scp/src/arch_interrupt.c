@@ -17,6 +17,7 @@
 
 #include "arch_scp.h"
 #include "irq.h"
+#include "rtos.h"
 
 #define NO_IRQ			UINT32_MAX
 #define N_IRQ			64
@@ -201,9 +202,15 @@ static int get_current(unsigned int *irq)
 	return FWK_SUCCESS;
 }
 
+/*
+ * A handler, or a task other than SCP-firmware's (src/rtos.c): what such
+ * a task gives the framework (events, jobs) goes the way an interrupt
+ * handler's does, through the framework's interrupt queue, never as if
+ * from the event the SCP-firmware task may be in the middle of.
+ */
 static bool is_interrupt_context(void)
 {
-	return current != NO_IRQ;
+	return current != NO_IRQ || rtos_outside_scp_task();
 }
 
 static const struct fwk_arch_interrupt_driver driver = {
@@ -240,18 +247,19 @@ static void call(unsigned int i)
 	current = NO_IRQ;
 }
 
-bool arch_irq_run(void)
+uint32_t arch_irq_run_mask(uint32_t lines, bool soft_ok)
 {
 	unsigned int ps = arch_interrupts_disable();
-	bool any = false;
+	uint32_t ran = 0;
 
 	for (;;) {
-		uint32_t pending = arch_irq_pending, soft = soft_pending & soft_enabled;
+		uint32_t pending = arch_irq_pending & lines;
+		uint32_t soft = soft_ok ? soft_pending & soft_enabled : 0;
 
 		if (!pending && !soft)
 			break;
-		any = true;
-		arch_irq_pending = 0;
+		ran |= pending | (soft ? 1u << 31 : 0);	/* 31 (NMI) is never deferred */
+		arch_irq_pending &= ~pending;
 		soft_pending &= ~soft;
 		for (unsigned i = 0; i < 32; i++) {
 			if (pending & BIT(i))
@@ -264,15 +272,41 @@ bool arch_irq_run(void)
 		wsr_intenable(rsr_intenable() | (pending & enabled));
 	}
 	arch_interrupts_enable(ps);
-	return any;
+	return ran;
 }
 
-void arch_irq_wait(void)
+bool arch_irq_run(void)
+{
+	return arch_irq_run_mask(~0u, true) != 0;
+}
+
+bool arch_irq_pending_in(uint32_t lines, bool soft_ok)
+{
+	return (arch_irq_pending & lines) || (soft_ok && (soft_pending & soft_enabled));
+}
+
+void arch_irq_wait_for(uint32_t lines, bool soft_ok)
 {
 	unsigned int ps = arch_interrupts_disable();
 
 	/* WAITI lowers PS.INTLEVEL and sleeps in one step: nothing is missed */
-	if (!arch_irq_pending && !(soft_pending & soft_enabled))
+	if (!arch_irq_pending_in(lines, soft_ok))
 		__asm__ volatile("waiti 0" : : : "memory");
 	arch_interrupts_enable(ps);
+}
+
+void arch_irq_wait(void)
+{
+	arch_irq_wait_for(~0u, true);
+}
+
+void arch_irq_set_kernel_isr(unsigned int line, void (*fn)(void))
+{
+	if (line < 32)
+		(void)set_isr_irq(line, fn);
+}
+
+void arch_irq_line_enable(unsigned int line, bool on)
+{
+	(void)(on ? enable(line) : disable(line));
 }

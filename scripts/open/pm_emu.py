@@ -188,12 +188,21 @@ class CadenceI2c:
     """Master side of a Cadence I2C controller.  A write of ADDR starts a
     transfer: for a write, the TX FIFO goes to the slave (and bytes written
     to DATA while the transfer is open follow it); for a read, XFER bytes
-    come back through DATA.  Every transfer completes at once."""
+    come back through DATA.  Every transfer completes at once.  The
+    interrupt status bits not masked (IER/IDR) drive the controller's
+    source on aggregator line 24.
+
+    fault (set by a test): "stuck", a bus held low (no transfer ever
+    starts or ends, the bus stays busy), or "nack", every address NACKed."""
 
     def __init__(self, soc, base, name):
         self.soc, self.base, self.name = soc, base, name
         self.devices = {}
+        self.fault = None
         self.reset()
+
+    def irq(self):
+        return bool(self.isr & ~self.r[IMR] & 0x2ff)
 
     def reset(self):
         self.r = {CR: 0, SR: 0, ADDR: 0, XFER: 0, IMR: 0x2ff, TOUT: 0x1f}
@@ -215,12 +224,16 @@ class CadenceI2c:
             sr = 0
             if self.rx:
                 sr |= SR_RXDV
-            if self.open:
+            if self.open or self.fault == "stuck":
                 sr |= SR_BA
             return sr
         return self.r.get(off, 0)
 
     def write(self, off, size, value):
+        self._write(off, size, value)
+        self.soc.update_irqs()
+
+    def _write(self, off, size, value):
         if off == ISR:
             self.isr &= ~value
             return
@@ -261,6 +274,17 @@ class CadenceI2c:
     def transfer(self, addr):
         self.finish()
         self.addr = addr
+        if self.fault == "stuck":
+            self.log(f"@{addr:#04x} STUCK")
+            self.dev = None
+            self.tx.clear()
+            return
+        if self.fault == "nack":
+            self.log(f"@{addr:#04x} NACK (fault)")
+            self.dev = None
+            self.isr |= ISR_NACK
+            self.tx.clear()
+            return
         self.dev = self.devices.get(addr)
         if self.dev is None and self.soc.auto_i2c:
             self.dev = self.devices[addr] = auto_device(f"{self.name}:{addr:#04x}", addr)
@@ -572,6 +596,7 @@ MBOX_DOORBELL, MBOX_TO_AP_EN, MBOX_TO_PM_EN, MBOX_CLEAR, MBOX_STATUS = 0x80, 0xb
 
 AGG = 0xa0000500                      # line L (12..30): +4*(L-12) raw, +0x80 enable
 MBOX_LINE = 25                        # bit i: mailbox i
+I2C_LINE = 24                         # bit i: I2C controller i
 
 
 class Mailbox:
@@ -668,6 +693,8 @@ class PmSoc:
     def agg_raw(self, line):
         if line == MBOX_LINE:
             return sum(1 << mb.i for mb in self.mbox if mb.pending())
+        if line == I2C_LINE:
+            return sum(1 << i for i, c in enumerate(self.i2c) if c.irq()) | self.irq_raw.get(line, 0)
         if line == S5_LINE:
             return self.s5.pending()
         return self.irq_raw.get(line, 0)
@@ -729,7 +756,7 @@ class PmSoc:
         if self.cpu is None:
             return
         lines = 0
-        for line in {MBOX_LINE, S5_LINE} | set(self.irq_raw):
+        for line in {MBOX_LINE, S5_LINE, I2C_LINE} | set(self.irq_raw):
             if self.agg_raw(line) & self.mem.read(AGG + 0x80 + 4 * (line - 12), 4):
                 lines |= 1 << line
         self.cpu.int_lines = lines

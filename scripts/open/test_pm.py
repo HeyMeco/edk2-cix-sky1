@@ -46,13 +46,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pm_emu  # noqa: E402
 
 CIX_PM = "release/pm_fw/Release/csupm_sky1"
-IDLE = ("vApplicationIdleHook", "arch_irq_wait")    # CIX's (FreeRTOS), ours
+IDLE = ("arch_irq_wait", "vApplicationIdleHook")    # ours (SCP-firmware's task sleeps itself), CIX's (FreeRTOS)
 BOOT_BUDGET = 8_000_000
 CHANNELS = (0, 2, 4, 6)               # AP -> PM mailboxes with an SMT channel
 # not compared register by register: UART data, I2C controllers (the
-# transfers are compared)
+# transfers are compared) and the aggregator's I2C source enables (line
+# 24: the open firmware's masters wait for their interrupts, CIX's poll)
 IGNORE_BLOCKS = {0xa0030000, 0xa0010000, 0xa0011000, 0xa0012000, 0xa0013000}
-IGNORE_RANGES = []
+IGNORE_RANGES = [(0xa00005b0, 0xa00005b4)]
 MAX_DOMAINS = 8                       # per protocol, to keep the run short
 PERF_SET_DOMAINS = (0, 2, 3, 7)       # GPU core, little, big 0, DSU
 SETTLE = 400_000                      # instructions run after a level or limits set

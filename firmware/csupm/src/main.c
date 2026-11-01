@@ -2,7 +2,8 @@
 /*
  * CSU_PM firmware: the power-on sequence (CIX's ss_por_enter), what CIX's
  * ss_init_enter and ss_run_enter do as far as it is here, SCP-firmware's
- * modules, the SE handshake, then SCP-firmware's event loop.
+ * modules, the SE handshake, then the tasks (src/rtos.c): SCP-firmware's
+ * event loop and the I2C workers.
  */
 #include "arch_scp.h"
 #include "board/board.h"
@@ -22,6 +23,7 @@
 #include "plat.h"
 #include "perf/perf.h"
 #include "pvt.h"
+#include "rtos.h"
 #include "rtt/rtt.h"
 #include "uart.h"
 
@@ -179,5 +181,5 @@ int main(void)
 	sky1_pmu_fixed_polling_enable();	/* pm_ready: the DPM's streams */
 	dpm_enable();
 	board_services_start();			/* pm_ready: NoC idle, fans, PVT polling */
-	scp_run();
+	rtos_start();				/* CIX: vTaskStartScheduler */
 }
