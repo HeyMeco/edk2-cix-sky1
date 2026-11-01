@@ -315,8 +315,16 @@ static bool edp_set_voltage(DPM_EDP_DOMAIN edp_id, uint32_t vol_mV)
 		mv = EDP_MV_MAX;
 	if (mv == volt_set[edp_id])
 		return true;
-	if (!pwr_rail_setVoltage((uint8_t)edp_id, volt_set[edp_id], (uint16_t)mv, true))
+	if (!pwr_rail_setVoltage((uint8_t)edp_id, volt_set[edp_id], (uint16_t)mv, true)) {
+		/*
+		 * Not CIX's (its writes never give up): a lower voltage that
+		 * failed may still be set, all or (bound bucks) in part; the
+		 * lower is kept, so that asking for the old one again writes it.
+		 */
+		if (mv < volt_set[edp_id])
+			volt_set[edp_id] = (uint16_t)mv;
 		return false;
+	}
 	volt_set[edp_id] = (uint16_t)mv;
 	return true;
 }

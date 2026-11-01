@@ -293,10 +293,28 @@ row the bus is down, and its transfers fail at once for a back-off that
 doubles from 100 ms to 2 s, then one is tried. CIX's PMIC voltage write
 (`dev_pmic_mp5475_setVoltage` and the paged PMICs') retries for ever on a
 dead bus: its tries counter only stops the writes when it is exactly −1;
-ours stops after three rounds. `scmi_perf` answers a level set before
-DVFS has done it, as CIX's; DVFS raises a voltage before the frequency, so
-a voltage that cannot be set leaves the frequency where it was, and
-lowering one never waits for I2C. Around the power sequence the workers
+ours stops after three rounds. So a voltage write can fail where CIX's
+never returned, or returned failure only with the voltage read back as
+set, and three places differ from CIX's for it:
+
+- `sky1soc_perf` (the CPU clusters and the DSU from the OS's fast
+  channels): CIX's queue goes on after a voltage answer that is an error,
+  so its frequency raises would run on the old voltage; ours ends the
+  pass at the barrier, the changes not run as they were, the failed
+  voltage taken as the lower of old and new.
+- DVFS: a lower voltage after the frequency that fails leaves the clock at
+  the new rate; ours takes the new OPP as the current one (CIX's and
+  upstream's keep the old, from which a level with the same or a lower
+  voltage only sets the clock), so the next raise sets its voltage first.
+- `dpm_edp_set_voltage`: a lower voltage that fails keeps the lower as the
+  rail's (CIX's keeps the old), so that asking for the old one writes it.
+
+`scmi_perf` answers a level set before DVFS has done it, as CIX's, so a
+failure does not reach the SCMI caller; DVFS raises a voltage before the
+frequency, so a voltage that cannot be set leaves the frequency where it
+was, and lowering one never waits for I2C. Not changed: after a resume,
+`dpm_edp_restore_voltage`'s result is not looked at before
+`clk_nodes_restore` puts the PLLs back, as CIX's. Around the power sequence the workers
 finish their jobs first (`rtos_quiesce`; CIX suspends its tasks). A stuck
 bus thus stops its worker for about 35 ms, then costs nothing; the rest of
 the PM goes on meanwhile, which
@@ -304,7 +322,14 @@ the PM goes on meanwhile, which
 checks on pm_emu with a bus made to hang (`CadenceI2c.fault`): SCMI
 answered on another channel, the DPM following the die to 100 C, the fans
 speeding up, another cluster's voltage on a healthy bus, the level set once
-the bus is free, the stacks' high-water marks.
+the bus is free, the stacks' high-water marks. It also raises big cluster
+0 by message (DVFS) and by fast channel (`sky1soc_perf`) while its PMIC's
+bus NACKs, loses voltage writes (they reach the regulator and fail) or
+dies after the page is selected, on the MP5475 (O6N), the MP2845 and an
+AU4683 (the Orange Pi 6's configuration, its bucks shared): the PLL must
+not be written, then is once the bus is healthy, after the voltage; and
+lowers it with its writes lost, then raises it (or, on the shared buck,
+big cluster 1): no PLL write before a voltage write.
 
 ```sh
 python3 scripts/open/test_pm_faults.py OURS.elf

@@ -17,6 +17,10 @@
  * changes later, with an event that reports the cluster's new level to
  * scmi_perf; the open firmware's answers at once, and the report is made
  * then.  CIX's logging is left out.
+ *
+ * Not CIX's: a voltage (or clock) answer that is an error ends the pass
+ * at the barrier, so that no clock goes up on a supply that was not set
+ * (the open firmware's PMIC writes give up on a dead bus; CIX's never do).
  */
 #include <mod_clock.h>
 #include <mod_dvfs.h>
@@ -76,6 +80,7 @@ struct mod_sky1soc_dom_ctx {
 	uint32_t req_level;
 	uint32_t req_voltage;
 	uint32_t req_freq;
+	uint32_t pass_level;	/* curr_level when the pass was planned */
 	fwk_id_t clock_id;
 	uint8_t active_ap_count;	/* cores online */
 	const struct mod_psu_device_api *psu_api;
@@ -87,6 +92,7 @@ struct ap_dsu_op {
 	uint8_t domain_id;	/* index of the AP domain, or the DSU */
 	uint8_t op_type;
 	bool barrier;
+	bool failed;		/* its answer was an error */
 	uint32_t new_value;
 	uint32_t old_value;
 };
@@ -112,7 +118,9 @@ static struct mod_sky1soc_perf_ctx {
 	uint32_t dsu_pll;	/* the DSU PLL's frequency before post-divider 2, kHz */
 	uint8_t state;
 	uint8_t curr_idx;
+	uint8_t group_idx;	/* the first change of those running */
 	uint8_t op_pending_count;
+	bool op_failed;		/* one of them failed: the rest is not run */
 	bool fc_sched;		/* a fast-channel pass came while busy */
 	bool dsu_dvfs;
 	const struct mod_scmi_perf_updated_api *scmi_perf_updated_api;
@@ -219,6 +227,7 @@ static void sky1soc_add_op(uint8_t domain_id, uint8_t op_type, uint32_t op_value
 	bool wait = false;
 
 	op->op_type = op_type;
+	op->failed = false;
 	op->new_value = op_value;
 	op->domain_id = domain_id;
 	op->old_value = *value;
@@ -492,6 +501,8 @@ static int sky1soc_perf_update(struct perf_plugins_perf_update *data)
 		return status;
 	g_ctx.ops_count = 0;
 	g_ctx.state = SKY1SOC_STATE_START;
+	for (uint8_t i = 0; i <= n; i++)
+		g_ctx.ctx[i].pass_level = g_ctx.ctx[i].curr_level;
 
 	/* each AP domain with cores online, and the DSU: its OPP */
 	for (uint8_t i = 0; i <= n; i++) {
@@ -594,8 +605,78 @@ static int sky1soc_run_op(const struct ap_dsu_op *op)
 }
 
 /*
+ * Not CIX's: an answer that is an error marks its change failed; the
+ * changes after the barrier are then not run (CIX's goes on: its voltage
+ * writes never give up, so an error came only with the voltage read back
+ * as set).  A voltage, a cluster's clock: the change running for the
+ * element that answered.
+ */
+static void sky1soc_op_answer(fwk_id_t source_id, int status)
+{
+	bool found = false;
+
+	if (status == FWK_SUCCESS)
+		return;
+	g_ctx.op_failed = true;
+	for (uint8_t k = g_ctx.group_idx; k < g_ctx.curr_idx; k++) {
+		struct ap_dsu_op *op = &g_ctx.ops[k];
+		fwk_id_t id = op->op_type == SKY1SOC_OP_VOLTAGE ?
+			g_ctx.config->ap_dom_cfg[op->domain_id].psu_id :
+			g_ctx.ctx[op->domain_id].clock_id;
+
+		if (op->op_type != SKY1SOC_OP_DSU_FREQ && fwk_id_is_equal(id, source_id)) {
+			op->failed = true;
+			found = true;
+		}
+	}
+	/* not known whose: every voltage of those running */
+	for (uint8_t k = g_ctx.group_idx; !found && k < g_ctx.curr_idx; k++) {
+		if (g_ctx.ops[k].op_type == SKY1SOC_OP_VOLTAGE)
+			g_ctx.ops[k].failed = true;
+	}
+}
+
+/*
+ * Not CIX's: the pass ends after a change failed.  The changes not run
+ * leave their domains as they were (newest first, to each one's old
+ * value; a clock not set, its level as before the pass).  A voltage that
+ * failed may be anywhere from its old value to its new one, and is taken
+ * as the lower of them, so that a clock is never raised for it before a
+ * write that succeeded; a clock that failed, as the higher.
+ */
+static void sky1soc_abort_ops(void)
+{
+	for (int k = (int)g_ctx.ops_count - 1; k >= (int)g_ctx.curr_idx; k--) {
+		const struct ap_dsu_op *op = &g_ctx.ops[k];
+		struct mod_sky1soc_dom_ctx *ctx = &g_ctx.ctx[op->domain_id];
+
+		if (op->op_type == SKY1SOC_OP_VOLTAGE) {
+			ctx->curr_voltage = op->old_value;
+		} else {
+			ctx->curr_freq = op->old_value;
+			ctx->curr_level = ctx->pass_level;
+		}
+	}
+	for (uint8_t k = g_ctx.group_idx; k < g_ctx.curr_idx; k++) {
+		const struct ap_dsu_op *op = &g_ctx.ops[k];
+		struct mod_sky1soc_dom_ctx *ctx = &g_ctx.ctx[op->domain_id];
+		uint32_t lo = op->old_value < op->new_value ? op->old_value : op->new_value;
+		uint32_t hi = op->old_value < op->new_value ? op->new_value : op->old_value;
+
+		if (!op->failed)
+			continue;
+		if (op->op_type == SKY1SOC_OP_VOLTAGE)
+			ctx->curr_voltage = lo;
+		else
+			ctx->curr_freq = hi;
+	}
+	g_ctx.ops_count = g_ctx.curr_idx;
+}
+
+/*
  * CIX's sky1soc_perf_op_fsm: run the queue up to a barrier; with answers
- * outstanding, wait for them (each answer comes back here), then go on.
+ * outstanding, wait for them (each answer comes back here), then go on;
+ * after an answer that is an error, not (sky1soc_abort_ops).
  */
 static void sky1soc_perf_op_fsm(const struct fwk_event *event)
 {
@@ -606,6 +687,7 @@ static void sky1soc_perf_op_fsm(const struct fwk_event *event)
 			g_ctx.state = SKY1SOC_STATE_RUN;
 			g_ctx.curr_idx = 0;
 			g_ctx.op_pending_count = 0;
+			g_ctx.op_failed = false;
 			break;
 		case SKY1SOC_STATE_RUN:
 			break;
@@ -613,6 +695,10 @@ static void sky1soc_perf_op_fsm(const struct fwk_event *event)
 			fwk_assert(g_ctx.op_pending_count != 0);
 			if (--g_ctx.op_pending_count != 0)
 				return;
+			if (g_ctx.op_failed) {
+				sky1soc_abort_ops();
+				goto done;
+			}
 			if (g_ctx.curr_idx >= g_ctx.ops_count)
 				goto done;
 			g_ctx.state = SKY1SOC_STATE_RUN;
@@ -621,6 +707,7 @@ static void sky1soc_perf_op_fsm(const struct fwk_event *event)
 			fwk_unexpected();
 			return;
 		}
+		g_ctx.group_idx = g_ctx.curr_idx;
 		while (g_ctx.curr_idx < g_ctx.ops_count) {
 			const struct ap_dsu_op *op = &g_ctx.ops[g_ctx.curr_idx];
 
@@ -696,16 +783,23 @@ static int sky1soc_perf_process_event(const struct fwk_event *event, struct fwk_
 {
 	(void)resp_event;
 	if (fwk_id_is_equal(event->id, mod_clock_event_id_set_rate_request)) {
+		const struct mod_clock_resp_params *resp = (const void *)event->params;
+
 		/* a cluster's clock answered: its level to scmi_perf */
-		for (uint8_t i = 0; i <= g_ctx.ap_dom_count; i++) {
+		sky1soc_op_answer(event->source_id, resp->status);
+		for (uint8_t i = 0; i <= g_ctx.ap_dom_count && resp->status == FWK_SUCCESS; i++) {
 			if (fwk_id_is_equal(event->source_id, g_ctx.ctx[i].clock_id)) {
 				sky1soc_report_level(i);
 				break;
 			}
 		}
 		sky1soc_perf_op_fsm(event);
-	} else if (fwk_id_is_equal(event->id, mod_psu_event_id_set_voltage) ||
-		   fwk_id_is_equal(event->id, sky1soc_event_id_run_ops)) {
+	} else if (fwk_id_is_equal(event->id, mod_psu_event_id_set_voltage)) {
+		const struct mod_psu_response *resp = (const void *)event->params;
+
+		sky1soc_op_answer(event->source_id, resp->status);
+		sky1soc_perf_op_fsm(event);
+	} else if (fwk_id_is_equal(event->id, sky1soc_event_id_run_ops)) {
 		sky1soc_perf_op_fsm(event);
 	} else if (fwk_id_is_equal(event->id, sky1soc_event_id_dsu_dvfs)) {
 		g_ctx.dsu_dvfs = event->params[0] != 0;
