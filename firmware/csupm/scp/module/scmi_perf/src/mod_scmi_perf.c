@@ -14,6 +14,9 @@
 #include <mod_locked_perf.h>
 #include <mod_scmi.h>
 #include <mod_scmi_perf.h>
+#ifdef BUILD_HAS_MOD_SKY1SOC_PERF
+#    include <mod_sky1soc_perf.h>
+#endif
 #ifdef BUILD_HAS_SCMI_PERF_PLUGIN_HANDLER
 #    include "perf_plugins_handler.h"
 #endif
@@ -170,6 +173,14 @@ struct scmi_perf_domain_ctx {
     /* Current level */
     uint32_t curr_level;
 
+    /*
+     * CSU_PM (open): a domain sky1soc_perf drives: the level last asked
+     * for (message, limits, or a new value in its level-set fast channel),
+     * and the fast channel's value last seen.
+     */
+    uint32_t owned_level;
+    uint32_t owned_fc_seen;
+
     /* Tables of OPPs */
     struct perf_opp_table *opp_table;
 };
@@ -289,6 +300,32 @@ static inline fwk_id_t get_dependency_id(unsigned int el_idx)
 static inline struct scmi_perf_domain_ctx *get_ctx(fwk_id_t domain_id)
 {
     return &scmi_perf_ctx.domain_ctx_table[fwk_id_get_element_idx(domain_id)];
+}
+
+/*
+ * CSU_PM (open): the AP domains and the DSU have one owner, sky1soc_perf
+ * (CIX's set them through dvfs as well, each module with its own record of
+ * the OPP, so that a raise could set the clock and not the voltage).  A
+ * level for one of them is kept for the next fast-channel pass, which is
+ * scheduled; the pass takes it in place of the domain's level-set fast
+ * channel until that channel's value changes (the newest request wins).
+ */
+static void fast_channel_callback(uintptr_t param);
+
+static bool owned_domain(unsigned int idx)
+{
+#ifdef BUILD_HAS_MOD_SKY1SOC_PERF
+    return sky1soc_perf_owns(idx);
+#else
+    (void)idx;
+    return false;
+#endif
+}
+
+static void owned_request(unsigned int idx, uint32_t level)
+{
+    scmi_perf_ctx.domain_ctx_table[idx].owned_level = level;
+    fast_channel_callback(0);
 }
 
 #ifdef BUILD_HAS_SCMI_PERF_FAST_CHANNELS
@@ -449,7 +486,13 @@ static int perf_set_level(
         perf_level = locked.level;
     }
 
-    status = scmi_perf_ctx.dvfs_api->set_level(domain_id, agent_id, perf_level);
+    if (owned_domain(idx)) {
+        owned_request(idx, perf_level);
+        status = FWK_SUCCESS;
+    } else {
+        status = scmi_perf_ctx.dvfs_api->set_level(
+            domain_id, agent_id, perf_level);
+    }
     if ((status == FWK_SUCCESS) || (status == FWK_PENDING)) {
         fwk_assert(idx < scmi_perf_ctx.domain_count);
         domain = &(*scmi_perf_ctx.config->domains)[idx];
@@ -538,6 +581,10 @@ int perf_set_limits(
         return status;
     }
 
+    if (owned_domain(fwk_id_get_element_idx(domain_id))) {
+        owned_request(fwk_id_get_element_idx(domain_id), needle);
+        return FWK_SUCCESS;
+    }
     return scmi_perf_ctx.dvfs_api->set_level(domain_id, agent_id, needle);
 }
 
@@ -1540,7 +1587,10 @@ void on_tdp_notify(uint32_t dvfs_elem_bitmap)
 
 /*
  * CSU_PM (CIX): the domains whose TDP frequency changed go to their current
- * level again, capped to it (perf_set_level).
+ * level again, capped to it (perf_set_level).  CSU_PM (open): for the AP
+ * domains and the DSU, a fast-channel pass instead, in which sky1soc_perf
+ * caps their requests to the TDP frequencies (CIX's set them, through
+ * dvfs, to the TDP frequency's level).
  */
 static void scmi_perf_process_tdp(void)
 {
@@ -1548,6 +1598,7 @@ static void scmi_perf_process_tdp(void)
     uint32_t freq, level = 0;
     fwk_id_t dep_id;
     unsigned int i;
+    bool pass = false;
 
     tdp_sched_domain = 0;
 
@@ -1563,11 +1614,18 @@ static void scmi_perf_process_tdp(void)
         }
 
         dep_id = get_dependency_id(i);
+        if (owned_domain(fwk_id_get_element_idx(dep_id))) {
+            pass = true;
+            continue;
+        }
         find_opp_for_freq(
             &scmi_perf_ctx.domain_ctx_table[fwk_id_get_element_idx(dep_id)],
             freq,
             &level);
         (void)perf_set_level(dep_id, 0, level);
+    }
+    if (pass) {
+        fast_channel_callback(0);
     }
 }
 
@@ -1597,9 +1655,21 @@ static void fast_channel_read(unsigned int i, struct fc_perf_update *update)
         set_level = get_fc_set_level_addr(domain);
     }
 
+    uint32_t level = (set_level != NULL) ? *set_level : domain_ctx->curr_level;
+
+    if (owned_domain(i)) {
+        if ((set_level != NULL) && (*set_level != domain_ctx->owned_fc_seen)) {
+            domain_ctx->owned_fc_seen = *set_level;
+            domain_ctx->owned_level = *set_level;
+        }
+        if (domain_ctx->owned_level != 0) {
+            level = domain_ctx->owned_level;
+        }
+    }
+
     *update = (struct fc_perf_update){
         .domain_id = get_dependency_id(i),
-        .level = (set_level != NULL) ? *set_level : domain_ctx->curr_level,
+        .level = level,
         .max_limit = (set_limit != NULL) ? set_limit->range_max :
                                            domain_ctx->level_limits.maximum,
         .min_limit = (set_limit != NULL) ? set_limit->range_min :
@@ -2394,6 +2464,20 @@ static int process_request_event(const struct fwk_event *event)
     if (fwk_id_is_equal(event->id, scmi_perf_get_level)) {
         params = (struct scmi_perf_event_parameters *)event->params;
 
+#ifdef BUILD_HAS_MOD_SKY1SOC_PERF
+        /* CSU_PM (open): sky1soc_perf's domains, the level it has */
+        if (sky1soc_perf_get_level(
+                fwk_id_get_element_idx(params->domain_id),
+                &return_values_level.performance_level)) {
+            return_values_level.status = SCMI_SUCCESS;
+            scmi_perf_respond(
+                &return_values_level,
+                params->domain_id,
+                (int)sizeof(return_values_level));
+            return FWK_SUCCESS;
+        }
+#endif
+
         status = scmi_perf_ctx.dvfs_api->get_current_opp(params->domain_id,
                                                        &opp);
         if (status == FWK_SUCCESS) {
@@ -2485,6 +2569,22 @@ static int process_internal_event(const struct fwk_event *event)
 static int scmi_perf_process_event(const struct fwk_event *event,
                                     struct fwk_event *resp_event)
 {
+#ifdef BUILD_HAS_SCMI_PERF_FAST_CHANNELS
+    /*
+     * CSU_PM (open): a fast-channel pass, whoever scheduled it.  The
+     * framework names the entity running as an event's source: one
+     * scheduled from an SCMI message (owned_request) comes from SCMI's.
+     */
+    if (fwk_id_is_equal(
+            event->id,
+            FWK_ID_EVENT(
+                FWK_MODULE_IDX_SCMI_PERF,
+                SCMI_PERF_EVENT_IDX_FAST_CHANNELS_PROCESS))) {
+        fast_channels_process();
+        return FWK_SUCCESS;
+    }
+#endif
+
     /* Request events from SCMI */
     if (fwk_id_get_module_idx(event->source_id) ==
         fwk_id_get_module_idx(fwk_module_id_scmi)) {
