@@ -5,7 +5,8 @@
  * The memory configuration may name a V/F table; otherwise the die's PVT
  * (process) average picks it.  The average comes from the eFuse or, for
  * early dies without it, from CIX's table of measured dies by wafer and
- * position (g_soc_pvt_data, CIX data taken from their firmware as is).
+ * position (g_soc_pvt_data in pvt_data.c, generated from CIX's debug build
+ * by scripts/open/se_pvt_table.py).
  */
 #include "se.h"
 #include "efuse.h"

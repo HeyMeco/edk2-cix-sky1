@@ -14,7 +14,7 @@ mask ROM ─▶ SE firmware ─▶ CSU_PM ─▶ TF-A BL2 ─▶ BL31 + OP-TEE (
 
 | Stage | Source | Status here |
 |---|---|---|
-| SE firmware (Cortex-M33: SoC bring-up, eFuse, image checks, AP services) | [firmware/se](../firmware/se); CIX's DDR driver relinked from their debug build | **built from source** (`--open`; `--vendor-se` keeps CIX's); same register writes and memory contents as CIX's in [test_se.py](../scripts/open/test_se.py) ([below](#se-firmware)) |
+| SE firmware (Cortex-M33: SoC bring-up, eFuse, image checks, AP services) | [firmware/se](../firmware/se), translated from CIX's debug build, DDR driver included | **built from source** (`--open`; `--vendor-se` keeps CIX's); same register writes and memory contents as CIX's in [test_se.py](../scripts/open/test_se.py) ([below](#se-firmware)) |
 | CSU_PM (Xtensa LX7, Arm SCP-firmware based) | [firmware/csupm](../firmware/csupm): SCP-firmware v2.11.0 and CIX's code translated from its debug build | **built from source** (`--open`; `--vendor-pm` keeps CIX's); does what CIX's does in [test_pm.py](../scripts/open/test_pm.py) at boot, over SCMI, for PM messages, through suspend/resume, shutdown and reset and at run time (DPM, fans, thermal), with each board's PM configuration; not yet boot-tested on hardware ([below](#csu_pm)) |
 | TF-A BL2 | `arm-trusted-firmware` + patch 0002 | **built from source** (`--open`, chain A), re-signed into bootloader1 |
 | TF-A BL31 | `arm-trusted-firmware` + patches 0004-0007 | **built from source** (`--open`) |
@@ -27,11 +27,10 @@ mask ROM ─▶ SE firmware ─▶ CSU_PM ─▶ TF-A BL2 ─▶ BL31 + OP-TEE (
 | Sensor fusion hub firmware (`sfh_fw.bin`, Cortex-M) | [firmware/sfh](../firmware/sfh) | **built from source** (`--open`); same hardware writes as CIX's in every scenario of [test_sfh.py](../scripts/open/test_sfh.py) |
 | `trustzone_config` | CIX generator | CIX stock binary on every board; identical to the generator's output apart from its timestamp ([below](#trustzone-configuration)) |
 
-With `--open` on an Orion O6/O6N, the CIX-built code left before UEFI is,
-inside the SE firmware, CIX's DDR driver (DRAM training) as a relinked
-binary and CIX's PVT table.  Everything else on the SE, CSU_PM, the
-application cores up to and beside BL33 (TF-A, OP-TEE, StandaloneMM) and
-the sensor fusion hub firmware are built here.
+With `--open` on an Orion O6/O6N, everything that runs before UEFI apart
+from the boot ROM is built here from source: the SE firmware (DRAM
+training included), CSU_PM, TF-A, OP-TEE with StandaloneMM and the sensor
+fusion hub firmware.  None of it has been boot-tested on hardware yet.
 
 ### Tracker
 
@@ -40,34 +39,36 @@ image each stage ships (O6, 2026Q3; the boot ROM is in the chip and cannot
 be replaced, so it is not counted):
 
 ```
-pre-BL33 firmware                               1374 KB   ███████████████████░  96% open
+pre-BL33 firmware                               1369 KB   ████████████████████ 100% open
 ├── bootloader1
-│   ├── SE firmware (Cortex-M33)                 149 KB   █████████████░░░░░░░  63% open
+│   ├── SE firmware (Cortex-M33)                 141 KB   ████████████████████ 100% open (CIX's: 334 KB)
 │   │   ├── start-up, eFuse, flash, crypto, key manager,
-│   │   │   SoC bring-up, CI-700, secure boot, services  95 KB   open (firmware/se)
-│   │   ├── DDR driver (DRAM training)            44 KB   closed: CIX's code, relinked
-│   │   └── PVT table (V/F selection data)        11 KB   closed: CIX's data
-│   ├── CSU_PM (Xtensa LX7)                      192 KB   ████████████████████ 100% open (CIX's: 327 KB)
-│   │   └── by CIX's code (193 KB; 79% translated, the rest replaced or CLI-only)
-│   │       ├── SCP-firmware framework, modules   49 KB   ████████████████░░░░  80% translated
-│   │       ├── CIX Source/projects/sky1          29 KB   ███████████████████░  96% translated
-│   │       ├── CIX Source/common                 69 KB   ██████████████░░░░░░  72% translated
-│   │       ├── FreeRTOS, Cadence runtime         28 KB   replaced: no RTOS, own libc
-│   │       └── debug CLI                         15 KB   not ported
+│   │   │   SoC bring-up, CI-700, secure boot, services        open (firmware/se)
+│   │   ├── DDR driver (DRAM training)                  open (firmware/se/ddr)
+│   │   └── PVT table (V/F selection data)              CIX's data as generated source
+│   ├── CSU_PM (Xtensa LX7)                      196 KB   ████████████████████ 100% open (CIX's: 327 KB)
+│   │   └── by CIX's code (198 KB; 79% translated, the rest replaced or CLI-only)
+│   │       ├── SCP-firmware framework, modules   51 KB   ████████████████░░░░  80% translated
+│   │       ├── CIX Source/projects/sky1          30 KB   ███████████████████░  96% translated
+│   │       ├── CIX Source/common                 71 KB   ██████████████░░░░░░  72% translated
+│   │       ├── FreeRTOS, Cadence runtime         29 KB   replaced: no RTOS, own libc
+│   │       └── debug CLI                         16 KB   not ported
 │   └── TF-A BL2                                  92 KB   ████████████████████ 100% open
 ├── bootloader2
 │   ├── TF-A BL31                                 94 KB   ████████████████████ 100% open
 │   └── OP-TEE with StandaloneMM                 842 KB   ████████████████████ 100% open
 └── sensor fusion hub firmware (Cortex-M)          4 KB   ████████████████████ 100% open
 
-open    1319 KB  SE (95), CSU_PM (192), BL2 (92), BL31 (94), OP-TEE + StMM (842), SFH (4)
-closed    55 KB  SE DDR driver and PVT table (55)
+open    1369 KB  SE (141), CSU_PM (196), BL2 (92), BL31 (94), OP-TEE + StMM (842), SFH (4)
+closed     0 KB  (the boot ROM, in the chip, is not counted)
 ```
 
-By stage: 6 of 7 stages fully open (CSU_PM, BL2, BL31, OP-TEE,
-StandaloneMM, SFH), the SE open apart from DRAM training and its PVT
-table. The open CSU_PM has not run on hardware yet (`--vendor-pm` keeps
-CIX's). How much of CIX's CSU_PM code the port translates is measured
+By stage: all 7 stages open (SE, CSU_PM, BL2, BL31, OP-TEE,
+StandaloneMM, SFH). Data CIX generated is carried as source where the
+firmware needs it (the SE's PVT table, CSU_PM's clock and V/F tables,
+generated from CIX's debug builds by scripts that check them against
+CIX's bytes). The open SE and CSU_PM have not run on hardware yet
+(`--vendor-se`, `--vendor-pm` keep CIX's). How much of CIX's CSU_PM code the port translates is measured
 against CIX's debug build: the share of CIX's code, by function size, the
 open firmware has a counterpart for (same name, or named in its sources as
 what they translate), regenerated with
@@ -136,9 +137,9 @@ FIP on every board is rooted at `0d999213` (the pregenerated
 5. BL2: `make PLAT=sky1 TRUSTED_BOARD_BOOT=1 ROT_KEY=cix_privatekey.pem bl2`
    with mbed TLS 2.28 (submodule `mbedtls`). The root of trust is the
    SHA-256 of that key's public half, built into BL2.
-6. SE firmware: CIX's debug SE build is fetched at the pinned commit, its
-   DDR driver turned into `ddr_island.S`, and `make -C firmware/se` builds
-   `se_fw.bin` (arm-none-eabi GCC, Mbed TLS). `--vendor-se` skips this.
+6. SE firmware: `make -C firmware/se` builds `se_fw.bin` (arm-none-eabi
+   GCC, Mbed TLS), DDR driver included; the build no longer needs CIX's
+   debug build. `--vendor-se` skips this.
 7. CSU_PM: `make -C firmware/csupm all check` (Espressif's Xtensa GCC with
    the pm_core_v1 description, every instruction checked against the
    core's) builds `csupm.xbin`, the XBIN image the SE loads.
@@ -411,9 +412,10 @@ and OTP, key manager, PLLs and clock/power sequencing, CI-700, MMHUB,
 RCSU, SRAM repair, loading and verifying CSU_PM and BL2, the mailbox
 services, suspend/resume and crash records.  SHA-2, HKDF and RSA come from
 the Mbed TLS submodule, SM2/SM3 are written here.  The DDR driver (DRAM
-training, 44 KB) is CIX's code: [se_ddr_island.py](../scripts/open/se_ddr_island.py)
-turns it into relinkable assembly (it reassembles to CIX's bytes exactly)
-and the build links it in, with CIX's PVT table.  The image is 151 KB
+training, 44 KB, 195 functions) is translated too
+([firmware/se/ddr](../firmware/se/ddr)), and CIX's PVT table is generated
+source; how they were checked is in the
+[README](../firmware/se/README.md#ddr-driver).  The image is 141 KB
 (CIX's release image: 334 KB).
 
 [se_emu.py](../scripts/open/se_emu.py) runs an SE image in Unicorn on a
@@ -433,8 +435,13 @@ records):
   the open O6 image is verified and boots; with one byte of BL2 or CSU_PM
   changed it does not.
 
-DRAM training itself is not emulated (its entry points are stubbed; it is
-the same code in both).  Differences from CIX's firmware, on purpose:
+* DRAM initialisation with the driver live (`--ddr`, on a model of the
+  controllers, PHYs and PI blocks inferred from what CIX's driver does):
+  identical over 9739 registers on the O6 and 9745 on the O6N, with each
+  driver feature switched too.  Training itself happens in the PI
+  hardware and is only modelled.
+
+Differences from CIX's firmware, on purpose:
 
 * secret eFuse fields (CIX device and model keys, test keys, OEM model key)
   go only to requests on the TEE mailbox; CIX's answers any field to the

@@ -11,7 +11,7 @@ prove identical code, and nothing here has been built or boot-tested.
 
 | Region | Contents | Public source | Can be rebuilt |
 |---|---|---|---|
-| `bootloader1.img` #1 | SE firmware (Cortex-M) | none | **built** for O6/O6N with `--open` from CIX's debug build, apart from the DDR driver (DRAM training), which is relinked ([open firmware](open-firmware.md#se-firmware)) |
+| `bootloader1.img` #1 | SE firmware (Cortex-M) | none | **built** for O6/O6N with `--open`, translated from CIX's debug build, DRAM training included ([open firmware](open-firmware.md#se-firmware)) |
 | `bootloader1.img` #2 | CSU_PM firmware (Xtensa, Arm SCP-firmware based) | SCP-firmware framework only | **built** for O6/O6N with `--open`, ported from CIX's debug build and matching CIX's in an emulator; not yet boot-tested ([open firmware](open-firmware.md#csu_pm)) |
 | `bootloader1.img` #3 | TF-A BL2 | cixtech TF-A, 5 platform files missing | **built** for O6/O6N with `--open` (patch 0002), re-signed into bootloader1 ([open firmware](open-firmware.md#bl2)) |
 | `bootloader2.img` | TF-A FIP: BL31 + OP-TEE BL32 (with StandaloneMM) | cixtech TF-A and OP-TEE, with gaps; StandaloneMM: EDK2 + 3 CIX binaries | **built** for O6/O6N with `--open`, StandaloneMM included ([open firmware](open-firmware.md#standalonemm)) |
@@ -243,8 +243,7 @@ images contain: the SE weekly tag (where present), the CSU_PM build
   no user TIE, so GCC builds for it with a description made from the
   instructions CIX's build uses. This is the firmware that sets frequency
   caps. Status: [open firmware](open-firmware.md#csu_pm).
-* **SE firmware**: rebuilt from CIX's debug build, apart from the DRAM
-  training, which is relinked as CIX built it
+* **SE firmware**: rebuilt from CIX's debug build, DRAM training included
   ([open firmware](open-firmware.md#se-firmware)).
 
 ## EC firmware

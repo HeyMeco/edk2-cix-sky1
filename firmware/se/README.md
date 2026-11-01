@@ -6,8 +6,8 @@ data, sets up clocks, power, the interconnect and the TZC-400s, verifies and
 starts CSU_PM and BL2, and then serves the AP and the PM over the mailbox
 (crypto, eFuse, keys, suspend and resume) for as long as the system runs.
 
-This directory rebuilds it from source, except the DDR driver, which is
-CIX's code linked in unchanged.
+This directory rebuilds all of it from source, CIX's DDR driver (DRAM
+training) included.
 
 ## Reference material
 
@@ -27,34 +27,61 @@ The shipping firmware is 2.0.2026W31.01 (CIX 2026Q3 bootloader1).
 
 | CIX directory | Size | What | Here |
 |---|---|---|---|
-| `driver/ddr` | 44 KB, 192 functions | LPDDR5 controller/PHY init and training | **CIX binary**, relinked from the debug ELF (`ddr/`) |
-| `library/ce_lite` | 61 KB | crypto engine (hash, RSA, SM2, ECC, AES, SM4, TRNG, OTP) | to do: software crypto where the result is the same, CE only for TRNG/OTP |
+| `driver/ddr` | 44 KB, 195 functions | LPDDR5 controller/PHY/PI init and training, BIST, eye scan | done (`ddr/`, CIX's file names) |
+| `driver/vf_sel` | 11 KB data | PVT table (V/F selection by wafer and die position) | generated source (`driver/pvt_data.c`) |
+| `library/ce_lite` | 61 KB | crypto engine (hash, RSA, SM2, ECC, AES, SM4, TRNG, OTP) | done: Mbed TLS for SHA-2, HKDF, RSA; SM2/SM3 here; engine bring-up, TRNG, OTP |
 | `service/debug/monitor` | 26 KB | UART debug monitor | not planned (debug only) |
-| `hal/common` | 15 KB | log, storage (flash images), crash, crypto glue | to do |
-| `framework` | 18 KB | eFuse, key management, image verification, xloader, jumper | to do |
-| `driver/*` (other) | 30 KB | CRU, PLL, QSPI/xSPI, CI-700, TZC-400, mailbox, I2C/PMIC, RCSU, … | to do |
-| `service` | 9 KB | boot, cold/warm boot, runtime services, STR | to do |
-| `platform/sky1` | 4 KB | SoC description, wake-up sources | to do |
+| `hal/common` | 15 KB | log, storage (flash images), crash, crypto glue | done |
+| `framework` | 18 KB | eFuse, key management, image verification, xloader, jumper | done |
+| `driver/*` (other) | 30 KB | CRU, PLL, QSPI/xSPI, CI-700, TZC-400, mailbox, I2C/PMIC, RCSU, … | done |
+| `service` | 9 KB | boot, cold/warm boot, runtime services, STR | done |
+| `platform/sky1` | 4 KB | SoC description, wake-up sources | done |
 
-## DDR island
+## DDR driver
 
-`scripts/open/se_ddr_island.py` turns the DDR driver of the debug ELF into
-an assembly file: the code bytes as they are, with each call to a function
-outside the driver re-emitted as `bl <name>` and each literal-pool word
-that points at data or code re-emitted as a `.word <symbol>+<offset>`, plus
-the driver's strings, tables and variables. It links into this firmware
-like any object. The driver calls 16 functions outside itself (C library,
-log, interrupts, flash, eFuse, GPIO, memory-config write) and is entered
-through 7 (`drv_ddr_init`, `drv_ddr_postci`, `drv_ddr_get_mem_size`,
-`drv_ddr_get_ch_num`, `drv_ddr_set_avail_mem_size`, `MemGetBootEnv`,
-`drv_ddr_assert`); it reads memory configuration format 2.0.
+[`ddr/`](ddr) is CIX's DDR driver translated function by function from the
+debug ELF, one file per CIX source file, with CIX's function names and
+its `drv_ddr_assert` file codes and line numbers; CIX's oddities are kept
+and commented (e.g. `CdcbUpdateBlockBuf` writes back as many bytes as the
+new checksum's value), its training report and register dumps left out.
+Generated from the ELF by scripts, with `--check` against CIX's data:
+`MemLpddr5RegData.c` (the LPDDR5 register tables, 1679 entries:
+`scripts/open/se_ddr_tables.py`), `mem_types.h` (the driver's types,
+`scripts/open/se_ddr_header.py`) and `driver/pvt_data.c` (the PVT table,
+2668 entries, CIX's 10 672 bytes exactly: `scripts/open/se_pvt_table.py`).
+
+How it was checked, against CIX's code in the emulator:
+
+* `scripts/open/test_se_ddr_fn.py` calls each function of CIX's and of the
+  port from the same captured state (from a run of CIX's SE) with the same
+  arguments, random and boundary ones too, and compares return values,
+  memory, register writes and asserts (115 functions, 0 failing);
+* `test_se.py --ddr` runs both SEs with the driver live on a model of the
+  controllers, PHYs and PI blocks (`se_emu.py` `DdrModel`, inferred from
+  what CIX's driver writes and waits for: the PI's frequency-change
+  requests to the PM, INIT_COMP, mode registers as written, BIST passing)
+  and compares every register write, the memory, the size and channels
+  reported and the memory configuration written back to flash: identical
+  on the O6 (9739 registers) and O6N (9745), and with each driver feature
+  switched (DFS, inline and link ECC, BIST, SSC, train mode, RFM, PBR,
+  address mode, port priority; `--ddr-feature`), the eye scan too.
+
+What only real DRAM shows: training itself (the PI does it in hardware:
+frequency order, failures and retries), the parts' mode-register values,
+real BIST and eye-scan results, the interrupt masks' reset values.
+
+`scripts/open/se_ddr_island.py` (CIX's driver as relinkable assembly; it
+reassembles to CIX's 43 876 code bytes exactly) built the firmware while
+the port was under way and is kept for tests: `make CIX_ELF=...` links
+CIX's code for every function `ddr/` does not define.
 
 ## Status
 
 | Step | State |
 |---|---|
 | Structure, boot path and interfaces mapped (`main` → `fw_init` → `services_init`) | done |
-| DDR island generator; with every symbol at its original address it reassembles to CIX's 43 876 code bytes exactly | done |
+| DDR island generator; with every symbol at its original address it reassembles to CIX's 43 876 code bytes exactly | done (kept for tests) |
+| DDR driver translated (`ddr/`), PVT table as generated source; DDR model and `test_se.py --ddr` | done: identical to CIX's with the driver live, O6 and O6N, every feature switch |
 | Startup, UART, timer, heap, log, RAM log | done |
 | Flash access (QSPI and FCH xSPI), firmware table, SE config | done |
 | eFuse, key manager, crypto (Mbed TLS for SHA-2, HKDF, RSA; SM2/SM3 here; engine bring-up, TRNG, OTP from CIX's binary) | done |

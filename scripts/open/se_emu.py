@@ -96,11 +96,13 @@ BL1_HEADER = 0x188000
 class SkySoc(Soc):
     """Enough of Sky1 for the SE to boot: the boot ROM's hand-over in SRAM,
     the QSPI flash, PLLs that lock, power controllers that follow, the
-    crypto engine's status, the PM's handshakes.  DRAM training is not
-    modelled (the DDR driver's entry points are stubbed by the caller)."""
+    crypto engine's status, the PM's handshakes.  DRAM controllers: with
+    ddr=DdrModel(), what CIX's DDR driver waits for; without, the caller
+    stubs the driver's entry points."""
 
-    def __init__(self, flash, life_cycle=4, boot_reason=2, jedec=(0xef, 0x60, 0x18), efuse=None):
+    def __init__(self, flash, life_cycle=4, boot_reason=2, jedec=(0xef, 0x60, 0x18), efuse=None, ddr=None):
         super().__init__(flash)
+        self.ddr = ddr                       # DdrModel, or None when the DDR driver is stubbed
         self.efuse = efuse or {}             # byte address -> bytes
         self.flash = bytearray(flash)
         self.life_cycle = life_cycle
@@ -116,6 +118,11 @@ class SkySoc(Soc):
         self.ppu = {}
         self.mbox_pending = None
         self.window = 0
+
+    def attach(self, se):
+        self.se = se
+        if self.ddr:
+            self.ddr.attach(se)
 
     def reset_state(self, uc):
         # the boot ROM leaves the bootloader1 header in SRAM, and the fuses in the fuse SRAM
@@ -167,6 +174,10 @@ class SkySoc(Soc):
         alias = self.pm_alias(addr)
         if alias is not None:
             return int.from_bytes(self.se.uc.mem_read(alias, size), "little")
+        if self.ddr:
+            v = self.ddr.read(addr, size)
+            if v is not None:
+                return v
         if QSPI <= addr < QSPI + 0x100:
             off = addr - QSPI
             if off == 0x04:
@@ -233,6 +244,8 @@ class SkySoc(Soc):
         alias = self.pm_alias(addr)
         if alias is not None:
             self.se.uc.mem_write(alias, value.to_bytes(size, "little"))
+        if self.ddr:
+            self.ddr.write(addr, size, value)
         if addr == 0xb0030100:
             self.window = value
         if addr == QSPI and value & 2:
@@ -253,6 +266,236 @@ class SkySoc(Soc):
                 self.pm_magic.pop(0)
 
 
+DDRC = 0x4c010000                # channel ch at DDRC + ch * DDRC_STRIDE (SMN 0x0c010000)
+DDRC_STRIDE = 0x20000
+DDR_FANOUT = 0x46510600          # PM public DDR fan-out registers, one per channel
+DDR_IRQ = (219, 221, 223, 225)   # CIX's ddrc_irq_type
+DDR_RESET = 0x56000400           # SoC reset release; bit 0: the DDR subsystem (MemDdrcReset)
+
+
+class DdrModel:
+    """The four LPDDR5 channels (Cadence Denali controller at +0, PI at
+    +0x2000, PHY at +0x4000 of each channel) and the PM's DDR fan-out
+    registers, as far as CIX's DDR driver waits for them.  Registers are
+    memory apart from the status bits below; what they do is read from what
+    CIX's driver writes, polls and acknowledges (and the bit names in its
+    DWARF), not from Cadence's documentation.  Modelled, not known:
+
+    * reset (DDR_RESET bit 0 from 1 to 0, CIX's MemDdrcReset): every register of
+      the four channels reads 0 afterwards and the state below starts over.
+    * interrupt groups: status at 0x57c + 4g, acknowledge at 0x5a0 + 4g
+      (write 1 to clear), mask at 0x5c4 + 4g (CIX's DdrcIrqTlb gives status
+      and acknowledge; the mask offset follows from enable_ddr_init_monitor
+      unmasking INIT_COMP at 0x5e4).  The channel's interrupt (DDR_IRQ) is
+      up while a status bit is set and not masked; the master mask (0x578)
+      is not modelled.
+    * START of the controller (CTL_0 bit 0 going from 0 to 1): the PI trains at frequency 0,
+      then asks the PM (fan-out register: freq_change_req, type = frequency
+      index) for each further frequency in PI_FREQ_MAP (PI_13) in rising
+      order, and for PI_INIT_WORK_FREQ (PI_14) last if it is not the last
+      one trained; each request is dropped when the SE sets
+      freq_change_ack and the next comes when it clears it.  Then INIT_COMP
+      (0x59c bit 9) and PI_INT_STATUS bit 0 (PI init done) are set.  No
+      training step fails (0x598 DFI errors stay clear) and PI training
+      status bits other than bit 0 stay clear.  Without the PI started
+      (CIX's boot environment 0 does not write PI registers) INIT_COMP comes
+      at once.
+    * mode registers: a write (CTL_205 WRITE_MODEREG, bit 25) stores
+      CTL_217's MRSINGLE_DATA for the rank (bit 24: all ranks) and sets
+      MRW_DONE (0x59c bit 19); a read (CTL_206 READ_MODEREG, bit 24) puts
+      the value in PERIPHERAL_MRR_DATA (CTL_207) for every device (16 bits
+      each) and sets MRR_DONE (bit 18).  Registers never written read as
+      MR_DEFAULTS (manufacturer, revision, density: a 16 Gb x16 LPDDR5
+      device by default).
+    * low-power commands (CTL_175 LP_CMD): CTL_190 LP_STATE reads
+      0x40 | command (bit 6 = valid).  Only the status bits the driver
+      polls are ever set (else a status nobody acknowledges would keep the
+      interrupt up: the group masks' reset values are not known).
+    * BIST: the controller's (0x3cc bit 0) sets BIST_DONE (0x598 bit 0) and
+      reads back passed (0x3cc bit 8); data initialisation (0x40c bit 8)
+      reads back done (0x40c bit 0); the PI's (PI_324, 0x2510 bit 0) sets
+      PI_INT_STATUS bit 16 and passed (0x2510 bit 8).
+    * fan-out DFS handshake: lp_ext_ack follows lp_ext_req; the command
+      strobe makes the controller ask for a clock change
+      (cntrl_freq_change_req) until the SE acknowledges it
+      (cntrl_freq_change_ack), after which lp_ext_done reads set until
+      lp_ext_req is cleared.
+    """
+
+    STATUS, ACK, MASK = 0x57c, 0x5a0, 0x5c4
+    GROUPS = 9
+    MR_DEFAULTS = {5: 0x01, 6: 0x00, 7: 0x00, 8: 0x18}
+    FANOUT_SE = 0x1 | 0xc | 0x3f0 | 0x400 | 0x4000 | 0x80000000      # bits the SE drives
+
+    def __init__(self):
+        self.se = None
+        self.resets = 0
+        self.reset()
+
+    def reset(self):
+        """DDR subsystem reset: the channels' state, and their registers read
+        as zero (their reset values are not known)."""
+        if self.se is not None:
+            for ch in range(4):
+                page = DDRC + ch * DDRC_STRIDE
+                if page in self.se.mapped:
+                    self.se.uc.mem_write(page, bytes(0x10000))
+                self.se.set_line(DDR_IRQ[ch], False)
+        self.status = [[0] * self.GROUPS for _ in range(4)]
+        self.pi_status = [0] * 4
+        self.started = [False] * 4
+        self.freq_req = [[] for _ in range(4)]   # frequencies the PI still asks for
+        self.req_up = [False] * 4                # request shown in the fan-out register
+        self.req_acked = [False] * 4
+        self.lp_state = [0] * 4
+        self.bist_pass = [False] * 4
+        self.pi_bist_pass = [False] * 4
+        self.data_init = [False] * 4
+        self.mr = [{} for _ in range(4)]         # (rank, mr) -> value
+        self.dfs = [dict(creq=False, done=False) for _ in range(4)]
+        self.log = []                            # (channel, event), for reports
+
+    def attach(self, se):
+        self.se = se
+
+    def mem(self, addr):
+        return struct.unpack("<I", self.se.uc.mem_read(addr & ~3, 4))[0]
+
+    @staticmethod
+    def channel(addr):
+        if DDRC <= addr < DDRC + 4 * DDRC_STRIDE and (addr - DDRC) % DDRC_STRIDE < 0x10000:
+            return (addr - DDRC) // DDRC_STRIDE, (addr - DDRC) % DDRC_STRIDE
+        return None, None
+
+    def update_line(self, ch):
+        base = DDRC + ch * DDRC_STRIDE
+        up = any(self.status[ch][g] & ~self.mem(base + self.MASK + 4 * g) for g in range(self.GROUPS))
+        self.se.set_line(DDR_IRQ[ch], up)
+
+    def set_status(self, ch, off, bits):
+        self.status[ch][(off - self.STATUS) // 4] |= bits
+        self.update_line(ch)
+
+    def read(self, addr, size):
+        if DDR_FANOUT <= addr < DDR_FANOUT + 16 and size == 4:
+            ch = (addr - DDR_FANOUT) // 4
+            v = self.mem(addr) & self.FANOUT_SE
+            if v & 1:
+                v |= 2                                   # lp_ext_ack
+            if self.dfs[ch]["creq"]:
+                v |= 1 << 30
+            if self.dfs[ch]["done"]:
+                v |= 1 << 11
+            if self.req_up[ch] and self.freq_req[ch]:
+                v |= 1 << 20 | (self.freq_req[ch][0] & 0x1f) << 15
+            return v
+        ch, off = self.channel(addr)
+        if ch is None or size != 4:
+            return None
+        if self.STATUS <= off < self.STATUS + 4 * self.GROUPS:
+            return self.status[ch][(off - self.STATUS) // 4]
+        if off == 0x2f8:                                 # CTL_190 LP_STATE
+            return (self.mem(addr) & ~0x7f00) | self.lp_state[ch] << 8
+        if off == 0x3cc:
+            return (self.mem(addr) & ~0x100) | (0x100 if self.bist_pass[ch] else 0)
+        if off == 0x40c:
+            return (self.mem(addr) & ~1) | (1 if self.data_init[ch] else 0)
+        if off == 0x24a0:                                # PI_INT_STATUS (PI_296)
+            return self.pi_status[ch]
+        if off == 0x2510:
+            return (self.mem(addr) & ~0x100) | (0x100 if self.pi_bist_pass[ch] else 0)
+        return None
+
+    def write(self, addr, size, value):
+        if DDR_FANOUT <= addr < DDR_FANOUT + 16 and size == 4:
+            self.fanout_write((addr - DDR_FANOUT) // 4, value)
+            return
+        if addr == DDR_RESET and self.mem(addr) & 1 and not value & 1:     # DDRC put in reset
+            self.resets += 1
+            self.reset()
+            return
+        ch, off = self.channel(addr)
+        if ch is None or size != 4:
+            return
+        base = DDRC + ch * DDRC_STRIDE
+        if self.ACK <= off < self.ACK + 4 * self.GROUPS:
+            self.status[ch][(off - self.ACK) // 4] &= ~value
+            self.update_line(ch)
+        elif self.MASK <= off < self.MASK + 4 * self.GROUPS:
+            self.update_line(ch)
+        elif off == 0 and value & 1 and not self.mem(addr) & 1:      # START, rising
+            self.start(ch, base)
+        elif off == 0x334 and value & (1 << 25):          # CTL_205 WRITE_MODEREG
+            mr, data = value & 0xff, self.mem(base + 0x364) >> 16 & 0xff
+            ranks = (0, 1) if value & (1 << 24) else ((value >> 8) & 0xff,)
+            for r in ranks:
+                self.mr[ch][(r, mr)] = data
+            self.set_status(ch, 0x59c, 1 << 19)           # MRW_DONE
+        elif off == 0x338 and value & (1 << 24):          # CTL_206 READ_MODEREG
+            mr, rank = (value >> 8) & 0xff, (value >> 16) & 0xff
+            data = self.mr[ch].get((rank, mr), self.MR_DEFAULTS.get(mr, 0))
+            self.se.uc.mem_write(base + 0x33c, (data | data << 16).to_bytes(4, "little"))
+            self.set_status(ch, 0x59c, 1 << 18)           # MRR_DONE
+        elif off == 0x2bc:                                # CTL_175 LP_CMD
+            self.lp_state[ch] = 0x40 | (value >> 16 & 0x3f)
+        elif off == 0x3cc:
+            if value & 1 and not self.bist_pass[ch]:
+                self.bist_pass[ch] = True
+                self.set_status(ch, 0x598, 1)             # BIST_DONE
+            elif not value & 1:
+                self.bist_pass[ch] = False
+        elif off == 0x40c:
+            self.data_init[ch] = bool(value & 0x100)
+        elif off == 0x2510:
+            if value & 1 and not self.pi_bist_pass[ch]:
+                self.pi_bist_pass[ch] = True
+                self.pi_status[ch] |= 1 << 16
+            elif not value & 1:
+                self.pi_bist_pass[ch] = False
+        elif off == 0x24a8:                               # PI_INT_ACK
+            self.pi_status[ch] &= ~value
+
+    def start(self, ch, base):
+        self.started[ch] = True
+        if not self.mem(base + 0x2000) & 1:              # PI not started
+            self.log.append((ch, "init"))
+            self.init_done(ch)
+            return
+        fmap, work = self.mem(base + 0x2034), self.mem(base + 0x2038) & 0x1f
+        freqs = [f for f in range(1, 32) if fmap >> f & 1]
+        if work != (freqs[-1] if freqs else 0):
+            freqs.append(work)
+        self.freq_req[ch] = freqs
+        self.log.append((ch, f"train, frequency changes {freqs}"))
+        if freqs:
+            self.req_up[ch] = True
+        else:
+            self.init_done(ch)
+
+    def init_done(self, ch):
+        self.pi_status[ch] |= 1
+        self.set_status(ch, 0x59c, 1 << 9)                # INIT_COMP
+
+    def fanout_write(self, ch, value):
+        d = self.dfs[ch]
+        if value & 0x400 and value & 1:
+            d["creq"] = True                              # command strobe: clock change wanted
+        if value & (1 << 31) and d["creq"]:
+            d["creq"], d["done"] = False, True
+        if not value & 1:
+            d["done"] = False
+        if self.freq_req[ch]:
+            if value & (1 << 14) and self.req_up[ch]:
+                self.req_up[ch], self.req_acked[ch] = False, True
+            elif not value & (1 << 14) and self.req_acked[ch]:
+                self.req_acked[ch] = False
+                self.freq_req[ch].pop(0)
+                if self.freq_req[ch]:
+                    self.req_up[ch] = True
+                else:
+                    self.init_done(ch)
+
+
 class Se:
     def __init__(self, elf_path, soc=None, stubs=None, stop=(), trace=False):
         self.elf = Elf(elf_path)
@@ -269,8 +512,10 @@ class Se:
         self.writes = []         # (function, address, size, value)
         self.calls = []          # function entries, in order (with trace)
         self.trace = trace
-        self.blocks = Counter()
+        self.blocks = {}         # block -> (write count when last seen, runs since)
+        self.gen = 0
         self.stubs = {self.elf.addr(n): v for n, v in (stubs or {}).items() if n in self.elf.syms}
+        self.hooks = {}          # block address -> fn(se), called before the block runs
         self.stops = {self.elf.addr(n): n for n in stop if n in self.elf.syms}
         if "service_idle_entry" in self.elf.syms:
             self.stops[self.elf.addr("service_idle_entry")] = "service_idle_entry"
@@ -278,10 +523,18 @@ class Se:
         self.stopped = None
         self.poll = None
         self.stop_write = None
+        self.budget = 0
         self.wfi = 0
         self.wfi_seen = set()
         self.poll_limit = 200_000
         self.wfi_hook = None
+        # external interrupt lines the SoC model drives (level), the NVIC's
+        # enables as the firmware sets them, and the line to take next
+        self.lines = set()
+        self.nvic_enabled = set()
+        self.in_irq = False
+        self.take_irq = None
+        self.irqs_taken = 0
         uc.hook_add(UC_HOOK_MEM_UNMAPPED, self.on_unmapped)
         for lo, hi in ((0, SRAM - 1), (SRAM + SRAM_SIZE, 0xFFFFFFFF)):
             uc.hook_add(UC_HOOK_MEM_READ, self.on_read, begin=lo, end=hi)
@@ -314,17 +567,50 @@ class Se:
     def on_write(self, uc, access, addr, size, value, user):
         value &= (1 << (8 * size)) - 1
         self.writes.append((self.pc_func(), addr, size, value))
+        self.gen += 1
+        if 0xe000e100 <= addr < 0xe000e1c0 and size == 4:       # NVIC ISER / ICER
+            base = 0xe000e100 if addr < 0xe000e180 else 0xe000e180
+            for b in range(32):
+                if value >> b & 1:
+                    n = (addr - base) * 8 + b
+                    (self.nvic_enabled.add if base == 0xe000e100 else self.nvic_enabled.discard)(n)
         self.soc.write(addr, size, value)
         if (addr, value) == self.stop_write:
             self.stopped = f"write {value:#x} to {addr:#x}"
             uc.emu_stop()
 
     # execution --------------------------------------------------------------
+    def set_line(self, n, level):
+        """The SoC model raises (level true) or lowers external interrupt n."""
+        (self.lines.add if level else self.lines.discard)(n)
+
+    def start(self, pc, count):
+        """emu_start with an instruction budget kept here, not by Unicorn:
+        Unicorn 2.1.4's count= (like an unranged memory-write hook) breaks
+        Thumb IT blocks with conditional stores, skipping the instructions
+        after them.  The budget is counted per block (bytes / 2, Thumb), so
+        it bounds a run rather than ending it at an exact instruction."""
+        self.budget = count
+        self.uc.emu_start(pc | 1, 0xFFFFFFFF)
+
     def on_block(self, uc, addr, size, user):
+        self.budget -= max(size // 2, 1)
+        if self.budget < 0:
+            uc.emu_stop()
+            return
+        if self.lines and not self.in_irq:
+            from unicorn.arm_const import UC_ARM_REG_PRIMASK
+            ready = sorted(n for n in self.lines if n in self.nvic_enabled)
+            if ready and not uc.reg_read(UC_ARM_REG_PRIMASK) & 1:
+                self.take_irq = ready[0]
+                uc.emu_stop()
+                return
         if addr in self.stops:
             self.stopped = self.stops[addr]
             uc.emu_stop()
             return
+        if addr in self.hooks:
+            self.hooks[addr](self)
         if addr in self.stubs:
             stub = self.stubs[addr]
             uc.reg_write(UC_ARM_REG_R0, stub(self) if callable(stub) else stub)
@@ -332,8 +618,10 @@ class Se:
             return
         if self.trace and addr in self.entries:
             self.calls.append(self.entries[addr])
-        self.blocks[addr] += 1
-        if self.blocks[addr] > self.poll_limit:
+        gen, n = self.blocks.get(addr, (self.gen, 0))
+        n = n + 1 if gen == self.gen else 1
+        self.blocks[addr] = (self.gen, n)
+        if n > self.poll_limit:
             self.poll = (self.elf.func_at(addr), addr, getattr(self, "last_read", None))
             uc.emu_stop()
 
@@ -354,15 +642,38 @@ class Se:
         self.uc.reg_write(UC_ARM_REG_LR, IRQ_RETURN | 1)
         self.stops[IRQ_RETURN] = "irq return"
         self.stopped = None
+        self.in_irq = True
         try:
-            self.uc.emu_start(handler | 1, 0xFFFFFFFF, count=count)
+            self.start(handler, count)
         except UcError as e:
             pc = self.uc.reg_read(UC_ARM_REG_PC)
             raise SystemExit(f"emulation error at {pc:#x} ({self.elf.func_at(pc)}): {e}")
         finally:
+            self.in_irq = False
             del self.stops[IRQ_RETURN]
             self.uc.context_restore(saved)
         return self.stopped == "irq return"
+
+    def call(self, name, *args, count=50_000_000):
+        """Call a firmware function with up to four word arguments on a
+        scratch stack, and return its r0 (the machine state is restored
+        afterwards)."""
+        saved = self.uc.context_save()
+        stops = dict(self.stops)
+        for i, v in enumerate(args):
+            self.uc.reg_write((UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3)[i], v)
+        self.uc.reg_write(UC_ARM_REG_SP, 0x2006f000)
+        self.uc.reg_write(UC_ARM_REG_LR, IRQ_RETURN | 1)
+        self.stops = {IRQ_RETURN: "return"}
+        self.stopped = None
+        try:
+            self.start(self.elf.addr(name), count)
+            if self.stopped != "return":
+                raise SystemExit(f"{name}() did not return")
+            return self.uc.reg_read(UC_ARM_REG_R0)
+        finally:
+            self.stops = stops
+            self.uc.context_restore(saved)
 
     def arg(self, n):
         return self.uc.reg_read((UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3)[n])
@@ -390,12 +701,21 @@ class Se:
 
     def run(self, pc=None, count=50_000_000):
         pc = self.reset() if pc is None else pc
-        try:
-            self.uc.emu_start(pc | 1, 0xFFFFFFFF, count=count)
-        except UcError as e:
+        while True:
+            try:
+                self.start(pc, count)
+            except UcError as e:
+                pc = self.uc.reg_read(UC_ARM_REG_PC)
+                raise SystemExit(f"emulation error at {pc:#x} ({self.elf.func_at(pc)}): {e}")
+            if self.take_irq is None:
+                return self.stopped
+            # an interrupt line came up: take it, then carry on where the code was
+            n, self.take_irq = self.take_irq, None
             pc = self.uc.reg_read(UC_ARM_REG_PC)
-            raise SystemExit(f"emulation error at {pc:#x} ({self.elf.func_at(pc)}): {e}")
-        return self.stopped
+            self.irqs_taken += 1
+            if not self.irq(n):
+                raise SystemExit(f"interrupt {n}: the handler did not return ({self.stopped or self.poll})")
+            self.stopped = None
 
 
 def main():

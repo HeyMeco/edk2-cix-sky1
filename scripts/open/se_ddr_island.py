@@ -41,6 +41,7 @@ from elftools.elf.elffile import ELFFile
 from elftools.elf.sections import SymbolTableSection
 
 DDR_DIR = b"/driver/ddr"
+CONDITIONS = {"eq", "ne", "cs", "hs", "cc", "lo", "mi", "pl", "vs", "vc", "hi", "ls", "ge", "lt", "gt", "le"}
 
 
 class Image:
@@ -145,23 +146,31 @@ def pointer_offsets(t, base=0, depth=0):
 
 
 def ddr_units(img):
-    """DDR function starts and variables -> offsets of their pointer fields."""
+    """DDR function starts, variables -> offsets of their pointer fields,
+    the compile unit of each (start address -> CU name), and the starts of
+    the functions that are not static."""
     dw = img.elf.get_dwarf_info()
-    funcs, variables = set(), {}
+    funcs, variables, unit, external = set(), {}, {}, set()
     for cu in dw.iter_CUs():
-        comp = cu.get_top_DIE().attributes.get("DW_AT_comp_dir")
+        top = cu.get_top_DIE()
+        comp = top.attributes.get("DW_AT_comp_dir")
         if not comp or DDR_DIR not in comp.value:
             continue
+        name = top.attributes["DW_AT_name"].value.decode()
         for die in cu.iter_DIEs():
             if die.tag == "DW_TAG_subprogram" and "DW_AT_low_pc" in die.attributes:
                 funcs.add(die.attributes["DW_AT_low_pc"].value & ~1)
+                unit[die.attributes["DW_AT_low_pc"].value & ~1] = name
+                if "DW_AT_external" in die.attributes:
+                    external.add(die.attributes["DW_AT_low_pc"].value & ~1)
             elif die.tag == "DW_TAG_variable" and "DW_AT_location" in die.attributes:
                 loc = die.attributes["DW_AT_location"].value
                 if isinstance(loc, list) and len(loc) == 5 and loc[0] == 3:   # DW_OP_addr
                     addr = int.from_bytes(bytes(loc[1:5]), "little")
                     t = die.get_DIE_from_attribute("DW_AT_type") if "DW_AT_type" in die.attributes else None
                     variables[addr] = pointer_offsets(t) if t is not None else []
-    return funcs, variables
+                    unit[addr] = name
+    return funcs, variables, unit, external
 
 
 class Disasm:
@@ -246,16 +255,20 @@ class Disasm:
 
 
 class Island:
-    def __init__(self, img, original=False):
+    def __init__(self, img, original=False, skip=(), needed=()):
         self.img = img
         self.original = original
-        dfuncs, self.dvars = ddr_units(img)
+        self.skip = set() if original else set(skip)
+        self.needed = set(needed)
+        dfuncs, self.dvars, self.unit, self.external = ddr_units(img)
         self.starts = sorted(dfuncs)
         self.code_lo = self.starts[0]
         self.code_hi = max(s + img.funcs[s][1] for s in self.starts)
         for addr, (name, _) in img.funcs.items():
             if self.code_lo <= addr < self.code_hi and addr not in dfuncs:
                 sys.exit(f"{name} at {addr:#x} sits inside the DDR code range")
+        # a function's bytes run up to the next one (padding after its symbol size)
+        self.ends = dict(zip(self.starts, self.starts[1:] + [self.code_hi]))
         self.externals = defaultdict(set)
         self.data_objects = {}       # start -> (name, size, section)
         self.strings = {}            # address -> bytes
@@ -264,9 +277,23 @@ class Island:
     def is_code(self, addr):
         return self.code_lo <= addr < self.code_hi
 
+    def func_of(self, addr):
+        return self.starts[bisect_right(self.starts, addr) - 1]
+
+    def fname(self, start):
+        return self.img.funcs[start][0]
+
+    def emitted(self, start):
+        return self.fname(start) not in self.skip
+
     @staticmethod
     def sym(name):
         return name.replace(".", "_")
+
+    def vsym(self, name):
+        """Label of a driver variable: its CIX name (global), or for a
+        function's static local (CIX symbol name.N) a local ddr_ label."""
+        return f"ddr_{self.sym(name)}" if "." in name else name
 
     def describe(self, value, user, pointer=True):
         """Assembly expression for an address value, or None for a constant.
@@ -278,7 +305,12 @@ class Island:
         thumb = 1 if (value & 1 and fn is not None and fn[3] == "f") else 0
         target = value - thumb
         if self.is_code(target):
-            return f"ddr_text+{target - self.code_lo + thumb:#x}"
+            f = self.func_of(target)
+            if target == f and thumb:
+                return self.fname(f)
+            if not self.emitted(f):
+                raise ValueError(f"{value:#x} (from {user:#x}) points into {self.fname(f)}, which is left out")
+            return f"ddr_f_{self.fname(f)}+{target - f + thumb:#x}"
         s = img.symbol_at(target)
         if s is not None:
             name, start, size, kind = s
@@ -287,8 +319,12 @@ class Island:
             if name == "__Vectors" and not pointer:
                 return None
             if kind == "o" and start in self.dvars:
-                self.data_objects[start] = (name, size, img.section_of(start)[0])
-                return f"ddr_{self.sym(name)}+{target - start:#x}"
+                if name in self.skip and "." not in name:
+                    self.externals[name].add(user)       # defined by the C sources
+                else:
+                    self.data_objects[start] = (name, size, img.section_of(start)[0])
+                off = target - start
+                return f"{self.vsym(name)}+{off:#x}"
             self.externals[name].add(user)
             off = target - start + thumb
             return f"{self.sym(name)}+{off:#x}" if off else self.sym(name)
@@ -309,6 +345,100 @@ class Island:
             return None
         raise ValueError(f"address {value:#x} ({sec}) referenced from {user:#x} has no symbol")
 
+    def code_refs(self, f, insns, literals):
+        """DDR functions that function f calls, branches to or takes the
+        address of."""
+        refs, end = set(), self.ends[f]
+        for pc, i in insns.items():
+            if not f <= pc < end:
+                continue
+            m = i.mnemonic.split(".")[0]
+            imm = [op.imm for op in i.operands if op.type == carm.ARM_OP_IMM]
+            if (m in ("b", "bl") or (m[:1] == "b" and m[1:] in CONDITIONS)) and imm \
+                    and self.is_code(imm[-1]) and not f <= imm[-1] < end:
+                refs.add(self.func_of(imm[-1]))
+        for lit in literals:
+            if f <= lit < end:
+                v = struct.unpack("<I", self.img.read(lit, 4))[0]
+                if self.is_code(v & ~1) and not f <= (v & ~1) < end:
+                    refs.add(self.func_of(v & ~1))
+        return refs
+
+    def drop_unused_statics(self, insns, literals):
+        """A function CIX made static that no function left here, no
+        variable and no C object (self.needed: their undefined symbols)
+        refers to is left out too: the C port of its file has it, perhaps
+        inlined."""
+        refs = {f: self.code_refs(f, insns, literals) for f in self.starts}
+        data_refs = set()
+        for v, ptrs in self.dvars.items():
+            sy = self.img.symbol_at(v)
+            if self.img.section_of(v)[1] is None:              # .bss
+                continue
+            for off in ptrs:
+                if sy and off + 4 <= sy[2]:
+                    w = struct.unpack("<I", self.img.read(v + off, 4))[0]
+                    if self.is_code(w & ~1):
+                        data_refs.add(self.func_of(w & ~1))
+        kept = set(self.kept)
+        while True:
+            used = set().union(*(refs[f] for f in kept)) | data_refs
+            drop = {f for f in kept if f not in self.external and f not in used
+                    and self.fname(f) not in self.needed}
+            if not drop:
+                break
+            kept -= drop
+        self.kept = [f for f in self.starts if f in kept]
+
+    def emit_function(self, w, f, lit_words, insns, code_pointers):
+        img = self.img
+        name, size = img.funcs[f]
+        if not self.original:
+            w(f"\t.section .text.ddr.{name}, \"ax\", %progbits\n\t.p2align 2")
+            if f & 3:
+                w("\t.byte 0x00, 0xbf")                  # nop: keep the literal pools' alignment
+        w(f"\t.global {name}\n\t.type {name}, %function\n\t.size {name}, {size}")
+        w(f"ddr_f_{name}:\n\t.thumb_func\n{name}:")
+        pc, end = f, self.ends[f]
+        while pc < end:
+            if pc in lit_words:
+                value = struct.unpack("<I", img.read(pc, 4))[0]
+                expr = self.describe(value, pc, pointer=pc in code_pointers)
+                w(f"\t.word {expr}" if expr else f"\t.word {value:#010x}")
+                pc += 4
+                continue
+            i = insns.get(pc)
+            if i is None:
+                w(f"\t.byte {img.read(pc, 1)[0]:#04x}")
+                pc += 1
+                continue
+            m = i.mnemonic.split(".")[0]
+            imm = [op.imm for op in i.operands if op.type == carm.ARM_OP_IMM]
+            branch = m in ("b", "bl", "cbz", "cbnz") or (m[:1] == "b" and m[1:] in CONDITIONS)
+            if branch and imm and not (f <= imm[-1] < end):
+                tgt = imm[-1]
+                if m in ("cbz", "cbnz") or i.size != 4:
+                    raise ValueError(f"short branch out of {name} at {pc:#x}")
+                if self.is_code(tgt):
+                    if self.func_of(tgt) != tgt:
+                        raise ValueError(f"branch from {pc:#x} into the middle of {self.fname(self.func_of(tgt))}")
+                    tname = self.fname(tgt)
+                else:
+                    t = img.funcs.get(tgt & ~1)
+                    if t is None:
+                        raise ValueError(f"call from {pc:#x} to {tgt:#x}, not a function start")
+                    if m != "bl" and m != "b":
+                        raise ValueError(f"conditional branch out of the driver at {pc:#x}")
+                    tname = t[0]
+                    self.externals[tname].add(pc)
+                w(f"\tbl {tname}" if m == "bl" else f"\t{m}.w {tname}")
+                pc += 4
+                continue
+            if m == "adr" and imm and not (f <= ((pc + 4) & ~3) + imm[-1] < end):
+                raise ValueError(f"adr out of {name} at {pc:#x}")
+            w("\t.byte " + ", ".join(f"{b:#04x}" for b in img.read(pc, i.size)))
+            pc += i.size
+
     def emit(self):
         img = self.img
         dis = Disasm(img)
@@ -320,58 +450,26 @@ class Island:
             tables.extend(tabs)
         lit_words = {lit + k for lit, width in literals.items() for k in range(0, width, 4)}
         self.counts = (len(insns), len(lit_words), len(tables))
+        self.kept = [s for s in self.starts if self.original or self.emitted(s)]
+        if not self.original:
+            self.drop_unused_statics(insns, literals)
 
         out = []
         w = out.append
         w("/* Generated by scripts/open/se_ddr_island.py from CIX's se_fw.elf; do not edit. */")
         w("\t.syntax unified\n\t.thumb\n\t.cpu cortex-m33")
-        w("\t.section .text.ddr_island, \"ax\", %progbits\n\t.p2align 2")
-        w("\t.global ddr_text\nddr_text:")
-        for s in self.starts:
-            name = img.funcs[s][0]
-            w(f"\t.global {name}\n\t.type {name}, %function\n\t.set {name}, ddr_text+{s - self.code_lo + 1:#x}")
-        pc = self.code_lo
-        while pc < self.code_hi:
-            if pc in lit_words:
-                value = struct.unpack("<I", img.read(pc, 4))[0]
-                expr = self.describe(value, pc, pointer=pc in dis.code_pointers)
-                w(f"\t.word {expr}" if expr else f"\t.word {value:#010x}")
-                pc += 4
-                continue
-            i = insns.get(pc)
-            if i is None:
-                w(f"\t.byte {img.read(pc, 1)[0]:#04x}")
-                pc += 1
-                continue
-            m = i.mnemonic.split(".")[0]
-            imm = [op.imm for op in i.operands if op.type == carm.ARM_OP_IMM]
-            if m in ("bl", "b") and imm and not self.is_code(imm[-1]):
-                if i.size != 4:
-                    raise ValueError(f"short branch out of the driver at {pc:#x}")
-                tgt = img.funcs.get(imm[-1] & ~1)
-                if tgt is None:
-                    raise ValueError(f"call from {pc:#x} to {imm[-1]:#x}, not a function start")
-                if m == "b" and i.cc not in (carm.ARM_CC_AL, carm.ARM_CC_INVALID):
-                    raise ValueError(f"conditional branch out of the driver at {pc:#x}")
-                self.externals[tgt[0]].add(pc)
-                w(f"\t{'bl' if m == 'bl' else 'b.w'} {tgt[0]}")
-                pc += 4
-                continue
-            if m == "adr" and imm and not self.is_code(((pc + 4) & ~3) + imm[-1]):
-                raise ValueError(f"adr out of the driver at {pc:#x}")
-            w("\t.byte " + ", ".join(f"{b:#04x}" for b in img.read(pc, i.size)))
-            pc += i.size
-
-        for v in sorted(self.dvars):
-            s = img.symbol_at(v)
-            if s and s[1] == v:
-                self.data_objects.setdefault(v, (s[0], s[2], img.section_of(v)[0]))
-        by_section = defaultdict(list)
-        for start, (name, size, sec) in sorted(self.data_objects.items()):
-            by_section[sec].append((start, name, size))
         if self.original:
+            w("\t.section .text.ddr_island, \"ax\", %progbits\n\t.p2align 2")
+        for s in self.kept:
+            self.emit_function(w, s, lit_words, insns, dis.code_pointers)
+
+        if self.original:
+            for v in sorted(self.dvars):
+                sy = img.symbol_at(v)
+                if sy and sy[1] == v:
+                    self.data_objects.setdefault(v, (sy[0], sy[2], img.section_of(v)[0]))
             for start, (name, _, _) in sorted(self.data_objects.items()):
-                w(f"\t.set ddr_{self.sym(name)}, {start:#x}")
+                w(f"\t.set {self.vsym(name)}, {start:#x}")
             for start in sorted(self.anon):
                 w(f"\t.set ddr_anon_{start:x}, {start:#x}")
             for addr in sorted(self.strings):
@@ -384,16 +482,55 @@ class Island:
                     a = next(a for a, (n, _) in img.objects.items() if n == name)
                     w(f"\t.set {self.sym(name)}, {a:#x}")
             return "\n".join(out) + "\n"
-        for sec, objs in sorted(by_section.items()):
+
+        # The driver's variables, a block per compile unit and section with
+        # CIX's layout: its code reaches a unit's variables as offsets from
+        # one of them (section anchors).  So a variable can only move to the
+        # C sources once no function of its unit is left here.
+        left_units = {self.unit[f] for f in self.kept}
+        for v in sorted(self.dvars):
+            sy = img.symbol_at(v)
+            if not (sy and sy[1] == v):
+                continue
+            if sy[0] in self.skip and "." not in sy[0]:
+                if self.unit[v] in left_units:
+                    raise SystemExit(f"{sy[0]} is defined by the C sources, but functions of "
+                                     f"{self.unit[v]} that reach it through CIX's layout are not "
+                                     f"(declare it extern until the whole file is ported)")
+                continue
+            if "." not in sy[0] or self.unit[v] in left_units:
+                self.data_objects.setdefault(v, (sy[0], sy[2], img.section_of(v)[0]))
+        done = set()
+        while set(self.data_objects) - done:
+            done = set(self.data_objects)
+            for start in sorted(done):
+                name, size, sec = self.data_objects[start]
+                if sec in (".data", ".rodata") or sec.startswith(".rodata"):
+                    self.emit_data(lambda _: None, start, img.read(start, size), set(self.dvars.get(start) or []))
+        blocks = defaultdict(list)
+        for start, (name, size, sec) in sorted(self.data_objects.items()):
+            blocks[(self.unit.get(start, "?"), sec)].append((start, name, size))
+        for (unit, sec), objs in sorted(blocks.items()):
             kind = "bss" if sec == ".bss" else ("data" if sec == ".data" else "rodata")
             flags = {"bss": '"aw", %nobits', "data": '"aw", %progbits', "rodata": '"a", %progbits'}[kind]
-            w(f"\t.section .{kind}.ddr_island, {flags}")
+            base = objs[0][0]
+            align = min(3, (base & -base).bit_length() - 1)
+            w(f"\t.section .{kind}.ddr.{self.sym(unit)}, {flags}\n\t.p2align {align}")
+            cursor = base
             for start, name, size in objs:
-                w(f"\t.p2align 2\nddr_{self.sym(name)}:")
+                if start < cursor:
+                    raise ValueError(f"{name} overlaps the variable before it")
+                if start > cursor:
+                    w(f"\t.space {start - cursor}")
+                label = self.vsym(name)
+                if "." not in name:
+                    w(f"\t.global {label}\n\t.type {label}, %object\n\t.size {label}, {size}")
+                w(f"{label}:")
                 if kind == "bss":
                     w(f"\t.space {size}")
-                    continue
-                self.emit_data(w, start, img.read(start, size), set(self.dvars.get(start) or []))
+                else:
+                    self.emit_data(w, start, img.read(start, size), set(self.dvars.get(start) or []))
+                cursor = start + size
         w("\t.section .rodata.ddr_island_anon, \"a\", %progbits")
         done = set()
         while set(self.anon) - done:
@@ -420,6 +557,24 @@ class Island:
             k += 1
 
 
+def defined_symbols(paths, undefined=False):
+    """Functions and variables the object files define (any binding), or
+    with undefined, the symbols they use from elsewhere."""
+    names = set()
+    for p in paths:
+        with open(p, "rb") as f:
+            for s in ELFFile(f).iter_sections():
+                if isinstance(s, SymbolTableSection):
+                    for sym in s.iter_symbols():
+                        if undefined:
+                            if sym["st_shndx"] == "SHN_UNDEF" and sym.name:
+                                names.add(sym.name)
+                        elif sym["st_info"]["type"] in ("STT_FUNC", "STT_OBJECT") and \
+                                sym["st_shndx"] != "SHN_UNDEF" and sym.name:
+                            names.add(sym.name)
+    return names
+
+
 def emit_data_object(img, name):
     found = [(addr, size) for addr, (n, size) in img.objects.items() if n == name]
     if not found:
@@ -441,20 +596,32 @@ def main():
     ap.add_argument("--original-layout", action="store_true")
     ap.add_argument("--data", action="append", default=[], metavar="NAME",
                     help="also emit CIX's data object NAME as it is (no pointers in it)")
+    ap.add_argument("--skip", action="append", default=[], metavar="NAME",
+                    help="leave out the function or variable NAME (the open sources define it)")
+    ap.add_argument("--skip-obj", nargs="*", default=[], metavar="OBJ",
+                    help="leave out every function and variable these object files define")
+    ap.add_argument("--list", metavar="FILE", help="write the functions left in the island, one per line")
     a = ap.parse_args()
     img = Image(a.elf)
-    island = Island(img, a.original_layout)
+    skip = set(a.skip) | defined_symbols(a.skip_obj)
+    island = Island(img, a.original_layout, skip, defined_symbols(a.skip_obj, undefined=True))
     text = island.emit()
     for name in a.data:
-        text += emit_data_object(img, name)
+        if name not in skip:
+            text += emit_data_object(img, name)
     with open(a.out, "w") as f:
         f.write(text)
+    kept_bytes = sum(island.ends[s] - s for s in island.kept)
+    if a.list:
+        with open(a.list, "w") as f:
+            f.writelines(f"{img.funcs[s][0]} {island.ends[s] - s}\n" for s in island.kept)
     if a.report:
         n_insn, n_lit, n_tab = island.counts
         print(f"code {island.code_lo:#x}-{island.code_hi:#x} ({island.code_hi - island.code_lo} bytes), "
               f"{len(island.starts)} functions, {n_insn} instructions, {n_lit} literal words, {n_tab} branch tables")
-        print(f"{len(island.data_objects)} variables, {len(island.anon)} anonymous constants, "
-              f"{len(island.strings)} strings")
+        print(f"island: {len(island.kept)} of {len(island.starts)} functions, {kept_bytes} code bytes; "
+              f"{len(island.data_objects)} variables, {len(island.anon)} anonymous constants, "
+              f"{len(island.strings)} strings; data: {', '.join(n for n in a.data if n not in skip) or 'none'}")
         print("external symbols:")
         for k, v in sorted(island.externals.items()):
             print(f"  {k} ({len(v)})")
