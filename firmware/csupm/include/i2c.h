@@ -14,7 +14,12 @@
 #define I2C_CLK_HZ		100000000u
 
 void i2c_setup(uint32_t hz, uint32_t masters, uint32_t slaves);
+/* CIX's dev_i2c_isr (aggregator line 24): the slave's interrupt */
+void dev_i2c_isr(void);
 int i2c_write(unsigned bus, uint8_t addr, const uint8_t *buf, unsigned n);
+/* CIX's md_i2c_mTx_mTx: two writes */
+int i2c_write_write(unsigned bus, uint8_t addr, const uint8_t *buf1, unsigned n1,
+		    const uint8_t *buf2, unsigned n2);
 int i2c_write_read(unsigned bus, uint8_t addr, const uint8_t *wbuf, unsigned wn,
 		   uint8_t *rbuf, unsigned rn);
 

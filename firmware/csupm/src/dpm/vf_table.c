@@ -350,7 +350,6 @@ static void cpu_harvest_setup(void)
 /* ss_por_enter, before the PMICs: the BIOS configuration and the fuses */
 void dpm_por_fuses(void)
 {
-	do_pm_config();
 	ibase_fuse_init();
 	load_and_check_opn_valid();
 	cfg_vf_fuse_init();

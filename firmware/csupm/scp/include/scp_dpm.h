@@ -4,8 +4,8 @@
  * scmi_perf) and their configurations use from CIX's Source/projects/sky1
  * and Source/common: the DPM's EDP rails, maps and TDP frequencies
  * (src/dpm), the GPU's debug-forced operating point, the power model, the
- * OPP trace.  Prototypes as in CIX's image; scp/src/scp_dpm_stubs.c has
- * weak stand-ins for what the open firmware does not have yet.
+ * OPP trace.  Prototypes as in CIX's image; src/dpm, src/perf and
+ * src/board define them.
  */
 #ifndef SCP_DPM_H
 #define SCP_DPM_H
@@ -13,6 +13,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "dpm/dpm_rt.h"
 #include "dpm/dvfs_cfg.h"
 #include "pmic.h"
 
@@ -24,11 +25,11 @@ extern const uint8_t dpm_dxs_to_dvfs_elem_map[12];
 void dpm_edp_cfg_set_type(enum pmic_preset type);
 
 /*
- * CIX's dpm_main_tab.opp_run (dpm_dashboard.c): per DxS domain, the
+ * CIX's dpm_main_tab.opp_run (dpm_dashboard.c, src/dpm/dpm_rt.h) is what
+ * the scmi_perf and sky1soc_perf configurations read: per DxS domain, the
  * frequency (kHz) the DPM lets the domain run at under the TDP, 0 for no
- * limit
+ * limit (dpm_export_opp)
  */
-extern uint32_t dpm_opp_run[DPM_DxS_MAX];
 
 /* CIX's intr_mgmt.c: a debug-forced operating point, if one is set */
 bool get_specific_operating_point(uint32_t *freq_khz, uint32_t *voltage_mv);

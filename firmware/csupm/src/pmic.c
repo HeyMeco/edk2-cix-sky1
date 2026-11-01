@@ -1,12 +1,20 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
 /*
- * PMICs and the rails of the eight EDP domains (CIX's dev_pmic, dev_mp5475,
- * pmic_profile_setup).
+ * The PMICs (CIX's dev_pmic.c and its drivers: dev_mp5475.c,
+ * dev_paged_pmic.c with dev_mp2845b.c and dev_au4683.c), the power-on
+ * setup (pmic_profile_setup, ss_probe_pmic) and the MP2845s' PSI setting
+ * (set_mp2845b_psi7).
  *
- * Which buck of which PMIC feeds which domain depends on the board; the
- * firmware tells the boards apart by probing (pmic_probe below) and
- * falls back to the CRB layout.  The layouts are those of CIX's
- * dpm_edp_scheme table.
+ * A PMIC is registered (dev_pmic_register) when the first rail on it is:
+ * one device per I2C port and address, with the driver of its regulator
+ * type and, per buck, the EDP domains it feeds.  Two domains on one buck
+ * are bound (src/board/pwr_rail.c), so the higher voltage wins.
+ *
+ * The MP5475 has a VOUT register per buck (0x13 + 8 * buck, 2 mV a step,
+ * high byte first) and fault status in 07, 08 and 09.  The MP2845 and the
+ * AU4683 are PMBus-like: register 0 selects the page (the buck), then
+ * VOUT_COMMAND and READ_VOUT in the regulator's own format; CIX reads
+ * no status from them.
  */
 #include "i2c.h"
 #include "lcru.h"
@@ -14,255 +22,130 @@
 #include "clk/clk.h"
 #include "dpm/dvfs_cfg.h"
 
-/* Register layout of an MP5475 buck: VOUT at 0x13 + 8 * buck, 2 mV a step,
- * written high byte first */
+/* --- the PMICs and their drivers (CIX's dev_pmic.c) ----------------------- */
+
+/* CIX's PMIC_REGISTER_INFO */
+struct pmic_reg_info {
+	uint8_t page, vout_command, read_vout, rev;
+	void (*volt_to_setting)(uint16_t *mv, uint8_t *setting);
+	void (*setting_to_volt)(uint16_t *mv, const uint8_t *setting);
+};
+
+struct pmic_dev;
+
+/* CIX's PMIC_HW_DRV */
+struct pmic_drv {
+	bool (*set_voltage)(const struct pmic_dev *dev, uint8_t buck, uint16_t *mv);
+	uint32_t (*wait_ready_ns)(uint16_t from, uint16_t to);
+	bool (*read_voltage)(const struct pmic_dev *dev, uint8_t buck, uint16_t *mv);
+	uint16_t (*read_revision)(const struct pmic_dev *dev);
+	bool (*read_status)(enum pmic_status_time idx);
+	uint32_t (*build_report)(enum pmic_status_time idx, uint32_t *buf, uint32_t len);
+};
+
+/* CIX's PMIC_HW_DEV */
+struct pmic_dev {
+	const struct pmic_drv *drv;
+	uint8_t i2c_port, i2c_addr;
+	uint16_t pmic_rev;
+	const struct pmic_reg_info *reg_info;
+	uint16_t buck_info[4];		/* per buck, the EDP domains it feeds */
+};
+
+#define PMIC_DEV_MAX		4
+
+static const struct pmic_drv *s_pmic_drv[PMIC_DEV_MAX];	/* per regulator type */
+static struct pmic_dev s_pmic_dev[PMIC_DEV_MAX];
+static uint8_t s_pmic_dev_nr;
+
+/* --- MP5475 (CIX's dev_mp5475.c) -------------------------------------------- */
+
 #define MP5475_VOUT(b)		(0x13 + 8 * (b))
 #define MP5475_REVISION		0x51
 #define MP5475_STATUS(i)	(0x07 + (i))	/* 07, 08, 09 */
 #define MP5475_MV_MIN		300
 #define MP5475_MV_MAX		2046
 
-/*
- * Board layouts, indexed by pmic_preset and EDP domain: I2C bus and
- * address, buck, regulator type (0 none, 1 MP5475, 2 and 3 others), the
- * domain's current limit, its boot voltage and the offset added at the
- * PMIC (IR drop).
- */
-#define R(b, a, k, t, lim, mv, off)	{ b, a, k, t, lim, mv, off }
-static const struct rail schemes[PMIC_PRESETS][EDP_N] = {
-	[PMIC_EVB] = {
-		R(1, 0x60, 2, 1, 2400, 790, 25), R(0, 0x60, 1, 1, 6700, 790, 30),
-		R(1, 0x60, 3, 1, 6500, 790, 30), R(1, 0x60, 0, 1, 8000, 790, 30),
-		R(0, 0x60, 2, 1, 8000, 790, 30), R(0, 0x60, 0, 1, 5500, 790, 15),
-		R(2, 0x60, 2, 1, 12000, 790, 20), R(2, 0x60, 0, 1, 9000, 790, 15),
-	},
-	[PMIC_PHECDA] = {
-		R(0, 0x45, 1, 2, 2500, 790, 25), R(1, 0x45, 2, 2, 6500, 790, 30),
-		R(0, 0x45, 0, 2, 6500, 790, 30), R(0, 0x45, 2, 2, 8000, 790, 30),
-		R(0, 0x45, 3, 2, 8000, 790, 30), R(1, 0x45, 3, 2, 5500, 790, 15),
-		R(1, 0x45, 1, 2, 12000, 790, 20), R(1, 0x45, 0, 2, 9000, 790, 15),
-	},
-	[PMIC_CRB] = {
-		R(1, 0x60, 1, 1, 2400, 790, 25), R(0, 0x60, 2, 1, 6000, 790, 30),
-		R(1, 0x60, 0, 1, 6000, 790, 30), R(1, 0x60, 3, 1, 8000, 790, 30),
-		R(1, 0x60, 2, 1, 8000, 790, 30), R(0, 0x60, 3, 1, 5500, 790, 15),
-		R(0, 0x60, 0, 1, 12000, 790, 20), R(0, 0x00, 0, 0, 9000, 790, 15),
-	},
-	[PMIC_NIO] = {
-		R(0, 0x60, 1, 1, 2000, 790, 25), R(1, 0x60, 2, 1, 4000, 790, 30),
-		R(0, 0x60, 0, 1, 4000, 790, 30), R(1, 0x60, 0, 1, 5000, 790, 30),
-		R(1, 0x60, 1, 1, 5000, 790, 30), R(1, 0x60, 3, 1, 3500, 790, 15),
-		R(0, 0x60, 3, 1, 6000, 790, 20), R(0, 0x60, 2, 1, 6000, 790, 15),
-	},
-	[PMIC_CLDBK_POR] = {
-		R(0, 0x00, 0, 0, 0, 790, 25), R(0, 0x45, 1, 2, 6000, 790, 30),
-		R(0, 0x00, 0, 0, 0, 790, 30), R(0, 0x00, 0, 0, 0, 790, 30),
-		R(0, 0x45, 0, 2, 6000, 790, 30), R(0, 0x45, 2, 2, 5500, 790, 15),
-		R(0, 0x45, 3, 2, 6000, 790, 20), R(0, 0x00, 0, 0, 8000, 790, 15),
-	},
-	[PMIC_CLDBK2024] = {
-		R(1, 0x60, 1, 1, 0, 790, 25), R(0, 0x60, 3, 1, 6000, 790, 30),
-		R(1, 0x60, 0, 1, 0, 790, 30), R(1, 0x60, 3, 1, 0, 790, 30),
-		R(1, 0x60, 2, 1, 6000, 790, 30), R(0, 0x60, 2, 1, 5500, 790, 15),
-		R(0, 0x60, 0, 1, 6000, 790, 20), R(0, 0x00, 0, 0, 8000, 790, 15),
-	},
-	[PMIC_ALCOR] = {
-		R(0, 0x00, 0, 0, 2500, 825, 25), R(1, 0x21, 1, 3, 6500, 790, 30),
-		R(0, 0x21, 1, 3, 6500, 790, 30), R(0, 0x21, 2, 3, 8000, 790, 30),
-		R(1, 0x21, 2, 3, 8000, 790, 30), R(0, 0x00, 0, 0, 5500, 815, 15),
-		R(1, 0x21, 0, 3, 12000, 790, 20), R(0, 0x21, 0, 3, 9000, 790, 15),
-	},
-};
-
-/* What answers on the bus picks the layout: an MP5475 at 0x60 on bus 2
- * (EVB), an MP2845 at 0x45 on bus 1 (Phecda); nothing, the CRB. */
-static const struct {
-	uint8_t bus, addr, reg, len, preset;
-} probes[] = {
-	{ 2, 0x60, 0x12, 1, PMIC_EVB },
-	{ 1, 0x45, 0x83, 2, PMIC_PHECDA },
-};
-
-static const struct rail *rails;
-static uint8_t preset;
-static uint16_t revision[I2C_N];
-static uint8_t registered;			/* bit per bus */
-
-static int pmic_probe(void)
+/* CIX's u8_get */
+static bool u8_get(uint8_t port, uint8_t addr, uint8_t reg, uint8_t *v)
 {
-	uint8_t buf[2];
-
-	for (unsigned i = 0; i < ARRAY_SIZE(probes); i++) {
-		for (int tries = 0; tries < 3; tries++) {
-			if (!i2c_write_read(probes[i].bus, probes[i].addr, &probes[i].reg, 1,
-					    buf, probes[i].len))
-				return probes[i].preset;
-		}
-	}
-	return PMIC_CRB;
+	*v = 0;
+	return !i2c_write_read(port, addr, &reg, 1, v, 1);
 }
 
-static int read_u8(unsigned bus, uint8_t addr, uint8_t reg, uint8_t *v)
+static bool dev_pmic_mp5475_readVoltage(const struct pmic_dev *dev, uint8_t buck, uint16_t *mv)
 {
-	return i2c_write_read(bus, addr, &reg, 1, v, 1);
-}
+	uint8_t reg = (uint8_t)MP5475_VOUT(buck), v[2] = { 0, 0 };
+	bool ok = false;
 
-static uint8_t reg_order[I2C_N], n_registered;	/* CIX's dev_pmic_register slots */
-
-/* A PMIC's revision is read when its first rail is registered */
-static void rail_register(const struct rail *r)
-{
-	uint8_t rev = 0;
-
-	if (registered & BIT(r->bus))
-		return;
-	registered |= (uint8_t)BIT(r->bus);
-	reg_order[n_registered++] = r->bus;
-	if (r->type == PMIC_MP5475 && !read_u8(r->bus, r->addr, MP5475_REVISION, &rev))
-		revision[r->bus] = rev;
-}
-
-/* CIX's dev_pmic_get for each slot: the PMICs' revisions, in the order
- * they were registered */
-unsigned pmic_get_versions(uint16_t ver[4])
-{
-	for (unsigned i = 0; i < n_registered && i < 4; i++)
-		ver[i] = revision[reg_order[i]];
-	return n_registered;
-}
-
-static bool mp5475_set(const struct rail *r, uint32_t mv)
-{
-	uint8_t w[3];
-
-	if (mv < MP5475_MV_MIN || mv > MP5475_MV_MAX)
-		return false;
-	w[0] = (uint8_t)MP5475_VOUT(r->buck);
-	w[1] = (uint8_t)(mv >> 9);		/* mV / 2, high byte first */
-	w[2] = (uint8_t)(mv >> 1);
-	for (int tries = 0; tries < 4; tries++) {
-		if (!i2c_write(r->bus, r->addr, w, 3))
-			return true;
-		udelay_cycles(80 * (core_hz / 1000000));
-	}
-	return false;
-}
-
-/*
- * CIX's dev_pmic_setVoltage for a rail: the write (dev_pmic_mp5475_setVoltage),
- * then the time the regulator takes, 1 us a mV (dev_pmic_mp5475_wait_4_pmic_ready
- * gives it in ns, CIX's delay converts it to core cycles as here).  Other
- * regulators (MP2845, the Alcor layout's) are not driven yet.
- */
-static bool dev_pmic_setVoltage(const struct rail *r, uint16_t old_mv, uint16_t new_mv)
-{
-	uint32_t ns;
-
-	if (r->type != PMIC_MP5475 || !mp5475_set(r, new_mv))
-		return false;
-	ns = 1000u * (new_mv > old_mv ? new_mv - old_mv : old_mv - new_mv);
-	udelay_cycles(ns * 100 / 125 / (800000000u / core_hz));
-	return true;
-}
-
-/*
- * CIX's dpm_edp_set_voltage (dpm_dashboard.c) and pwr_rail_setVoltage: the
- * board's offset added, at most 980 mV, written when it changes.  CIX's
- * pwr_rail_bind lets two domains share a buck (the higher voltage wins);
- * none of the built-in layouts does, only a BIOS-configured one could, and
- * that configuration is not read yet.
- */
-#define EDP_MV_MAX		980
-
-static uint16_t volt_without_gb[EDP_N];	/* asked for */
-static uint16_t volt_set[EDP_N];	/* at the regulator */
-
-bool dpm_edp_set_voltage(DPM_EDP_DOMAIN edp_id, uint32_t vol_mV)
-{
-	const struct rail *r;
-	uint32_t mv;
-
-	if (edp_id >= EDP_N)
-		return false;
-	volt_without_gb[edp_id] = (uint16_t)vol_mV;
-	r = &rails[edp_id];
-	if (r->type == PMIC_NONE)
-		return true;
-	mv = vol_mV + r->offset_mv;
-	if (mv > EDP_MV_MAX)
-		mv = EDP_MV_MAX;
-	if (mv == volt_set[edp_id])
-		return true;
-	if (!dev_pmic_setVoltage(r, volt_set[edp_id], (uint16_t)mv))
-		return false;
-	volt_set[edp_id] = (uint16_t)mv;
-	return true;
-}
-
-/*
- * CIX's dpm_edp_restore_voltage (after suspend): each rail asked for a
- * voltage gets it again through pwr_rail_setVoltage(rail, 0, mV), which,
- * with no buck shared, writes it whatever the regulator had.
- */
-bool dpm_edp_restore_voltage(void)
-{
-	bool ok = true;
-
-	for (unsigned d = 0; d < EDP_N; d++) {
-		const struct rail *r = &rails[d];
-		uint32_t mv;
-
-		if (r->type == PMIC_NONE || !volt_without_gb[d])
-			continue;
-		mv = volt_without_gb[d] + r->offset_mv;
-		if (mv > EDP_MV_MAX)
-			mv = EDP_MV_MAX;
-		if (dev_pmic_setVoltage(r, 0, (uint16_t)mv))
-			volt_set[d] = (uint16_t)mv;
-		else
-			ok = false;
-	}
+	for (int tries = 0; tries < 4 && !ok; tries++)
+		ok = !i2c_write_read(dev->i2c_port, dev->i2c_addr, &reg, 1, v, 2);
+	if (ok && mv)
+		*mv = (uint16_t)(((v[0] << 9) + v[1] * 2) & 0xfffe);
 	return ok;
 }
 
-bool dpm_edp_get_voltage(DPM_EDP_DOMAIN edp_id, uint16_t *pVol_mV)
+/*
+ * The write, tried four times 80 us apart; after a retry the voltage is
+ * read back and written again until it is within 4 mV (CIX's loop: once
+ * the tries are spent it retries for as long as the read-back disagrees,
+ * and a read-back that agrees then still counts as a failure).  The
+ * voltage is then what the regulator has: an even number of mV.
+ */
+static bool dev_pmic_mp5475_setVoltage(const struct pmic_dev *dev, uint8_t buck, uint16_t *mv)
 {
-	const struct rail *r;
+	uint8_t w[3];
+	int left = 3;
+	bool ok;
 
-	if (edp_id >= EDP_N)
+	if ((uint16_t)(*mv - MP5475_MV_MIN) > MP5475_MV_MAX - MP5475_MV_MIN)
 		return false;
-	r = &rails[edp_id];
-	if (pVol_mV)
-		*pVol_mV = r->type != PMIC_NONE ? volt_set[edp_id] : r->boot_mv;
-	return true;
-}
+	w[0] = (uint8_t)MP5475_VOUT(buck);
+	w[1] = (uint8_t)(*mv >> 9);		/* mV / 2, high byte first */
+	w[2] = (uint8_t)(*mv >> 1);
+	for (;;) {
+		bool retried = false;
+		uint16_t now;
 
-/* CIX's dpm_edp_get_pwr_rail_config (cfg_dpm.c) */
-const struct rail *dpm_edp_get_pwr_rail_config(DPM_EDP_DOMAIN edp_id)
-{
-	return edp_id < EDP_N ? &rails[edp_id] : NULL;
-}
-
-enum pmic_preset pmic_get_preset(void)
-{
-	return (enum pmic_preset)preset;
-}
-
-/* The address of the PMIC on a bus, from the layout */
-static uint8_t pmic_addr(unsigned bus)
-{
-	for (unsigned d = 0; d < EDP_N; d++) {
-		if (rails[d].type && rails[d].bus == bus)
-			return rails[d].addr;
+		ok = true;
+		while (i2c_write(dev->i2c_port, dev->i2c_addr, w, 3)) {
+			left--;
+			retried = true;
+			us_delay(80);
+			if (left == -1) {
+				ok = false;
+				break;
+			}
+		}
+		if (!retried)
+			break;
+		if (dev_pmic_mp5475_readVoltage(dev, buck, &now) &&
+		    (now > *mv ? now - *mv : *mv - now) < 4)
+			break;
 	}
-	return 0;
+	*mv &= (uint16_t)~1u;
+	return ok;
+}
+
+/* 1 us a mV */
+static uint32_t dev_pmic_mp5475_wait_4_pmic_ready(uint16_t from, uint16_t to)
+{
+	return 1000u * (uint32_t)(from > to ? from - to : to - from);
+}
+
+static uint16_t dev_pmic_mp5475_readRevision(const struct pmic_dev *dev)
+{
+	uint8_t rev;
+
+	return u8_get(dev->i2c_port, dev->i2c_addr, MP5475_REVISION, &rev) ? rev : 0;
 }
 
 /*
  * CIX's dev_pmic_mp5475_read_status: the fault status registers 07, 08,
- * 09 of the PMICs on buses 0 and 1 (CIX: all three when the PM
- * configuration says EVB) read and kept for idx (with the time), then
- * cleared (09 written 0xff); what they said is also gathered since boot
+ * 09 of the PMICs on ports 0 and 1 (all three when get_pmic_scheme says
+ * EVB, which it does whenever the BIOS configuration is there and does
+ * not give a layout) read and kept for idx (with the time), then cleared
+ * (09 written 0xff); what they said is also gathered since boot
  * (PMIC_STATUS_ALL).  A read that fails stops it all.
  */
 static struct {
@@ -270,15 +153,23 @@ static struct {
 	uint8_t s07[3], s08[3], s09[3];
 } err_flags[PMIC_STATUS_ALL + 1];
 
-bool dev_pmic_read_status(enum pmic_status_time idx)
+static unsigned mp5475_count(void)
+{
+	return get_pmic_scheme() == PMIC_EVB ? 3 : 2;
+}
+
+static bool dev_pmic_mp5475_read_status(enum pmic_status_time idx)
 {
 	static const uint8_t clear[2] = { MP5475_STATUS(2), 0xff };
-	uint8_t s[3][3] = { { 0 } };
-	const unsigned n = 2;
+	uint8_t addr[3] = { 0xff, 0xff, 0xff }, s[3][3] = { { 0 } };
+	unsigned n;
 
+	for (unsigned i = 0; i < mp5475_count(); i++)
+		addr[i] = dpm_edp_get_pmic_i2c_addr((uint8_t)i);
+	n = mp5475_count();
 	for (unsigned i = 0; i < n; i++) {
 		for (unsigned k = 0; k < 3; k++) {
-			if (read_u8(i, pmic_addr(i), MP5475_STATUS(k), &s[k][i]))
+			if (!u8_get((uint8_t)i, addr[i], MP5475_STATUS(k), &s[k][i]))
 				return false;
 		}
 	}
@@ -289,7 +180,7 @@ bool dev_pmic_read_status(enum pmic_status_time idx)
 		err_flags[idx].s09[i] = s[2][i];
 	}
 	for (unsigned i = 0; i < n; i++)
-		i2c_write(i, pmic_addr(i), clear, 2);
+		i2c_write(i, addr[i], clear, 2);
 	err_flags[PMIC_STATUS_ALL].ts = err_flags[idx].ts;
 	for (unsigned i = 0; i < n; i++) {
 		err_flags[PMIC_STATUS_ALL].s07[i] |= s[0][i];
@@ -299,15 +190,26 @@ bool dev_pmic_read_status(enum pmic_status_time idx)
 	return true;
 }
 
+bool pmic_status_get(enum pmic_status_time idx, uint8_t s07[3], uint8_t s08[3], uint8_t s09[3])
+{
+	if (!err_flags[idx].ts)
+		return false;
+	memcpy(s07, err_flags[idx].s07, 3);
+	memcpy(s08, err_flags[idx].s08, 3);
+	memcpy(s09, err_flags[idx].s09, 3);
+	return true;
+}
+
 /*
  * CIX's dev_pmic_mp5475_build_msg_report_buffer (20 bytes): word 0 a
  * byte of fault classes per PMIC (the last first), word 1 0x3f per PMIC,
  * words 2-4 the 07, 08 and 09 registers, a byte per PMIC.  Nothing when
  * the status was never read.
  */
-uint32_t dev_pmic_build_msg_report_buffer(enum pmic_status_time idx, uint32_t *buf, uint32_t len)
+static uint32_t dev_pmic_mp5475_build_msg_report_buffer(enum pmic_status_time idx, uint32_t *buf,
+							uint32_t len)
 {
-	const unsigned n = 2;
+	const unsigned n = mp5475_count();
 	uint32_t w0 = 0, w1 = 0;
 
 	if (len < 20 || !err_flags[idx].ts)
@@ -341,43 +243,406 @@ uint32_t dev_pmic_build_msg_report_buffer(enum pmic_status_time idx, uint32_t *b
 	return 20;
 }
 
-/* CIX's dev_pmic_mp5475_readVoltage: a buck's VOUT register, mV / 2 */
-bool dev_pmic_readVoltage(const struct rail *r, uint16_t *mv)
+static const struct pmic_drv mp5475_drv = {
+	.set_voltage = dev_pmic_mp5475_setVoltage,
+	.wait_ready_ns = dev_pmic_mp5475_wait_4_pmic_ready,
+	.read_voltage = dev_pmic_mp5475_readVoltage,
+	.read_revision = dev_pmic_mp5475_readRevision,
+	.read_status = dev_pmic_mp5475_read_status,
+	.build_report = dev_pmic_mp5475_build_msg_report_buffer,
+};
+
+/* --- paged PMICs (CIX's dev_paged_pmic.c) ----------------------------------- */
+
+/* CIX's dev_pmic_generic_paged_read: the page, then the register; four
+ * tries */
+static bool dev_pmic_generic_paged_read(const struct pmic_dev *dev, uint8_t page_id, uint8_t reg,
+					uint8_t rbuf[2])
 {
-	uint8_t reg = (uint8_t)MP5475_VOUT(r->buck), v[2] = { 0, 0 };
+	uint8_t page[2] = { dev->reg_info->page, page_id };
 	bool ok = false;
 
-	if (r->type != PMIC_MP5475)
-		return false;
-	for (int tries = 0; tries < 4 && !ok; tries++)
-		ok = !i2c_write_read(r->bus, r->addr, &reg, 1, v, 2);
-	if (ok && mv)
-		*mv = (uint16_t)((v[0] << 9) + v[1] * 2);
+	for (int tries = 0; tries < 4 && !ok; tries++) {
+		if (!i2c_write(dev->i2c_port, dev->i2c_addr, page, 2))
+			ok = !i2c_write_read(dev->i2c_port, dev->i2c_addr, &reg, 1, rbuf, 2);
+	}
 	return ok;
 }
 
-/* At power-on (CIX's pmic_profile_setup) */
-static void pmic_status(void)
+static bool dev_pmic_generic_readVoltage(const struct pmic_dev *dev, uint8_t buck, uint16_t *mv)
 {
+	uint8_t v[2] = { 0, 0 };
+
+	if (!dev_pmic_generic_paged_read(dev, buck, dev->reg_info->read_vout, v))
+		return false;
+	dev->reg_info->setting_to_volt(mv, v);
+	return true;
+}
+
+/*
+ * The page and VOUT_COMMAND (one transfer each, a repeated start between),
+ * tried four times 80 us apart; after a retry the voltage is read back and
+ * written again until it is within 10 mV (as the MP5475's).
+ */
+static bool dev_pmic_generic_setVoltage(const struct pmic_dev *dev, uint8_t buck, uint16_t *mv)
+{
+	uint8_t page[2] = { dev->reg_info->page, buck };
+	uint8_t vout[3] = { dev->reg_info->vout_command, 0, 0 };
+	int left = 3;
+
+	if ((uint16_t)(*mv - 300) > 1746)
+		return false;
+	dev->reg_info->volt_to_setting(mv, &vout[1]);
+	for (;;) {
+		bool retried = false, ok = true;
+		uint16_t now;
+
+		while (i2c_write_write(dev->i2c_port, dev->i2c_addr, page, 2, vout, 3)) {
+			left--;
+			retried = true;
+			us_delay(80);
+			if (left == -1) {
+				ok = false;
+				break;
+			}
+		}
+		if (!retried)
+			return ok;
+		if (dev_pmic_generic_readVoltage(dev, buck, &now) &&
+		    (now > *mv ? now - *mv : *mv - now) < 10)
+			return ok;
+	}
+}
+
+/* 400 ns a mV */
+static uint32_t dev_pmic_generic_wait_4_pmic_ready(uint16_t from, uint16_t to)
+{
+	return 400u * (uint32_t)(from > to ? from - to : to - from);
+}
+
+static uint16_t dev_pmic_generic_readRevision(const struct pmic_dev *dev)
+{
+	uint8_t v[2];
+
+	if (!dev_pmic_generic_paged_read(dev, 0, dev->reg_info->rev, v))
+		return 0;
+	return (uint16_t)(v[0] | v[1] << 8);
+}
+
+static bool dev_pmic_generic_read_status(enum pmic_status_time idx)
+{
+	(void)idx;
+	return true;
+}
+
+/* no status: 20 bytes of zeros */
+static uint32_t dev_pmic_generic_build_msg_report_buffer(enum pmic_status_time idx, uint32_t *buf,
+							 uint32_t len)
+{
+	(void)idx;
+	(void)len;
+	memset(buf, 0, 20);
+	return 20;
+}
+
+static const struct pmic_drv pmic_generic_drv = {
+	.set_voltage = dev_pmic_generic_setVoltage,
+	.wait_ready_ns = dev_pmic_generic_wait_4_pmic_ready,
+	.read_voltage = dev_pmic_generic_readVoltage,
+	.read_revision = dev_pmic_generic_readRevision,
+	.read_status = dev_pmic_generic_read_status,
+	.build_report = dev_pmic_generic_build_msg_report_buffer,
+};
+
+/* CIX's dev_mp2845b.c: VOUT in 5 mV steps, bits 9:8 with 0x44 above */
+static void mp2845_volt_to_setting(uint16_t *mv, uint8_t *s)
+{
+	uint16_t code = *mv / 5;
+
+	s[0] = (uint8_t)code;
+	s[1] = (uint8_t)(((code >> 8) & 3) + 0x44);
+	*mv = (uint16_t)(*mv - *mv % 5);
+}
+
+static void mp2845_setting_to_volt(uint16_t *mv, const uint8_t *s)
+{
+	*mv = (uint16_t)((((s[1] & 3) << 8) + s[0]) * 5);
+}
+
+static const struct pmic_reg_info mp2845b_reg_info = {
+	.page = 0, .vout_command = 0x62, .read_vout = 0xa7, .rev = 0x83,
+	.volt_to_setting = mp2845_volt_to_setting,
+	.setting_to_volt = mp2845_setting_to_volt,
+};
+
+/*
+ * CIX's dev_au4683.c: VOUT_COMMAND in 5 mV steps above 245 mV (12 bits);
+ * READ_VOUT in PMBus LINEAR11 (a 5-bit exponent, an 11-bit mantissa), which
+ * CIX turns into mV as mantissa * (977 << (exponent + 10)) / 1000, the
+ * exponent being at most -1 (it asserts when the high byte is above 175).
+ */
+static void au4683_volt_to_setting(uint16_t *mv, uint8_t *s)
+{
+	int32_t code = ((int32_t)*mv - 245) / 5;
+
+	s[0] = (uint8_t)code;
+	s[1] = (uint8_t)((code >> 8) & 0xf);
+	*mv = (uint16_t)(*mv - *mv % 5);
+}
+
+static void au4683_setting_to_volt(uint16_t *mv, const uint8_t *s)
+{
+	int32_t exp = (int16_t)(s[1] << 8) >> 11;
+	uint32_t mant = ((uint32_t)(s[1] << 8) & 0x700) + s[0];
+
+	*mv = (uint16_t)(mant * (977u << (exp + 10)) / 1000);
+}
+
+static const struct pmic_reg_info au4683_reg_info = {
+	.page = 0, .vout_command = 0x21, .read_vout = 0x8b, .rev = 0x9b,
+	.volt_to_setting = au4683_volt_to_setting,
+	.setting_to_volt = au4683_setting_to_volt,
+};
+
+/* per regulator type 1-3: the driver, the registers */
+static const struct pmic_drv *const type_drv[PMIC_TYPES - 1] = {
+	&mp5475_drv, &pmic_generic_drv, &pmic_generic_drv,
+};
+static const struct pmic_reg_info *const type_reg_info[PMIC_TYPES - 1] = {
+	NULL, &mp2845b_reg_info, &au4683_reg_info,
+};
+
+/* --- dev_pmic.c -------------------------------------------------------------- */
+
+/* CIX's dev_pmic_get */
+static const struct pmic_dev *dev_pmic_get(uint8_t idx)
+{
+	return idx < PMIC_DEV_MAX && s_pmic_dev[idx].drv ? &s_pmic_dev[idx] : NULL;
+}
+
+/* CIX's dev_pmic_find */
+static struct pmic_dev *dev_pmic_find(uint8_t port, uint8_t addr)
+{
+	for (unsigned i = 0; i < PMIC_DEV_MAX; i++) {
+		if (s_pmic_dev[i].i2c_port == port && s_pmic_dev[i].i2c_addr == addr &&
+		    s_pmic_dev[i].drv)
+			return &s_pmic_dev[i];
+	}
+	return NULL;
+}
+
+/* CIX's dev_pmic_register: a PMIC's revision is read when its first rail is */
+void dev_pmic_register(uint8_t i2c_ch, uint8_t i2c_addr, uint8_t vr_type, uint8_t buck_id,
+		       uint8_t bit_idx)
+{
+	struct pmic_dev *dev;
+
+	if (bit_idx >= 16 || (i2c_ch | vr_type | buck_id | s_pmic_dev_nr) >= 4 || !vr_type)
+		return;
+	dev = dev_pmic_find(i2c_ch, i2c_addr);
+	if (dev) {
+		dev->buck_info[buck_id] |= (uint16_t)BIT(bit_idx);
+		return;
+	}
+	if (!s_pmic_drv[vr_type])
+		s_pmic_drv[vr_type] = type_drv[vr_type - 1];
+	dev = &s_pmic_dev[s_pmic_dev_nr++];
+	dev->i2c_addr = i2c_addr;
+	dev->drv = type_drv[vr_type - 1];
+	dev->i2c_port = i2c_ch;
+	dev->reg_info = type_reg_info[vr_type - 1];
+	dev->buck_info[buck_id] |= (uint16_t)BIT(bit_idx);
+	dev->pmic_rev = dev->drv->read_revision(dev);
+}
+
+/* CIX's dev_pmic_get for each slot: the PMICs' revisions, in the order
+ * they were registered */
+unsigned pmic_get_versions(uint16_t ver[4])
+{
+	unsigned n = 0;
+
+	for (uint8_t i = 0; i < PMIC_DEV_MAX; i++) {
+		const struct pmic_dev *dev = dev_pmic_get(i);
+
+		if (dev)
+			ver[n++] = dev->pmic_rev;
+	}
+	return n;
+}
+
+/*
+ * CIX's dev_pmic_setVoltage: the write (the driver may round the voltage),
+ * then the time the regulator takes, in core cycles as CIX's cc_delay
+ * counts them; the change goes to the PMIC event stream.
+ */
+bool dev_pmic_setVoltage(const struct rail *r, uint16_t old_mv, uint16_t new_mv, bool debug)
+{
+	struct pmic_dev *dev;
+	uint32_t ns;
+
+	(void)debug;
+	if ((r->bus | r->buck) & 4)
+		return false;
+	dev = dev_pmic_find(r->bus, r->addr);
+	if (!dev || !dev->drv->set_voltage(dev, r->buck, &new_mv))
+		return false;
+	ns = dev->drv->wait_ready_ns(old_mv, new_mv);
+	if (ns)
+		udelay_cycles(ns * 100 / 125 / (800000000u / core_hz));
+	pmic_event_put(r->bus, r->buck, new_mv);
+	return true;
+}
+
+/* CIX's dev_pmic_readVoltage */
+bool dev_pmic_readVoltage(const struct rail *r, uint16_t *mv)
+{
+	struct pmic_dev *dev = dev_pmic_find(r->bus, r->addr);
+
+	return dev && dev->drv->read_voltage(dev, r->buck, mv);
+}
+
+/* CIX's dev_pmic_read_status: each regulator type's driver once */
+bool dev_pmic_read_status(enum pmic_status_time idx)
+{
+	for (unsigned i = 0; i < PMIC_DEV_MAX; i++) {
+		if (s_pmic_drv[i])
+			(void)s_pmic_drv[i]->read_status(idx);
+	}
+	return true;
+}
+
+/* CIX's dev_pmic_build_msg_report_buffer: each driver's report in turn */
+uint32_t dev_pmic_build_msg_report_buffer(enum pmic_status_time idx, uint32_t *buf, uint32_t len)
+{
+	uint32_t n = 0;
+
+	for (unsigned i = 0; i < PMIC_DEV_MAX; i++) {
+		if (n < len && s_pmic_drv[i])
+			n += s_pmic_drv[i]->build_report(idx, buf + n / 4, len - n);
+	}
+	return n;
+}
+
+/* --- power-on (CIX's pmic_profile_setup, ss_probe_pmic) ---------------------- */
+
+/* CIX's PMIC_PROBE_DATA: what answers on the bus picks the layout */
+static const struct {
+	uint8_t i2c_ch, i2c_addr, reg_addr, data_len, preset;
+} pmic_probe_data[] = {
+	{ 2, 0x60, 0x12, 1, PMIC_EVB },
+	{ 1, 0x45, 0x83, 2, PMIC_PHECDA },
+	{ 0, 0x21, 0x99, 2, PMIC_ALCOR },
+};
+
+/* CIX's pmic_mp2845_data: Phecda's MP2845s were found */
+static bool pmic_mp2845_found;
+
+/* CIX's ss_probe_pmic: each three times; Phecda's regulators then get
+ * their power-saving setting */
+static int ss_probe_pmic(void)
+{
+	uint8_t buf[2];
+
+	for (unsigned i = 0; i < ARRAY_SIZE(pmic_probe_data); i++) {
+		for (int tries = 0; tries < 3; tries++) {
+			if (i2c_write_read(pmic_probe_data[i].i2c_ch, pmic_probe_data[i].i2c_addr,
+					   &pmic_probe_data[i].reg_addr, 1, buf,
+					   pmic_probe_data[i].data_len))
+				continue;
+			if (i == 1) {
+				pmic_mp2845_found = true;
+				set_mp2845b_psi7(true);
+			}
+			return pmic_probe_data[i].preset;
+		}
+	}
+	return -1;
+}
+
+/* CIX's u_misc_u32lowestOneBit: the lowest set bit at or above start */
+static uint8_t lowest_one_bit(uint32_t v, uint32_t start)
+{
+	v >>= start;
+	return v ? (uint8_t)(__builtin_ctz(v) + start) : 0x80;
+}
+
+/*
+ * CIX's pmic_profile_setup: the layout (when the BIOS gave none, found by
+ * probing; nothing found is the CRB), its PMICs registered, the domains
+ * sharing a buck bound, the rails with a regulator at their boot voltage,
+ * the PMICs' status read.
+ */
+void pmic_init(void)
+{
+	if (dpm_edp_cfg_get_type() >= PMIC_PRESETS) {
+		int preset = ss_probe_pmic();
+
+		dpm_edp_cfg_set_type(preset >= 0 ? (enum pmic_preset)preset : PMIC_CRB);
+	}
+	for (uint8_t d = 0; d < EDP_N; d++) {
+		const struct rail *r = dpm_edp_get_pwr_rail_config(d);
+
+		if (r && r->type)
+			dev_pmic_register(r->bus, r->addr, r->type, r->buck, d);
+	}
+	for (uint8_t i = 0; i < PMIC_DEV_MAX; i++) {
+		const struct pmic_dev *dev = dev_pmic_get(i);
+
+		if (!dev)
+			break;
+		for (unsigned b = 0; b < 4; b++) {
+			uint8_t first = lowest_one_bit((uint8_t)dev->buck_info[b], 0), second;
+
+			if (first >= EDP_N)
+				continue;
+			second = lowest_one_bit((uint8_t)dev->buck_info[b], first + 1u);
+			if (second < EDP_N)
+				pwr_rail_bind(first, second, true);
+		}
+	}
+	for (uint8_t d = 0; d < EDP_N; d++) {
+		const struct rail *r = dpm_edp_get_pwr_rail_config(d);
+
+		if (r && r->type)
+			dpm_edp_set_voltage(d, r->boot_mv);
+	}
 	(void)dev_pmic_read_status(PMIC_STATUS_POR);
 }
 
-void pmic_init(void)
+/* --- PSI (CIX's set_mp2845b_psi7, subsys_hsm.c) ------------------------------ */
+
+bool config_enable_psi7 = true;
+
+/*
+ * Phecda's MP2845s (0x45 on ports 0 and 1), each page: two vendor registers
+ * (0x64 and, on page 1, 0x73), then 0x5f.  CIX's function takes an enable
+ * it never looks at: the same values are written at power-on and after
+ * suspend, unless the BIOS configuration turned it off.
+ */
+void set_mp2845b_psi7(bool enable)
 {
-	preset = (uint8_t)pmic_probe();
-	rails = schemes[preset];
-	for (unsigned d = 0; d < EDP_N; d++) {
-		if (rails[d].type)
-			rail_register(&rails[d]);
-	}
-	/* pmic_profile_setup: the rails with a regulator at their boot voltage */
-	for (unsigned d = 0; d < EDP_N; d++) {
-		if (rails[d].type)
-			dpm_edp_set_voltage(d, rails[d].boot_mv);
+	static const uint8_t r73[3] = { 0x73, 0x66, 0x58 };
+
+	(void)enable;
+	if (!config_enable_psi7)
+		return;
+	for (uint8_t port = 0; port < 2; port++) {
+		for (uint8_t page = 0; page < 4; page++) {
+			uint8_t sel[2] = { 0x00, page };
+			uint8_t r64[3] = { 0x64, 0x9a, page == 0 ? 0x1c : 0x00 };
+			uint8_t r5f[3] = { 0x5f, page != 2 ? 0xef : 0xbf, page != 2 ? 0x6e : 0x9b };
+
+			(void)i2c_write_write(port, 0x45, sel, 2, r64, 3);
+			if (page == 1)
+				(void)i2c_write_write(port, 0x45, sel, 2, r73, 3);
+			(void)i2c_write_write(port, 0x45, sel, 2, r5f, 3);
+		}
 	}
 }
 
-void pmic_check(void)
+/* CIX's ss_s3_exit: Phecda's MP2845s get it again after suspend */
+void pmic_resume(void)
 {
-	pmic_status();
+	if (pmic_mp2845_found)
+		set_mp2845b_psi7(true);
 }

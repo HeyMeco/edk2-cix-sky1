@@ -276,40 +276,11 @@ SS_HSM_STATE ss_hsm_get(void)
 	return pm_ss_state;
 }
 
-bool perf_soc_idle_switch_get_enable(void)
-{
-	return false;
-}
+/* dpdpu_trigger_ddr_dfs_compatible_checker and the blocks' DDR DFS
+ * compatibility: src/board/dpdpu.c */
 
-void dpdpu_trigger_ddr_dfs_compatible_checker(void)
-{
-}
-
-void vpu_ddr_dfs_set_compatible(bool is_compatible)
-{
-	(void)is_compatible;
-}
-
-void isp_ddr_dfs_set_compatible(bool is_compatible)
-{
-	(void)is_compatible;
-}
-
-void gpu_ddr_dfs_set_compatible(bool is_compatible)
-{
-	(void)is_compatible;
-}
-
-bool perf_stream_is_active(void)
-{
-	return false;
-}
-
-void perf_stream_track_clk_change(uint32_t clk_idx, uint32_t freq)
-{
-	(void)clk_idx;
-	(void)freq;
-}
+/* perf_soc_idle_switch_get_enable, perf_stream_is_active and
+ * perf_stream_track_clk_change: src/perf */
 
 /* CIX's vAssertCalledWithTRC: stop where it can be seen */
 void clk_assert_failed(uint32_t code)

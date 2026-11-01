@@ -15,11 +15,10 @@
  *
  * The printing functions (opn_fuse_printing, cfg_vf_fuse_dump,
  * ibase_fuse_dump) are left out.  pvt_trim_fuse_init is src/pvt.c's.
- * ibase_fuse_init reads the leakage currents; CIX hands them to its power
- * model (pwr_leakage_init, double precision), which the DPM uses and which
- * is not ported yet.
+ * ibase_fuse_init reads the leakage currents and hands them to the DPM's
+ * power model (src/dpm/sky1_pwr_model.c's pwr_leakage_init).
  */
-#include "dpm.h"
+#include "dpm_rt.h"
 
 #define EFUSE_COPY		0x200be700u
 #define EFUSE_UNSET		0xa8763271u
@@ -505,8 +504,10 @@ void ibase_fuse_init(void)
 	fuse_ibase[7][0] = 1800;
 	fuse_ibase[7][1] = 14200;
 	base = get_fuse_base();
-	if (!base || !u_misc_extract_uint(base, bit_offsets[1], 16))
+	if (!base || !u_misc_extract_uint(base, bit_offsets[1], 16)) {
+		pwr_leakage_init(&fuse_ibase[0][0]);
 		return;
+	}
 	ibase_loaded = true;
 	for (uint32_t i = 0; i < 8; i++) {
 		fuse_ibase[i + 1][0] = (uint16_t)u_misc_extract_uint(base, bit_offsets[i + 1], 16);
@@ -524,4 +525,5 @@ void ibase_fuse_init(void)
 			fuse_ibase[9 + g][1] = fuse_ibase[6][1];
 		}
 	}
+	pwr_leakage_init(&fuse_ibase[0][0]);
 }

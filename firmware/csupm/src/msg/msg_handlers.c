@@ -20,10 +20,13 @@
  * puts its own).
  */
 #include "msg/msg.h"
+#include "board/board.h"
 #include "clk/clk.h"
 #include "dpm/dvfs_cfg.h"
+#include "fan/fan.h"
 #include "hsm/hsm.h"
 #include "log/log.h"
+#include "perf/perf.h"
 #include "pmic.h"
 #include "s3script/s3script.h"
 #include "soc.h"
@@ -126,18 +129,62 @@ static uint32_t msg_deferredNotify(uint32_t port, uint32_t *len, void *in, void 
 }
 
 /*
- * Performance streams (CIX's act_streams.c: counters sampled for its DPM
- * and tools) are not ported: every action fails as CIX's does for a
- * stream it cannot set up.
+ * Performance streams for the AP's tools (CIX's msg_stream_act; src/perf):
+ * in[0] the action: 0 a stream (in[1] its type, in[2] the ports or nodes,
+ * in[3] the event, in[4] the interval in ticks, in[5] the CI-700's
+ * cascading; out[0] its id), 1 release stream in[1], 2 all reset, 3 the
+ * log flag in[1], 4 the log flag off.  CIX's oddity kept: the type must
+ * have one bit set, so only the MM, PCIe and SMN hubs' PMU streams can be
+ * asked for.
  */
 static uint32_t msg_stream_act(uint32_t port, uint32_t *len, void *in, void *out, uint32_t *t)
 {
+	const uint32_t *a = in;
+	uint32_t ret = 0, n = 0;
+
 	(void)port;
-	(void)in;
-	(void)out;
-	set_len(len, 0);
-	trace(t, 0xf18b0237);
-	return MSG_FAILED;
+	switch (a[0]) {
+	case 0: {
+		PERF_STREAM_CONFIG cfg = { .raw = { 0, 0 } };
+		uint8_t id;
+
+		if (a[1] >= 6 || u_misc_u32BitCount(a[1]) != 1) {
+			ret = MSG_INVALID;
+			break;
+		}
+		if ((uint8_t)(a[1] - 1) < 4) {
+			cfg.ni700.port_mask = a[2];
+			cfg.ni700.event_id = (uint8_t)a[3];
+		} else if (a[1] == PERF_STREAM_CI700_PMU) {
+			cfg.ci700.node_mask = a[2];
+			cfg.ci700.event_encode = (uint8_t)a[3];
+			cfg.ci700.cascade_mode = (uint16_t)a[5];
+		}
+		id = perf_stream_create((PERF_STREAM_TYPE)a[1], (uint16_t)a[4], &cfg);
+		((uint32_t *)out)[0] = id;
+		n = 1;
+		ret = id == PERF_STREAM_INVALID ? MSG_FAILED : 0;
+		break;
+	}
+	case 1:
+		ret = perf_stream_release((uint8_t)a[1]) ? 0 : MSG_FAILED;
+		break;
+	case 2:
+		perf_stream_reset();
+		break;
+	case 3:
+		perf_stream_set_log_flag((uint8_t)a[1]);
+		break;
+	case 4:
+		perf_stream_set_log_flag(0);
+		break;
+	default:
+		ret = MSG_FAILED;
+		break;
+	}
+	set_len(len, n);
+	trace(t, ret ? 0xf18b0237 : 0);
+	return ret;
 }
 
 /* the SMN window: SoC addresses below 0x20000000 */
@@ -337,9 +384,13 @@ static uint32_t msg_pmic_get_events(uint32_t port, uint32_t *len, void *in, void
 }
 
 /*
- * Fans: none is configured on the boards this firmware supports (their
- * fans are on the EC, or not driven yet), so there is no fan to count,
- * the status of fans 0-2 is all zero, and their mode cannot be set.
+ * Fans (src/fan): CIX's msg_fan_get_num always answers not supported,
+ * whatever fans are configured; the status of a fan (0-2) is its
+ * temperature, the speeds expected and measured, the duty in percent and
+ * the policy; a mode set takes the mode (0-2: Linux's quiet, temperature,
+ * performance, told to the EC too; 3-5: the user's table, a speed, a
+ * duty), the fan and its data (for the user's table, the number of rows
+ * and the rows after it).
  */
 static uint32_t msg_fan_get_num(uint32_t port, uint32_t *len, void *in, void *out, uint32_t *t)
 {
@@ -356,8 +407,11 @@ static uint32_t msg_fan_get_status(uint32_t port, uint32_t *len, void *in, void 
 	uint32_t ret = MSG_INVALID;
 
 	(void)port;
-	if (((uint32_t *)in)[0] < 3) {
-		memset(out, 0, 16);		/* CIX: fan_stat_get */
+	if (((uint32_t *)in)[0] < FAN_N) {
+		struct fan_state st = { 0 };
+
+		fan_stat_get(((uint32_t *)in)[0], &st, false);
+		memcpy(out, &st, 16);
 		ret = 0;
 	}
 	set_len(len, 4);
@@ -367,22 +421,47 @@ static uint32_t msg_fan_get_status(uint32_t port, uint32_t *len, void *in, void 
 
 static uint32_t msg_fan_set_mode(uint32_t port, uint32_t *len, void *in, void *out, uint32_t *t)
 {
+	const uint32_t *a = in;
+	uint32_t mode = a[0], fan = a[1];
+	int32_t r;
+
 	(void)port;
-	(void)in;
 	(void)out;
+	dev_gpio_clear_ec_event();
+	if (mode < 3) {
+		/* Linux's 0, 1, 2: the quiet, temperature and performance tables */
+		DEV_REG[CUS_FAN_MODE_REG][1] = (uint8_t)(mode + 2);
+		DEV_REG[CUS_STAT_REG1][1] |= 1;
+		dev_gpio_signal_ec_event();
+		mode = mode == 0 ? FAN_CTRL_POLICY_QUIET :
+		       mode == 2 ? FAN_CTRL_POLICY_PERF : FAN_CTRL_POLICY_TEMP;
+	} else if (mode >= FAN_CTRL_POLICY_MAX) {
+		goto invalid;
+	}
+	if (fan >= FAN_N)
+		goto invalid;
+	if (mode == FAN_CTRL_POLICY_USER && !fan_config_user_table(fan, a[3], &a[4], a[2]))
+		goto invalid;
+	r = dev_fan_set_ctrl_policy(fan, (enum fan_ctrl_policy)mode, a[2], a[3]);
+	set_len(len, 0);
+	trace(t, r ? 0xf18e0155 : 0);
+	return (uint32_t)r;
+invalid:
 	set_len(len, 0);
 	trace(t, 0xf18e0158);
 	return MSG_INVALID;
 }
 
-/* bit 0: the SoC idle switch (CIX's DPM runtime, not ported); bit 1: the
- * DSU stepped with the clusters (sky1soc_perf) */
+/* bit 0: the SoC idle switch (CIX's DPM runtime) on or off as bit 0 of the
+ * second word says; bit 1: the DSU stepped with the clusters, bit 1 */
 static uint32_t msg_noc_dfs_mode(uint32_t port, uint32_t *len, void *in, void *out, uint32_t *t)
 {
 	const uint32_t *a = in;
 
 	(void)port;
 	(void)out;
+	if (a[0] & 1)
+		perf_soc_idle_switch_set_enable(a[1] & 1);
 	if (a[0] & 2)
 		sky1soc_set_dsu_dvfs((a[1] & 2) != 0);
 	set_len(len, 0);

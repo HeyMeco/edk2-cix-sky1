@@ -91,9 +91,94 @@ class I2cDevice:
         return v
 
 
+class Mp5475(I2cDevice):
+    """An MP5475 (four bucks, VOUT at 0x13 + 8 * buck): a register file
+    whose fault register 09 clears the bits written to it (CIX's firmware
+    writes 0xff after reading 07-09).  Modelled on what the firmware does
+    with it, not on a datasheet; a test raises a fault by setting 07-09."""
+
+    def write(self, byte):
+        if not self.first and self.ptr == 0x09:
+            self.regs[0x09] &= ~byte & 0xff
+            self.ptr = (self.ptr + 1) & 0xff
+            return
+        super().write(byte)
+
+
+class Mp2845(I2cDevice):
+    """An MP2845 as CIX's dev_paged_pmic.c uses it (PMBus-like): register 0
+    selects the page (a buck), VOUT_COMMAND (0x62, two bytes, 5 mV steps in
+    bits 9:0) and READ_VOUT (0xa7, the same) are per page, 0x83 the
+    revision; the vendor registers the PSI setting writes (0x5f, 0x64,
+    0x73) are kept per page too.  Modelled, not known."""
+
+    PAGED = (0x5f, 0x62, 0x64, 0x73, 0xa7)
+
+    def __init__(self, name, revision=0):
+        super().__init__(name)
+        self.page = 0
+        self.paged = {}
+        self.regs[0x83], self.regs[0x84] = revision & 0xff, revision >> 8
+        self.n = 0
+
+    def start(self, read):
+        super().start(read)
+        self.n = 0
+
+    def write(self, byte):
+        if self.first:
+            self.ptr, self.first, self.n = byte, False, 0
+            return
+        if self.ptr == 0x00:
+            self.page = byte & 3
+            return
+        if self.ptr in self.PAGED:
+            r = self.paged.setdefault((self.page, self.ptr), bytearray(3))
+            if self.n < 3:
+                r[self.n] = byte
+            if self.ptr == 0x62 and self.n == 1:
+                self.paged[(self.page, 0xa7)] = bytearray(r)
+            self.n += 1
+            return
+        super().write(byte)
+
+    def read(self):
+        if self.ptr in self.PAGED:
+            r = self.paged.get((self.page, self.ptr), bytearray(3))
+            v = r[self.n] if self.n < 3 else 0
+            self.n += 1
+            return v
+        return super().read()
+
+
+class Tmp75(I2cDevice):
+    """A TI TMP75 temperature sensor: register 0 the temperature (whole
+    degrees, then sixteenths in the high nibble), as the MS-R1's board
+    sensors at 0x4d on I2C 3.  temp is set by a test."""
+
+    def __init__(self, name, temp=25.0):
+        super().__init__(name)
+        self.set(temp)
+
+    def set(self, temp):
+        whole = int(temp) & 0xff
+        self.regs[0], self.regs[1] = whole, int((temp - int(temp)) * 16) << 4 & 0xf0
+        self.regs[0x23] = self.regs[0]
+
+
+def auto_device(name, addr):
+    """The model for an address nobody attached: Sky1 boards' PMICs by
+    their address, a register file otherwise."""
+    if addr == 0x60:
+        return Mp5475(name)
+    if addr == 0x45:
+        return Mp2845(name)
+    return I2cDevice(name)
+
+
 # Cadence I2C register offsets and bits (Linux i2c-cadence.c)
 CR, SR, ADDR, DATA, ISR, XFER, SLVP, TOUT, IMR, IER, IDR = 0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40
-CR_RW, CR_HOLD, CR_CLRFIFO = 0x01, 0x10, 0x40
+CR_RW, CR_MS, CR_HOLD, CR_CLRFIFO = 0x01, 0x02, 0x10, 0x40
 SR_RXDV, SR_TXDV, SR_BA = 0x20, 0x40, 0x100
 ISR_COMP, ISR_DATA, ISR_NACK = 0x01, 0x02, 0x04
 FIFO = 16
@@ -163,7 +248,7 @@ class CadenceI2c:
                 self.finish()
             return
         self.r[off] = value
-        if off == ADDR:
+        if off == ADDR and self.r[CR] & CR_MS:          # a slave's own address starts nothing
             self.transfer(value & 0x7f)
 
     def finish(self):
@@ -178,7 +263,7 @@ class CadenceI2c:
         self.addr = addr
         self.dev = self.devices.get(addr)
         if self.dev is None and self.soc.auto_i2c:
-            self.dev = self.devices[addr] = I2cDevice(f"{self.name}:{addr:#04x}")
+            self.dev = self.devices[addr] = auto_device(f"{self.name}:{addr:#04x}", addr)
         if self.dev is None:
             cpu = self.soc.cpu
             where = " < ".join(cpu.func(pc) for pc in cpu.backtrace(6)) if cpu else ""
@@ -374,6 +459,105 @@ class Ddrc:
             self.lp_state = 0x40 | LP_CMD_STATE.get((value >> 16) & 0x7f, 0)
 
 
+# --- the PM's local watchdog -------------------------------------------------------
+
+WDT = 0xa0050000                      # an Arm SP805 (CIX's dev_wdt.c): the SE's 0x46560000
+WDT_LOCK, WDT_UNLOCK = 0xc00, 0x1acce551
+
+
+class Sp805:
+    """The SP805's lock (0xc00: writing 0x1acce551 unlocks, anything else
+    locks; reads 1 while locked), which CIX's dev_wdt_set_timeout checks.
+    The count itself is not modelled (the boards' 5 s timeout is longer
+    than any test runs)."""
+
+    def __init__(self, soc, base):
+        self.soc, self.base = soc, base
+        self.locked = 1
+
+    def read(self, off, size):
+        if off == WDT_LOCK:
+            return self.locked
+        return self.soc.mem.read(self.base + off, size)
+
+    def write(self, off, size, value):
+        if off == WDT_LOCK:
+            self.locked = int(value != WDT_UNLOCK)
+            return
+        self.soc.mem.write(self.base + off, size, value)
+
+
+# --- counters (fans' PWM and tachometers) and PVT sensors ----------------------------
+
+# CIX's dev_counters.c: three blocks of eight counters (0x1000 apart): 0 and
+# 1 the tachometers (aggregator lines 22 and 23), 2 the PWM outputs.
+CNTS = (0xa0040000, 0xa0048000, 0x44110000)
+CNTS_LINES = (22, 23)
+CNT_TICK = 16          # CCOUNT cycles per 25 MHz counter tick
+
+
+class Counter:
+    """A counter node as CIX's fans use it (modelled on dev_counters.c, not
+    known).  A tachometer is a pair of nodes: the even one counts the fan's
+    pulses (+0x18), the odd one's load (+0x00, 25 MHz ticks) is the
+    monitoring interval; started (+0x24 bit 17), it raises its block's line
+    every interval, source 13 for the pair 4/5 and 14 for 6/7, until the
+    firmware writes 64 to the odd node's +0x34.  A PWM node has its period
+    (+0x2c) and high time (+0x28).  The fan on PWM 2:3+k and tachometer
+    k >> 1:4+2(k & 1) turns at fan_max_rpm times the duty (or what a test
+    sets in soc.fan_rpm[k]), with fan_pulses pulses a turn."""
+
+    def __init__(self, soc, base, inst, node):
+        self.soc, self.base, self.inst, self.node = soc, base, inst, node
+
+    def read(self, off, size):
+        return self.soc.mem.read(self.base + off, size)
+
+    def write(self, off, size, value):
+        self.soc.mem.write(self.base + off, size, value)
+        if self.inst < 2 and self.node in (5, 7):
+            if off == 0x24:
+                self.soc.tach_control(self, value)
+            elif off == 0x34 and value & 64:
+                self.soc.irq_raw[CNTS_LINES[self.inst]] = \
+                    self.soc.irq_raw.get(CNTS_LINES[self.inst], 0) & ~(1 << (13 + (self.node - 5) // 2))
+                self.soc.update_irqs()
+
+
+# PVT sensors (src/pvt.c's layout): sensor i at PVT_BASE + 0x1000 (i + 1)
+PVT_BASE, PVT_N = 0xa0070000, 13
+PVT_SAFE_LINE, PVT_WARN_LINE = 28, 29
+
+
+def pvt_code(celsius):
+    """A temperature as the sensor's 10-bit code (CIX's
+    convert_temperature_to_data)."""
+    return int(celsius * celsius * 6.8504e-4 + celsius * 3.584 + 223.3) & 0x3ff
+
+
+class PvtSensor:
+    """A PVT sensor whose reading (+0x04: three 10-bit codes, max, min and
+    latest) follows soc.pvt_temp[i] (degrees C) once a test sets it, and
+    which raises line 29 (its bit) while the code is at or above its warning
+    threshold (+0x0c [9:0], when set) and line 28 below its safe one
+    (+0x0c [19:10]).  Without a temperature it is plain memory."""
+
+    def __init__(self, soc, i):
+        self.soc, self.i, self.base = soc, i, PVT_BASE + 0x1000 * (i + 1)
+
+    def read(self, off, size):
+        t = self.soc.pvt_temp[self.i]
+        if off == 0x04 and t is not None:
+            c = pvt_code(t)
+            return c | c << 10 | c << 20
+        return self.soc.mem.read(self.base + off, size)
+
+    def write(self, off, size, value):
+        self.soc.mem.write(self.base + off, size, value)
+        if off in (0x00, 0x0c):
+            self.soc.pvt_update()
+
+
 # --- mailboxes and the interrupt aggregator ----------------------------------------
 
 MBOX = 0xa0080000                     # mailbox i at MBOX + i * 0x10000 (SoC 0x06590000 + ...)
@@ -451,7 +635,9 @@ class PmSoc:
         self.blocks = {}
         self.touched = {}                               # block -> first function
         self.cpu = None
-        self.i2c = [CadenceI2c(self, 0xa0010000 + 0x1000 * i, f"i2c{i}") for i in range(3)]
+        # 0-2 masters (PMICs); 3 the slave the EC reads, a master for the
+        # MS-R1's board sensors (its slave side is not modelled)
+        self.i2c = [CadenceI2c(self, 0xa0010000 + 0x1000 * i, f"i2c{i}") for i in range(4)]
         for dev in self.i2c:
             self.blocks[dev.base] = dev
         self.blocks[0xa0030000] = Pl011(self, 0xa0030000)
@@ -464,6 +650,17 @@ class PmSoc:
         self.blocks[S5_PMCTRL] = self.s5
         for base in DDRC:
             self.blocks[base] = Ddrc(self, base)
+        self.blocks[WDT] = Sp805(self, WDT)
+        for inst, base in enumerate(CNTS):
+            for node in range(8):
+                self.blocks[base + 0x1000 * node] = Counter(self, base + 0x1000 * node, inst, node)
+        self.tachs = {}                                 # (inst, odd node) -> next interrupt, period
+        self.fan_max_rpm, self.fan_pulses, self.fan_rpm = 6000, 2, {}
+        self.pvt_temp = [None] * PVT_N
+        for i in range(PVT_N):
+            self.blocks[PVT_BASE + 0x1000 * (i + 1)] = PvtSensor(self, i)
+        # aggregator lines' sources raised by models and tests: line -> bits
+        self.irq_raw = {}
         cgc_reset(self.mem)
         for addr, v in SE_HANDOFF.items():
             self.mem.write(addr, 4, v)
@@ -473,13 +670,66 @@ class PmSoc:
             return sum(1 << mb.i for mb in self.mbox if mb.pending())
         if line == S5_LINE:
             return self.s5.pending()
-        return 0
+        return self.irq_raw.get(line, 0)
+
+    # --- timed models: tachometers --------------------------------------------------
+
+    def tach_control(self, cnt, value):
+        key = (cnt.inst, cnt.node)
+        if value & 0x20000:
+            period = max(1, self.mem.read(cnt.base, 4)) * CNT_TICK
+            now = self.cpu.ccount if self.cpu else 0
+            self.tachs[key] = [now + period, period]
+        else:
+            self.tachs.pop(key, None)
+
+    def fan_speed(self, k):
+        if k in self.fan_rpm:
+            return self.fan_rpm[k]
+        pwm = CNTS[2] + 0x1000 * (3 + k)
+        period, high = self.mem.read(pwm + 0x2c, 4), self.mem.read(pwm + 0x28, 4)
+        return self.fan_max_rpm * min(high, period) // period if period else 0
+
+    def tach_fire(self, inst, node):
+        k = 2 * inst + (node - 5) // 2
+        due, period = self.tachs[(inst, node)]
+        even = CNTS[inst] + 0x1000 * (node - 1)
+        pulses = self.fan_speed(k) * self.fan_pulses * period // (CORE_HZ * 60)
+        self.mem.write(even + 0x18, 4, (self.mem.read(even + 0x18, 4) + pulses) & 0xffffffff)
+        line = CNTS_LINES[inst]
+        self.irq_raw[line] = self.irq_raw.get(line, 0) | 1 << (13 + (node - 5) // 2)
+        self.tachs[(inst, node)][0] = due + period
+        self.update_irqs()
+
+    def next_event(self, cpu):
+        dues = [due for due, _ in self.tachs.values()]
+        return max(1, min(dues) - cpu.ccount) if dues else None
+
+    def advance(self, cpu, cycles):
+        for key in sorted(self.tachs, key=lambda k: self.tachs[k][0]):
+            while key in self.tachs and self.tachs[key][0] <= cpu.ccount:
+                self.tach_fire(*key)
+
+    def pvt_update(self):
+        warn = safe = 0
+        for i in range(PVT_N):
+            t = self.pvt_temp[i]
+            base = PVT_BASE + 0x1000 * (i + 1)
+            if t is None or not self.mem.read(base, 4) & 1:
+                continue
+            thr, c = self.mem.read(base + 0x0c, 4), pvt_code(t)
+            if thr & 0x3ff and c >= thr & 0x3ff:
+                warn |= 1 << i
+            if c < (thr >> 10) & 0x3ff:
+                safe |= 1 << i
+        self.irq_raw[PVT_WARN_LINE], self.irq_raw[PVT_SAFE_LINE] = warn, safe
+        self.update_irqs()
 
     def update_irqs(self):
         if self.cpu is None:
             return
         lines = 0
-        for line in (MBOX_LINE, S5_LINE):
+        for line in {MBOX_LINE, S5_LINE} | set(self.irq_raw):
             if self.agg_raw(line) & self.mem.read(AGG + 0x80 + 4 * (line - 12), 4):
                 lines |= 1 << line
         self.cpu.int_lines = lines
@@ -564,6 +814,33 @@ def scmi(cpu, soc, protocol, msg, args=(), mbox=2, token=0, budget=5_000_000, ch
     words = [rd(SMT_PAYLOAD + 4 * i) for i in range(max(0, min(n, 25)))]
     status = words[0] - (1 << 32) if words and words[0] >> 31 else (words[0] if words else None)
     return status, words[1:]
+
+
+CORE_HZ = 400_000_000                 # the core clock both images set (LCRU divider 1)
+
+
+def run_for(cpu, soc, ms, chunk=50_000):
+    """Run the PM for ms milliseconds of simulated time (CCOUNT at CORE_HZ).
+    Time asleep in WAITI goes by at once: CCOUNT jumps to the next enabled
+    CCOMPARE (xt_emu), never past the end; a PM with nothing to wake it
+    sleeps out the rest.  Deterministic: the same image and inputs give
+    the same run.  Returns None, or why the PM stopped (an assertion...)."""
+    end = cpu.ccount + int(ms * CORE_HZ // 1000)
+    cpu.until = end
+    try:
+        while cpu.ccount < end:
+            why = cpu.run(max(1, min(chunk, end - cpu.ccount)))   # a cycle or more per instruction
+            if why is None:
+                continue
+            if why == "until":
+                break
+            if str(why).startswith("waiti with nothing"):
+                cpu.skip(end - cpu.ccount)
+                break
+            return why
+    finally:
+        cpu.until = None
+    return None
 
 
 def boot(elf, soc=None):

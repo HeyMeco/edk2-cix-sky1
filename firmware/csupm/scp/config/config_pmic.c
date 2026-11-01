@@ -3,9 +3,11 @@
  * The EDP rails (CIX's config_pmic.c): element i is the DPM's rail i and
  * answers the PSU element of the same domain (psu_idx).
  *
- * CIX's msg_p2a_on_pmic_error, which sends the PMICs' status to the AP as
- * a CIX-specific SCMI message (protocol 0x81) when they report an error,
- * is left out: the open firmware's scmi module has no such messages yet.
+ * CIX's msg_p2a_on_pmic_error builds the PMICs' status for the AP as a
+ * CIX-specific SCMI notification (protocol 0x81); CIX's image calls it only
+ * from its debug CLI (prvPmicTest), and its PM-to-AP message path
+ * (md_msg_p2a_send) is empty, so the AP never gets it: the AP reads the
+ * same report with PM message 0x400 (src/msg).
  */
 #include <mod_pmic.h>
 
@@ -46,6 +48,19 @@ void pmic_config_preset(enum pmic_preset preset_idx);
 void pmic_config_preset(enum pmic_preset preset_idx)
 {
 	dpm_edp_cfg_set_type(preset_idx);
+}
+
+/*
+ * CIX's msg_p2a_on_pmic_error: the accumulated report (dev_pmic.c's, up to
+ * 40 bytes) in a notification for protocol 0x81 (CIX's event 0x10c7 to its
+ * SCMI module).  Nothing in the firmware raises it (see above): it builds
+ * the report and stops there.
+ */
+void msg_p2a_on_pmic_error(void)
+{
+	uint32_t report[10] = { 0 };
+
+	(void)dev_pmic_build_msg_report_buffer(PMIC_STATUS_ALL, report, sizeof(report));
 }
 
 const struct fwk_module_config config_pmic = {

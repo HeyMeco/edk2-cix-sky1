@@ -73,8 +73,50 @@ def ignored(addr):
     return (addr & ~0xfff) in IGNORE_BLOCKS or any(lo <= addr < hi for lo, hi in IGNORE_RANGES)
 
 
+# --board: the board's PM configuration (csu_pm_config.bin), which the SE
+# copies to PM RAM before the PM starts; None for none (blank: erased flash)
+BIOS_CFG = 0x200bf000
+BOARD = None
+BOARDS = {                            # --board NAME: the configuration the build packs
+    "o6": "output/orion-o6/RELEASE/pr/Firmwares/csu_pm_config.bin",
+    "o6n": "output/orion-o6n/RELEASE/pr/Firmwares/csu_pm_config.bin",
+    "ms-r1": "output/ms-r1/RELEASE/pr/Firmwares/csu_pm_config.bin",
+    "opi6": "vendor/orangepi/opi6/csu_pm_config.bin",
+    "opi6plus": "output/opi6plus/RELEASE/pr/Firmwares/csu_pm_config.bin",
+}
+
+
+# --set NAME=VALUE: a config_data_t of pm_config_t (offsets in it) set to a
+# valid VALUE, the block's sums redone (CIX's do_pm_config_crc_check)
+CFG_WORDS = {"gpio0": 0xd37, "gpio1": 0xd3b, "gpio2": 0xd3f, "op_mode": 0xd43, "psi7": 0xd47,
+             "wdt": 0xd2f, "noc_idle": 0xcf3, "trip": 0x5e}
+
+
+def board_config(arg, sets=()):
+    """--board PATH or NAME: the configuration's bytes, with --set's words."""
+    import struct
+    root = Path(__file__).resolve().parent.parent.parent
+    path = Path(arg) if Path(arg).exists() else root / BOARDS.get(arg.lower(), arg)
+    blk = bytearray(path.read_bytes())
+    for item in sets:
+        name, value = item.split("=")
+        struct.pack_into("<I", blk, 0x18 + CFG_WORDS[name], int(value, 0) << 1)
+    if sets:
+        n = struct.unpack_from("<I", blk, 8)[0]
+        blk[0x10:0x18] = bytes(8)
+        a = b = 0
+        for i in range(0, n, 4):
+            a = (a + struct.unpack_from("<I", blk, i)[0]) & 0xffffffff
+            b = (b + a) & 0xffffffff
+        blk[0x10:0x18] = struct.pack("<II", a, b)
+    return bytes(blk)
+
+
 def boot(elf):
     cpu, soc = pm_emu.boot(elf)
+    cpu.elf_path = str(elf)
+    if BOARD is not None:
+        cpu.write_bytes(BIOS_CFG, BOARD)
     for name in pm_emu.ASSERTS:
         if name in cpu.byname:
             cpu.stops[cpu.addr(name)] = name
@@ -85,8 +127,14 @@ def boot(elf):
     # the PM answers the SE's 0x55ca from a task, after it first idles
     while why == "idle" and soc.se.log[-1:] != [0x5a5c] and cpu.insns < BOOT_BUDGET:
         why = cpu.run(50_000) or "idle"
+    # the boot compared ends with the handshake word: CIX's pm_ready writes
+    # it, then (in its task, after the boot capture) starts the DPM's
+    # streams and the board's services, which --runtime compares
+    end = next((i + 1 for i, (_, a, _, v) in enumerate(cpu.writes)
+                if a == pm_emu.PM_MAGIC and v == 0x5a5c), len(cpu.writes))
+    cpu.handshake_write = end           # pm_ready's work starts here (after it, in CIX's task)
     regs = defaultdict(list)
-    for pc, addr, size, value in cpu.writes:
+    for pc, addr, size, value in cpu.writes[:end]:
         if not ignored(addr) and not is_memory(addr) and \
                 not (pm_emu.RAM[0] <= addr < pm_emu.RAM[0] + pm_emu.RAM[1]):
             regs[addr].append(value)
@@ -180,10 +228,13 @@ def run(elf, questions=None, suite=False, power=False):
     run) or, with suite, the SCMI suite; with power, then the power phases
     (on a copy of the booted state, so the SCMI ones are not disturbed)."""
     cpu, soc, why, regs = boot(elf)
-    booted = None
+    booted = svc = None
     if power and why == "idle":
         import copy
         booted = copy.deepcopy(cpu)
+    if SERVICES and why == "idle":
+        import copy
+        svc = copy.deepcopy(cpu)
     r = {"name": Path(elf).name, "why": why, "insns": cpu.insns, "se": list(soc.se.log),
          "regs": dict(regs), "i2c": [w for _, w in soc.i2c_log], "memory": memory(soc),
          "backtrace": " < ".join(cpu.func(pc) for pc in cpu.backtrace(8)), "scmi": None}
@@ -196,6 +247,8 @@ def run(elf, questions=None, suite=False, power=False):
     r["i2c_scmi"] = [w for _, w in soc.i2c_log[n_i2c:]]
     r["cgc_scmi"] = [(a, v) for _, a, _, v in cpu.writes[n_writes:] if CGC[0] <= a < CGC[1]]
     r["power"] = power_suite(booted, booted.bus) if booted is not None else None
+    r["services"] = services_suite(svc, svc.bus) if svc is not None else None
+    r["runtime"] = runtime_suite(cpu, soc, RUNTIME) if RUNTIME and why == "idle" else None
     return r
 
 
@@ -321,10 +374,13 @@ def run_until(cpu, soc, until, budget=POWER_BUDGET):
         cpu.stop_write = None
 
 
-def phase(cpu, soc, name, action):
-    """Run action(); what the PM did meanwhile: registers written, I2C, SE
-    handshake words, S5 events, answers."""
+def phase(cpu, soc, name, action, since=None):
+    """Run action(); what the PM did meanwhile: registers written (from
+    cpu.writes[since] when given), I2C, SE handshake words, S5 events,
+    answers."""
     n_w, n_i, n_s, n_e = len(cpu.writes), len(soc.i2c_log), len(soc.se.log), len(soc.events)
+    if since is not None:
+        n_w = since
     i0 = cpu.insns
     end, answers = action()
     regs = defaultdict(list)
@@ -397,6 +453,221 @@ def power_suite(cpu, soc):
     return out
 
 
+# --- board services (--services) ---------------------------------------------------
+
+SERVICES = False
+
+
+def sym_bytes(cpu, name, size):
+    """The bytes of a variable both images name alike (CIX's names)."""
+    from elftools.elf.elffile import ELFFile
+    if not hasattr(cpu, "_objects"):
+        cpu._objects = {}
+        with open(cpu.elf_path, "rb") as fh:
+            for sy in ELFFile(fh).get_section_by_name(".symtab").iter_symbols():
+                if sy["st_info"]["type"] == "STT_OBJECT":
+                    cpu._objects.setdefault(sy.name, sy["st_value"])
+    a = cpu._objects.get(name)
+    return None if a is None else bytes(cpu.read_bytes(a, size))
+
+
+def services_suite(cpu, soc):
+    """The board services CIX's firmware runs, on simulated time (run_for):
+    what pm_ready starts; fans at two temperatures and in Linux's modes
+    (PM messages 0x801 and 0x802; the fan's speed follows its PWM duty in
+    the model); a PVT sensor over its warning threshold; PROCHOT asserted
+    then released; a PMIC fault read by PM message 0x400; the DDR DFS check
+    after PM message 0x803 turns the SoC idle switch on.  Per phase,
+    compared as the power phases are."""
+    out = []
+
+    def fans_status():
+        return [(("0x801", f), pm_msg(cpu, soc, 0, 0x801, (f,))) for f in range(3)]
+
+    def ms(n):
+        why = pm_emu.run_for(cpu, soc, n)
+        return why or "ran"
+
+    def settle():
+        return ms(100), []
+    # pm_ready's work from the handshake on, wherever each image does it
+    out.append(phase(cpu, soc, "pm_ready (fans, PVT polling, NoC idle, DPM)", settle,
+                     since=getattr(cpu, "handshake_write", None)))
+
+    def temps(t):
+        soc.pvt_temp[:] = [t] * len(soc.pvt_temp)
+        for bus in soc.i2c:
+            for dev in bus.devices.values():
+                if isinstance(dev, pm_emu.Tmp75):
+                    dev.set(t)
+        soc.pvt_update()
+
+    def fans_cool():
+        temps(35.0)
+        return ms(650), fans_status()
+    out.append(phase(cpu, soc, "fans at 35 C", fans_cool))
+
+    def fans_hot():
+        temps(75.0)
+        return ms(500), fans_status()
+    out.append(phase(cpu, soc, "fans at 75 C", fans_hot))
+
+    def fan_modes():
+        ans = []
+        for args in ((2, 0, 0, 0), (4, 1, 2000, 0), (5, 2, 40, 0),
+                     (3, 0, 1, 3, 0x00000a05, 0x0bb82823, 0x13883c37), (1, 5, 0, 0), (7, 0, 0, 0)):
+            ans.append((("0x802",) + args, pm_msg(cpu, soc, 0, 0x802, args)))
+        return ms(500), ans + fans_status()
+    out.append(phase(cpu, soc, "fan modes (Linux)", fan_modes))
+
+    # CIX's firmware never enables aggregator lines 28-30 (it writes 28's
+    # mask 0; their reset values are not known): as if 29 and 30 were on
+    def unmask(line, bits):
+        a = pm_emu.AGG + 0x80 + 4 * (line - 12)
+        soc.mem.write(a, 4, soc.mem.read(a, 4) | bits)
+        soc.update_irqs()
+
+    def pvt_alarm():
+        unmask(29, 0x1fff)
+        soc.pvt_temp[3] = 110.0
+        soc.pvt_update()
+        end = ms(5)
+        soc.pvt_temp[3] = 40.0
+        soc.pvt_update()
+        return ms(5) if end == "ran" else end, []
+    out.append(phase(cpu, soc, "PVT sensor 3 over its threshold", pvt_alarm))
+
+    def prochot():
+        unmask(30, 1)
+        soc.irq_raw[30] = 1
+        soc.update_irqs()
+        end = ms(3)
+        soc.irq_raw[30] = 0
+        soc.update_irqs()
+        return ms(40) if end == "ran" else end, []
+    out.append(phase(cpu, soc, "PROCHOT asserted 3 ms (lines 29, 30 unmasked)", prochot))
+
+    def pmic_fault():
+        for bus in soc.i2c[:3]:
+            dev = bus.devices.get(0x60)
+            if isinstance(dev, pm_emu.Mp5475):
+                dev.regs[0x07], dev.regs[0x08], dev.regs[0x09] = 0x01, 0x02, 0x10
+                break
+        ans = [("0x400", pm_msg(cpu, soc, 0, 0x400)), ("0x400 again", pm_msg(cpu, soc, 0, 0x400)),
+               ("0x63", pm_msg(cpu, soc, 0, 0x63)), ("0x804", pm_msg(cpu, soc, 0, 0x804))]
+        return ms(5), ans
+    out.append(phase(cpu, soc, "PMIC fault (PM message 0x400)", pmic_fault))
+
+    def ddr_dfs():
+        ans = [("0x803 on", pm_msg(cpu, soc, 0, 0x803, (3, 3)))]
+        end = ms(250)
+        ans.append(("is_ddr_dfs_compatible", sym_bytes(cpu, "is_ddr_dfs_compatible", 5)))
+        ans.append(("0x803 off", pm_msg(cpu, soc, 0, 0x803, (1, 0))))
+        return end, ans
+    out.append(phase(cpu, soc, "DDR DFS check (PM message 0x803)", ddr_dfs))
+    return out
+
+
+# --- the DPM's runtime (--runtime MS) ----------------------------------------------
+
+RUNTIME = 0
+# what the AP sees of the DPM: dpm_main_tab's fields (both images lay it out
+# as CIX's DWARF says): offset, words, format
+DPM_OUTPUTS = (("opp_run", 0x538, 13, "I"), ("opp_grant", 0x49c, 13, "I"),
+               ("exp_dxs_clk_khz", 0x278, 39, "I"), ("edp_limit", 0x3e4, 8, "I"),
+               ("delivered_dxs_freq_khz", 0x50, 13, "I"), ("delivered_vot_mV", 0x84, 8, "I"),
+               ("die_temp", 0xa4, 1, "f"), ("util_dxs", 0xfc, 13, "f"),
+               ("power_dxs_mW", 0x1d0, 13, "i"), ("power_edp_mW", 0x204, 9, "i"),
+               ("power_edp_leakage_mW", 0x228, 9, "i"), ("socket_power", 0x270, 1, "f"),
+               ("ccx_power", 0x274, 1, "f"))
+BIG0_FC = 0x98                        # the OS's level-set fast channel of big core cluster 0
+BIG0 = 3                              # its SCMI performance domain
+
+
+def dpm_outputs(cpu):
+    """The DPM's exported state: dpm_main_tab's fields and the die
+    arbiter's PID controller (spt_pids[3]: CIX's float state)."""
+    import struct
+    out = []
+    tab = sym_bytes(cpu, "dpm_main_tab", 0x720)
+    for name, off, n, fmt in DPM_OUTPUTS:
+        out.append((f"dpm_main_tab.{name}", struct.unpack_from(f"<{n}{fmt}", tab, off) if tab else None))
+    # the die arbiter's PID: CurInput, SetPoint, SetAmend, FeedBack, in_alpha,
+    # fb_scale, err, err_last, (integral left out: with Ki 0 it only counts
+    # the iterations since pm_ready, which the images reach at different
+    # simulated times), u_sum, input_last, Kp, Ki, Kd
+    pid = sym_bytes(cpu, "spt_pids", 240)
+    if pid:
+        v = struct.unpack_from("<14f", pid, 0xb4 + 4)
+        out.append(("spt_pids[3]", v[:8] + v[9:]))
+    else:
+        out.append(("spt_pids[3]", None))
+    return out
+
+
+# shared memory the DPM's runtime writes for the AP, through the hub window:
+# the power data board (DRAM 0x83bf0300) and the PCC tables (0x83bf1280).
+# (CIX's debug CLI also polls its RTT channel, writing the RTT block at
+# 0x63bf3000; the CLI is not ported.)
+RUNTIME_PAGES = (0x63bf0000, 0x63bf1000)
+
+
+def runtime_phase(cpu, soc, name, action):
+    """phase() with the shared memory the AP reads of the DPM (final
+    contents of RUNTIME_PAGES) and the DPM's outputs after it among the
+    answers."""
+    def act():
+        end, ans = action()
+        mem = [(f"memory {p:#x}", bytes(soc.mem.read(p + i, 1) for i in range(0x1000)))
+               for p in RUNTIME_PAGES]
+        return end, ans + mem + dpm_outputs(cpu)
+    return phase(cpu, soc, name, act)
+
+
+def runtime_suite(cpu, soc, ms):
+    """The PM left running for ms of simulated time (pm_emu.run_for: time
+    asleep goes by at once), each phase from where the last ended: what
+    pm_ready starts (the DPM's performance streams: AMU, DDR and NPU
+    counters; the DPM every millisecond, its power data board for the AP;
+    the board's services); then the OS asking big cluster 0's highest level
+    on its fast channel (the DPM reads the requests); then the die at 100 C
+    with PROCHOT asserted (the DPM caps the CPU clusters: its TDP
+    frequencies, which scmi_perf and sky1soc_perf apply), and both gone.
+    Compared per phase as the power phases are, plus the hub window's pages
+    written and the DPM's exported state (dpm_outputs)."""
+    out = []
+
+    def run(t=ms):
+        return pm_emu.run_for(cpu, soc, t) or "ran"
+
+    out.append(runtime_phase(cpu, soc, f"DPM and streams {ms} ms", lambda: (run(), [])))
+
+    def request():
+        try:
+            st, w = pm_emu.scmi(cpu, soc, 0x13, 4, (BIG0, 0), mbox=0, budget=3_000_000)
+        except pm_emu.ScmiError as e:
+            return f"stopped: {e}", []
+        n = min(w[0] & 0xfff, (len(w) - 1) // 3) if st == 0 and w else 0
+        level = w[1 + 3 * (n - 1)] if n else 0
+        ask(cpu, soc, 0, None, "fc", (BIG0_FC, level))
+        return run(), [("big0 levels", (st, n, level))]
+    out.append(runtime_phase(cpu, soc, f"big0's highest level asked, {ms} ms", request))
+
+    def hot():
+        soc.pvt_temp[:] = [100.0] * len(soc.pvt_temp)
+        soc.pvt_update()
+        soc.irq_raw[30] = 1
+        soc.update_irqs()
+        end = run()
+        soc.irq_raw[30] = 0
+        soc.update_irqs()
+        soc.pvt_temp[:] = [40.0] * len(soc.pvt_temp)
+        soc.pvt_update()
+        return run() if end == "ran" else end, []
+    out.append(runtime_phase(cpu, soc, f"die at 100 C, PROCHOT {ms} ms, then neither {ms} ms", hot))
+    return out
+
+
 def cached(elf, refresh, power=False):
     """CIX's run, from out/test_pm-cache when the image and the emulator
     are unchanged."""
@@ -405,6 +676,10 @@ def cached(elf, refresh, power=False):
     for f in ("pm_emu.py", "xt_emu.py", "xtensa_flix.py", "test_pm.py"):
         h.update((here / f).read_bytes())
     h.update(b"power" if power else b"")
+    h.update(b"services" if SERVICES else b"")
+    h.update(b"runtime %d" % RUNTIME if RUNTIME else b"")
+    if BOARD is not None:
+        h.update(b"board" + BOARD)
     path = here.parent.parent / "out" / "test_pm-cache" / f"{h.hexdigest()[:16]}.pickle"
     if path.exists() and not refresh:
         return pickle.loads(path.read_bytes())
@@ -422,15 +697,29 @@ def main():
     ap.add_argument("--power", action="store_true",
                     help="then compare PM messages, suspend/resume, shutdown, warm reset")
     ap.add_argument("--no-cache", action="store_true", help="run CIX's image again")
+    ap.add_argument("--board", metavar="PATH|NAME",
+                    help="the board's PM configuration in both images (" + ", ".join(BOARDS) + ")")
+    ap.add_argument("--set", action="append", default=[], metavar="NAME=VALUE",
+                    help="a word of the board's configuration (" + ", ".join(CFG_WORDS) + ")")
+    ap.add_argument("--runtime", type=int, default=0, metavar="MS",
+                    help="then (after the SCMI questions, which CIX's reference run always asks) "
+                         "run MS ms of simulated time per phase and compare the DPM's runtime")
+    ap.add_argument("--services", action="store_true",
+                    help="then compare the board services: fans, PVT alarm, PROCHOT, PMIC fault, DDR DFS")
     ap.add_argument("-v", action="store_true")
     a = ap.parse_args()
+    global BOARD, SERVICES, RUNTIME
+    if a.board:
+        BOARD = board_config(a.board, a.set)
+    SERVICES = a.services
+    RUNTIME = a.runtime
     cix_elf = a.cix
     if cix_elf is None:
         from cix_debug import fetch
         cix_elf = fetch(CIX_PM)
     bad = 0
     ref = cached(cix_elf, a.no_cache, a.power)
-    runs = [ref] + ([run(a.open_elf, ref["scmi"] if a.scmi else None, power=a.power)] if a.open_elf else [])
+    runs = [ref] + ([run(a.open_elf, ref["scmi"] if a.scmi or a.runtime else None, power=a.power)] if a.open_elf else [])
     for r in runs:
         ok = r["why"] == "idle" and r["se"][-1:] == [0x5a5c]
         bad += not ok
@@ -490,6 +779,10 @@ def main():
             print(f"{n} SCMI commands")
     if a.power:
         bad += report_power(runs, a.v)
+    if a.services:
+        bad += report_power(runs, a.v, "services")
+    if a.runtime:
+        bad += report_power(runs, a.v, "runtime")
     if len(runs) == 2 or bad:
         print(f"{bad} differences" if len(runs) == 2 else "CIX's image did not boot in the model")
     sys.exit(1 if bad else 0)
@@ -504,17 +797,17 @@ def comparable(q, ans):
     return ans
 
 
-def report_power(runs, verbose):
+def report_power(runs, verbose, key="power"):
     """Print the power phases (one run: CIX's; two: compared).  Returns the
     number of differences."""
     bad = 0
-    phases = [r.get("power") or [] for r in runs]
+    phases = [r.get(key) or [] for r in runs]
     if any(not p for p in phases):
-        print("power phases: did not run (no idle after boot)")
+        print(f"{key} phases: did not run (no idle after boot)")
         return 1
     for i, pa in enumerate(phases[0]):
         pb = phases[1][i] if len(phases) == 2 else None
-        line = f"power: {pa['name']}: {pa['end']} after {pa['insns']} instructions, " \
+        line = f"{key}: {pa['name']}: {pa['end']} after {pa['insns']} instructions, " \
                f"{len(pa['regs'])} registers, {len(pa['i2c'])} I2C, SE {' '.join(f'{v:#x}' for v in pa['se'])}, " \
                f"events {pa['events']}"
         if pb is None:
@@ -538,7 +831,12 @@ def report_power(runs, verbose):
         for r in diffs[:None if verbose else 30]:
             print(f"  {r:#010x}: CIX {[hex(v) for v in ra.get(r, [])][:6]} open {[hex(v) for v in rb.get(r, [])][:6]}")
         for q, x, y in ans_bad:
-            print(f"  answer {q}: CIX {x} open {y}")
+            if isinstance(x, bytes) and isinstance(y, bytes) and len(x) == len(y):
+                d = [i for i in range(len(x)) if x[i] != y[i]]
+                print(f"  {q}: {len(d)} bytes differ, first at +{d[0]:#x}: "
+                      f"CIX {x[d[0] & ~3:(d[0] & ~3) + 16].hex()} open {y[d[0] & ~3:(d[0] & ~3) + 16].hex()}")
+            else:
+                print(f"  answer {q}: CIX {x} open {y}")
         if not same["i2c"]:
             for k, (x, y) in enumerate(zip(pa["i2c"] + [None] * len(pb["i2c"]), pb["i2c"] + [None] * len(pa["i2c"]))):
                 if x != y:

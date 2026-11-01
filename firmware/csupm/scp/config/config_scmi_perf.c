@@ -52,7 +52,7 @@ static struct mod_scmi_perf_config scmi_perf_config = {
 	.plugins = plugins_table,
 	.plugins_count = FWK_ARRAY_SIZE(plugins_table),
 	.perf_doms_enabled = UINT32_MAX,
-	.tdp_opp_run = dpm_opp_run,
+	.tdp_opp_run = dpm_main_tab.opp_run,
 };
 
 /* CIX's override_config_scmi_perf */
