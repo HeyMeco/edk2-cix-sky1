@@ -232,6 +232,70 @@ They are applied by `scripts/prepare.py` like the EDK2 queues
 
 ## How the open firmware differs from CIX's
 
+What `--open` builds for the O6 and O6N differs from CIX's firmware only
+where listed here; everything else matched CIX's write for write in the
+emulator tests (SE: boot, DRAM initialisation on the O6 and O6N,
+suspend/resume, secure boot; CSU_PM: boot, SCMI, PM messages, power
+transitions, run time, all five boards' PM configurations; SFH: every
+hardware write). The open SE and CSU_PM have not run on hardware, and
+what the emulators model of the hardware is inferred from CIX's code.
+
+### At a glance
+
+Security fixes, where CIX's behaviour is a hole:
+
+| Where | Open firmware | CIX's |
+|---|---|---|
+| BL2 ([below](#bl2)) | authenticates every image, whatever the fuses say, against the root built into it | skips authentication on unfused boards; never checks bootloader3's trusted key certificate |
+| BL31 ([below](#bl31)) | SPI NOR SiP call: normal-world buffers must be in non-secure DRAM; out-of-range power-domain IDs ignored | the OS can have flash data written over secure memory, or secure memory to flash |
+| BL31 | SiP calls `0xC2000030/31` left out | pass OS pointers and lengths straight into SE commands |
+| BL31, TrustZone configuration ([below](#trustzone-configuration)) | a secure storage region overlapping the firmware is dropped; every board gets CIX's stock configuration | Radxa's O6/O6N file puts secure storage over UEFI |
+| OP-TEE ([below](#op-tee)) | NOR secure storage only inside the region the TrustZone configuration enables | an offset past the end of an 8 MiB flash, which wraps onto the firmware header |
+| StandaloneMM ([below](#standalonemm)) | the UEFI transaction passthrough checks lengths | UEFI, and the OS through OP-TEE, can have flash data written past StMM's buffer into secure memory |
+| SE ([below](#se-firmware)) | secret eFuse fields (device and model keys) only to the TEE mailbox | to the OS's mailbox too |
+| SE | the hash service reads DRAM only | hashes any address, SE SRAM and eFuse included |
+| SE | refuses to burn the OEM root key hash; programs no eFuses | burns it, turning secure boot on for good |
+
+Left out, debug or unused:
+
+* SE: the UART debug monitor; the DDR driver's training report and
+  register dumps, and its BIST pass/fail arrays (only printed; the BIST
+  runs are kept).
+* CSU_PM ([below](#csu_pm-differences)): the debug CLI and what only it reaches;
+  CIX's code overlays; FreeRTOS and CIX's timer, event and job framework
+  (SCP-firmware events and alarms instead, with CIX's periods); CIX's
+  interrupt-driven I2C path (a polled driver moving the same bytes).
+* BL2: bootloader3 backup recovery (no board's layout has it). BL31: the
+  uncalled flash write code. Both: CIX's extra POST codes.
+
+Behaviour that differs slightly:
+
+* CSU_PM: the run-time services start 1 ms after the ready handshake
+  (CIX's from its event worker once it first idles); the heartbeat timer
+  is created once (CIX's adds one on every resume).
+* StandaloneMM: a failed flash program or erase re-reads the block; partial
+  writes land at their offset.
+* SE: a memory-configuration block lookup that stays inside its table; a
+  write enable per erased flash sector; the DDR driver's density table
+  padded so it is not read past its end.
+* bootloader1: CSU_PM's image is not padded to CIX's size and its
+  signature moves down (the SE hashes the image's sections only); the
+  container is otherwise CIX's, re-signed with the same published chain-A
+  keys.
+
+Not functional:
+
+* versions: the PM reports its build version and commit (CIX's:
+  `00.12.001`), the SE `beta2.0-<version>`;
+* images built with GCC and Mbed TLS rather than CIX's toolchains and
+  crypto library, and smaller (SE 141 KB, CIX's 334 KB; CSU_PM 196 KB,
+  CIX's 327 KB);
+* CSU_PM's RAM log holds its messages (CIX's line buffer is never flushed,
+  so its log holds stray bytes);
+* CIX's oddities that do not harm are kept as CIX has them and commented
+  in the source, not fixed (in CSU_PM and the DDR driver, e.g. the memory
+  configuration write-back writing as many bytes as the checksum's value).
+
 The open BL2 and BL31 were written and checked against the CIX binaries in
 the 2026Q3 bootloader1/bootloader2 (TF-A `v2.7(release):Beta_2.1.5_release`,
 built 2026-07-15): functions matched against a build of the public tree
@@ -331,6 +395,34 @@ secure OS's NOR file system would overwrite UEFI. Every board now gets the
 CIX stock configuration (SPE on, secure storage and bootloader3 recovery
 off), the defaults BL31 also uses where the layout has none. BL31 (patch
 0004) and `check_open.py` refuse an overlapping region in any case.
+
+### CSU_PM differences
+
+Written from CIX's debug build (`csupm_sky1` 00.12.001) and checked with
+[test_pm.py](../scripts/open/test_pm.py); the details are in
+[firmware/csupm/README.md](../firmware/csupm/README.md). Differences:
+
+* No debug CLI, and nothing only it reaches: CI-700 event collections, the
+  DFD trace, GPIO interrupt helpers, forced operating points; no log
+  dumps.
+* No RTOS: CIX's FreeRTOS tasks and its timer, event and job framework
+  become SCP-firmware alarms and events (`dpm` and `pm_svc` modules) with
+  CIX's periods and order. CIX's 32 KB of code overlays are not needed.
+* I2C: CIX's interrupt-driven transfer path is a polled driver; the bytes
+  on the bus are the same.
+* The run-time services (fans, PVT polling, board sensors, watchdog) start
+  1 ms after the ready handshake; CIX's start from its event worker once
+  it first idles.
+* The heartbeat timer is created once; CIX's creates another on every
+  resume, so after one two timers toggle the LED.
+* The version page reports the build's version and commit; the RAM log
+  holds the messages logged (CIX's holds bytes from past its line buffer,
+  which is never flushed).
+* Kept as CIX has them: the PMIC error notification is built but not sent
+  (CIX's PM-to-AP send is empty; the AP reads faults with PM message
+  0x400); CIX's power-domain table, which makes ISP0 its own parent and
+  so denies powering ISP0 and GPUTOP on; interrupt lines 28-30 (PVT
+  alarms, PROCHOT) left masked as CIX leaves them.
 
 ## Components
 
