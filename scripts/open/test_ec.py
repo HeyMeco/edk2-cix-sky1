@@ -11,6 +11,11 @@ devices the O6 does not have (NACKed) and its debug output are not
 compared.
 
   test_ec.py [--open IMG] [--vendor IMG] [--flash SPI] [-v] [scenario...]
+
+Run it under PyPy (run_ec_tests.sh does: pypy3 on PATH or $PYPY, else
+python3): the emulator is ~28x faster there, the suite ~1 min instead of
+~25.  This file, ec_emu.py and i8051_emu.py need nothing beyond the
+standard library.
 """
 import argparse
 import os
