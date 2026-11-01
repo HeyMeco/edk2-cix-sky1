@@ -56,6 +56,7 @@ RUN set -eux; \
 # capstone for relinking CIX's DDR driver (scripts/open/se_ddr_island.py)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc-arm-none-eabi libnewlib-arm-none-eabi binutils-arm-none-eabi python3-capstone \
+        sdcc \
     && rm -rf /var/lib/apt/lists/*
 
 # Xtensa (CSU_PM, Cadence LX7 core "pm_core_v1"): Espressif's GCC, which

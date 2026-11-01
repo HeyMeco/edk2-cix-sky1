@@ -116,6 +116,22 @@ def build_sfh(out):
     return path, {"sfh_fw": "source", "sfh_fw_sha256": sha256(path)}
 
 
+def build_ec(out):
+    """Orion O6 EC firmware from firmware/ec (SDCC), in place of Radxa's
+    ec_fw.bin: a 128 KiB e-flash image with ITE's signature at 0x40.  It
+    reaches the EC only when UEFI's platform reset (host command 3E19)
+    mirrors it in.  Returns (path, manifest info)."""
+    out = Path(out).resolve() / "ec"
+    run(["make", "-C", str(ROOT / "firmware/ec"), f"O={out}"], capture=True)
+    path = out / "ec_fw.bin"
+    data = path.read_bytes()
+    sig = bytes.fromhex("a5a5a5a5a5a5a595" "85125a5aaa7d5555")
+    if len(data) != 0x20000 or data[0x40:0x50] != sig:
+        raise SystemExit(f"{path}: not a 128 KiB IT5570 image with the e-flash signature at 0x40")
+    log(f"  ec_fw.bin: {path.stat().st_size} bytes from source")
+    return path, {"ec_fw": "source", "ec_fw_sha256": sha256(path)}
+
+
 def build_se(out, version):
     """SE firmware from firmware/se, all of it from source (CIX's DDR driver
     included: firmware/se/ddr).  The Makefile can still relink parts of

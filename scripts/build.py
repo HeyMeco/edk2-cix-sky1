@@ -251,7 +251,7 @@ def stage_boot_firmware(cfg, fw, mode, bootloader2=None, bootloader1=None):
 
 
 def package(cfg, fd, outdir, boot_firmware="vendor", bootloader2=None, bootloader1=None, open_certs=False,
-            sfh=None):
+            sfh=None, ec=None):
     pkg = ROOT / cfg["package"]
     pr = outdir / "pr"
     shutil.rmtree(pr, ignore_errors=True)
@@ -291,6 +291,10 @@ def package(cfg, fd, outdir, boot_firmware="vendor", bootloader2=None, bootloade
     if sfh:
         # source-built sensor fusion hub firmware (the SE loads it unsigned)
         shutil.copyfile(sfh, fw / "sfh_fw.bin")
+    if ec:
+        # source-built EC firmware (Orion O6): at ec_addr, mirrored into the
+        # EC by UEFI's platform reset
+        shutil.copyfile(ec, fw / "ec_fw.bin")
 
     # 4. tools (host architecture, see CIX_TOOL_FIXES), keys and flash layouts
     for tool in ("cert_uefi_create_rsa", "fiptool", "cix_regen_trusted_key_cert"):
@@ -466,8 +470,11 @@ def release_name(cfg, manifest):
     stem = f"{cfg['board']}_{manifest['version']}"
     if manifest.get("boot_firmware", "vendor") != board(cfg["board"]).get("boot_firmware", "vendor"):
         stem += f"_{manifest['boot_firmware']}boot"
-    if manifest.get("open"):
+    opened = manifest.get("open") or {}
+    if opened.get("bootloader3_certificates"):      # --open: pre-BL33 from source
         stem += "_open"
+    if opened.get("ec_fw") == "source":              # --open-ec
+        stem += "_openec"
     if manifest["target"] != "RELEASE":
         stem += f"_{manifest['target'].lower()}"
     return stem
@@ -537,6 +544,10 @@ def main():
     ap.add_argument("--vendor-pm", action="store_true",
                     help="with --open, keep CIX's CSU_PM firmware in bootloader1 instead of the one "
                          "built from firmware/csupm (not yet boot-tested on hardware)")
+    ap.add_argument("--open-ec", action="store_true",
+                    help="Orion O6 only: put the EC firmware built from firmware/ec in place of Radxa's "
+                         "ec_fw.bin (not yet tested on hardware; the EC takes it at UEFI's platform "
+                         "reset, see docs/open-firmware.md)")
     ap.add_argument("--vendor-stmm", action="store_true",
                     help="with --open, embed CIX's StandaloneMM image from the reference bootloader2 "
                          "instead of the one built from source")
@@ -553,6 +564,8 @@ def main():
     if not names:
         ap.error("name at least one board, or use --all / --list")
     for n in names:
+        if a.open_ec and n != "orion-o6":
+            die(f"--open-ec: {n} has no open EC firmware (only orion-o6)")
         if a.open and not cixfw.CHAINS[board(n)["signing_chain"]]["keys_public"]:
             die(f"--open: {n} is on signing chain {board(n)['signing_chain']}, whose keys are not public; "
                 "its BL2 would reject a source-built bootloader2")
@@ -596,7 +609,13 @@ def main():
             open_info["bootloader3_certificates"] = "cert_create"
             sfh, sfh_info = trusted.build_sfh(outdir / "open")
             open_info.update(sfh_info)
-        package(cfg, fd, outdir, boot_fw, bl2, bl1, open_certs=a.open, sfh=sfh if a.open else None)
+        ec = None
+        if a.open_ec:
+            log(f"{n}: building the EC firmware from source")
+            ec, ec_info = trusted.build_ec(outdir / "open")
+            open_info = dict(open_info or {})
+            open_info.update(ec_info)
+        package(cfg, fd, outdir, boot_fw, bl2, bl1, open_certs=a.open, sfh=sfh if a.open else None, ec=ec)
         layout = check_layout(cfg, outdir)
         manifest = write_manifest(cfg, outdir, a.target, version, date, layout, open_info, boot_fw)
         log(f"{n}: cix_flash_all.bin {manifest['outputs']['cix_flash_all.bin']['sha256']}")
