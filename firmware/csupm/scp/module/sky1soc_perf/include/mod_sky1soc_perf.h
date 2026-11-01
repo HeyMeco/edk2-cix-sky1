@@ -53,6 +53,14 @@ enum mod_sky1soc_perf_event_idx {
 bool sky1soc_notify_ap_core_change(uint8_t ap_core_idx, bool online);
 
 /* The DSU's frequency follows the clusters' (half the fastest) */
+/*
+ * Not CIX's: the DVFS elements this module drives (the AP domains and the
+ * DSU), whose levels scmi_perf leaves to its passes; and the level it
+ * has for one (false: not one of them, or none yet).
+ */
+bool sky1soc_perf_owns(unsigned int dvfs_idx);
+bool sky1soc_perf_get_level(unsigned int dvfs_idx, uint32_t *level);
+
 void sky1soc_set_dsu_dvfs(bool enable);
 bool sky1soc_get_dsu_dvfs(void);
 

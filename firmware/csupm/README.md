@@ -323,13 +323,33 @@ checks on pm_emu with a bus made to hang (`CadenceI2c.fault`): SCMI
 answered on another channel, the DPM following the die to 100 C, the fans
 speeding up, another cluster's voltage on a healthy bus, the level set once
 the bus is free, the stacks' high-water marks. It also raises big cluster
-0 by message (DVFS) and by fast channel (`sky1soc_perf`) while its PMIC's
+0 by message and by fast channel while its PMIC's
 bus NACKs, loses voltage writes (they reach the regulator and fail) or
 dies after the page is selected, on the MP5475 (O6N), the MP2845 and an
 AU4683 (the Orange Pi 6's configuration, its bucks shared): the PLL must
 not be written, then is once the bus is healthy, after the voltage; and
 lowers it with its writes lost, then raises it (or, on the shared buck,
 big cluster 1): no PLL write before a voltage write.
+
+The CPU clusters and the DSU have one owner, `sky1soc_perf`. In CIX's
+firmware an SCMI `PERFORMANCE_LEVEL_SET` or `LIMITS_SET`, a lock and the
+DPM's TDP changes set them through DVFS, the OS's fast channels through
+`sky1soc_perf`, each module with its own record of the OPP; a fast channel
+after a message could then raise the clock without the voltage (big
+cluster 0 at 6616 on 810 mV, in pm_emu, CIX's image and ours alike). Ours:
+`scmi_perf` keeps such a level for the domain and schedules a fast-channel
+pass, which takes it in place of the domain's level-set fast channel until
+that channel's value changes (the newest request wins); a TDP change
+schedules a pass, in which `sky1soc_perf` caps the requests (CIX's set the
+domains, through DVFS, to the TDP frequency's level); `LEVEL_GET` answers
+`sky1soc_perf`'s level. DVFS still sets their boot OPP, and drives every
+other domain. A DSU level by message thus changes the DSU PLL's second
+post-divider, as the fast channel always did, where CIX's DVFS programmed
+the PLL itself (and left `sky1soc_perf` dividing a frequency the PLL no
+longer had): `test_pm.py --scmi` reports those clock generator writes as
+different, the rest as before. `test_pm_faults.py` asks big cluster 0 by
+fast channel, message, fast channel and checks after each that the rail
+has the voltage the PLL's setting needs and that the level was applied.
 
 ```sh
 python3 scripts/open/test_pm_faults.py OURS.elf

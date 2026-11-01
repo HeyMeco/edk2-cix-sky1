@@ -21,6 +21,13 @@
  * Not CIX's: a voltage (or clock) answer that is an error ends the pass
  * at the barrier, so that no clock goes up on a supply that was not set
  * (the open firmware's PMIC writes give up on a dead bus; CIX's never do).
+ *
+ * Not CIX's either: this module is the only one that changes the AP
+ * domains and the DSU once they run.  In CIX's, SCMI messages, limits and
+ * the DPM's TDP changes set them through dvfs, whose record of each
+ * domain's OPP does not see this module's changes (nor this module
+ * dvfs's): a raise could then set the clock and not the voltage.
+ * scmi_perf now hands those levels to the next pass (sky1soc_perf_owns).
  */
 #include <mod_clock.h>
 #include <mod_dvfs.h>
@@ -743,6 +750,22 @@ bool sky1soc_notify_ap_core_change(uint8_t ap_core_idx, bool online)
 		return false;
 	on_fast_channel_interrupt(false);
 	return true;
+}
+
+/* Not CIX's: is DVFS element dvfs_idx an AP domain or the DSU? */
+bool sky1soc_perf_owns(unsigned int dvfs_idx)
+{
+	return g_ctx.ctx != NULL && dvfs_idx >= g_ctx.ap_dom_begin &&
+	       dvfs_idx <= (unsigned int)g_ctx.ap_dom_begin + g_ctx.ap_dom_count;
+}
+
+/* Not CIX's: its level, as this module has it */
+bool sky1soc_perf_get_level(unsigned int dvfs_idx, uint32_t *level)
+{
+	if (!sky1soc_perf_owns(dvfs_idx))
+		return false;
+	*level = g_ctx.ctx[dvfs_idx - g_ctx.ap_dom_begin].curr_level;
+	return *level != 0;
 }
 
 /* CIX's sky1soc_set_dsu_dvfs */

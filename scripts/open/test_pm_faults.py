@@ -21,8 +21,8 @@ sensor (MS-R1): the bus of the board's TMP75s hangs; voltage changes go on
   (their worker and bus are not the sensors') and so does the DPM.
 
 raise: a frequency never goes up on a voltage that failed.  Big cluster 0
-  asked for its highest level by message (dvfs) and by its fast channel
-  (sky1soc_perf) while its PMIC's bus fails: NACKs; loses the voltage
+  asked for its highest level by message and by its fast channel (both
+  sky1soc_perf's) while its PMIC's bus fails: NACKs; loses the voltage
   writes (they reach the regulator, the transfer fails: the CIX driver's
   "failed, read back as set"); dies after the page is selected.  On the
   MP5475 (O6N), the MP2845 (Orange Pi 6, bucks shared) and an AU4683 (the
@@ -32,6 +32,10 @@ raise: a frequency never goes up on a voltage that failed.  Big cluster 0
   writes were lost (the rail lower than the firmware was told), each
   followed by a raise of the cluster or, on a shared buck, of big cluster
   1: no PLL write before a voltage write.
+
+two owners: big cluster 0 asked by fast channel, message, fast channel (and
+  fast channel, message): after each the rail holds the voltage the PLL's
+  setting needs, and the level asked for is the PLL's.
 
 The stacks' high-water marks are checked at the end of each (the tasks'
 stacks are filled with 0xa5 when created).  A check that fails prints
@@ -315,9 +319,10 @@ def sensor_scenario(elf):
 # --- raises whose voltage fails ------------------------------------------------------
 #
 # A frequency must never go up on a rail whose voltage write failed.  The
-# requests go two ways: an SCMI PERFORMANCE_LEVEL_SET message (scmi_perf ->
-# dvfs: voltage, then clock) and the OS's fast channel (scmi_perf's pass ->
-# sky1soc_perf's queue, which drives the CPU clusters and the DSU itself).
+# requests go two ways: an SCMI PERFORMANCE_LEVEL_SET message and the OS's
+# fast channel.  For the CPU clusters and the DSU both end in sky1soc_perf's
+# queue (scmi_perf's pass); other domains' messages go to dvfs (voltage,
+# then clock), but on these boards only the clusters' rails are PMICs'.
 # What is checked is the clock generator: the writes a healthy raise of the
 # cluster makes (its PLL's block), and the PLL's registers.
 
@@ -427,7 +432,7 @@ def vout_writes(fault, since=0):
 
 
 def request(cpu, soc, path, d, lv, ms=60):
-    """Level lv on domain d by path ("dvfs": the message; "fc": big0's fast channel)."""
+    """Level lv on domain d by path ("msg": the message; "fc": big0's fast channel)."""
     if path == "fc":
         assert d == BIG0
         test_pm.ask(cpu, soc, 0, None, "fc", (test_pm.BIG0_FC, lv))
@@ -504,7 +509,7 @@ def lower_lost_then_raise(elf, name, cfg, path, target, d=BIG0, then=None):
     lv = levels(cpu, soc, d)
     bus, _ = calibrate(cpu, soc, path, d, lv)
     rlv = levels(cpu, soc, raised)
-    rbus, blocks = calibrate(cpu, soc, "dvfs" if then is not None else path, raised, rlv)
+    rbus, blocks = calibrate(cpu, soc, "msg" if then is not None else path, raised, rlv)
     if bus is None or rbus != bus or not blocks:
         check(False, f"{tag}: rails on I2C {bus} and {rbus}, clock generator {blocks}")
         return
@@ -517,7 +522,7 @@ def lower_lost_then_raise(elf, name, cfg, path, target, d=BIG0, then=None):
     fault.arm(None)
     pm_emu.run_for(cpu, soc, 50)
     nw, nl = len(cpu.writes), len(fault.log)
-    request(cpu, soc, "dvfs" if then is not None else path, raised, rlv[target])
+    request(cpu, soc, "msg" if then is not None else path, raised, rlv[target])
     first, v = first_pll_write(cpu, nw, blocks), vout_writes(fault, nl)
     ok = first is None or (bool(v) and v[0][0] <= first)
     check(bool(lost) and ok,
@@ -530,20 +535,71 @@ def raise_scenarios(elf):
     au = au4683_config()
     # MP5475 (O6N), MP2845 and AU4683 (generic paged driver, shared bucks)
     for name, cfg in (("o6n", None), ("opi6", None), ("opi6-au4683", au)):
-        for path in ("dvfs", "fc"):
+        for path in ("msg", "fc"):
             raise_failed(elf, name, cfg, path, "nack")
     # a write that reaches the regulator but fails: set, not known to be
     raise_failed(elf, "o6n", None, "fc", "lost")
-    raise_failed(elf, "opi6", None, "dvfs", "lost")
+    raise_failed(elf, "opi6", None, "msg", "lost")
     # the bus dies after the first transfer: the page selected, VOUT not
-    raise_failed(elf, "opi6", None, "dvfs", "nack", after=1)
+    raise_failed(elf, "opi6", None, "msg", "nack", after=1)
     raise_failed(elf, "opi6-au4683", au, "fc", "nack", after=1)
     # a lower whose writes were lost, then a raise
-    lower_lost_then_raise(elf, "o6n", None, "dvfs", -2)
+    lower_lost_then_raise(elf, "o6n", None, "msg", -2)
     lower_lost_then_raise(elf, "o6n", None, "fc", -1)
-    lower_lost_then_raise(elf, "opi6", None, "dvfs", -2)
+    lower_lost_then_raise(elf, "opi6", None, "msg", -2)
     # the buck shared: big 0 lowered with its writes lost, big 1 raised
-    lower_lost_then_raise(elf, "opi6", None, "dvfs", -2, d=BIG0, then=BIG1)
+    lower_lost_then_raise(elf, "opi6", None, "msg", -2, d=BIG0, then=BIG1)
+
+
+# --- two owners of a cluster -------------------------------------------------------
+#
+# Big cluster 0 is asked for levels by SCMI message and by the OS's fast
+# channel in turn (CIX's firmware set the first through dvfs and the second
+# through sky1soc_perf, each with its own record of where the cluster was;
+# ours has sky1soc_perf do both).  No fault: after each request the
+# regulator must hold at least the voltage the PLL's setting had when the
+# fast channel alone set it, and the level asked for must be applied.
+
+def vout_mv(soc, bus, buck):
+    """An MP5475 buck's VOUT register, mV."""
+    dev = soc.i2c[bus].devices[0x60]
+    return (dev.regs[0x13 + 8 * buck] << 9) + dev.regs[0x14 + 8 * buck] * 2
+
+
+def two_owners(elf, steps, name="o6n"):
+    """steps: (path, level index) in turn on big0 from its lowest level."""
+    tag = "two owners " + " ".join(f"{p}:{i}" for p, i in steps)
+    cpu, soc = boot(elf, name)
+    lv = levels(cpu, soc, BIG0)
+    bus, blocks = calibrate(cpu, soc, "fc", BIG0, lv)
+    if bus is None or not blocks:
+        check(False, f"{tag}: big0's rail on I2C {bus}, clock generator {blocks}")
+        return
+    ni = len(soc.i2c_log)
+    request(cpu, soc, "fc", BIG0, lv[-1])
+    buck = next(int(w.split()[2], 16) - 0x13 for _, w in soc.i2c_log[ni:]
+                if " W " in w and ":0x60" in w) // 8
+    # each level's PLL setting and voltage, one owner (the fast channel), from the lowest up
+    need = {}
+    for lvl in lv:
+        request(cpu, soc, "fc", BIG0, lvl)
+        need[lvl] = (pll_regs(cpu, blocks), vout_mv(soc, bus, buck))
+    request(cpu, soc, "fc", BIG0, lv[0])
+    for path, i in steps:
+        request(cpu, soc, path, BIG0, lv[i])
+        regs, mv = pll_regs(cpu, blocks), vout_mv(soc, bus, buck)
+        at = next((lvl for lvl, (r, _) in need.items() if r == regs), None)
+        want = need[at][1] if at is not None else None
+        check(at is not None and mv >= want,
+              f"{tag}: {path} asked {lv[i]}: PLL at level {at} (needs {want} mV), rail {mv} mV")
+        check(at == lv[i], f"{tag}: {path} asked {lv[i]}: applied (PLL at level {at})")
+
+
+def two_owner_scenarios(elf):
+    # the OS's fast channel, then a lower by message (or a TDP cap), then the fast channel
+    two_owners(elf, (("fc", -1), ("msg", 1), ("fc", -2)))
+    # a lower by message after the fast channel raised the cluster
+    two_owners(elf, (("fc", -1), ("msg", 2)))
 
 
 def main():
@@ -556,6 +612,7 @@ def main():
     pmic_scenario(a.elf, "o6n")          # fans the PM drives
     sensor_scenario(a.elf)
     raise_scenarios(a.elf)
+    two_owner_scenarios(a.elf)
     print(f"{failures} failed")
     return min(failures, 125)
 
