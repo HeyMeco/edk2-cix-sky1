@@ -312,9 +312,24 @@ set, and three places differ from CIX's for it:
 `scmi_perf` answers a level set before DVFS has done it, as CIX's, so a
 failure does not reach the SCMI caller; DVFS raises a voltage before the
 frequency, so a voltage that cannot be set leaves the frequency where it
-was, and lowering one never waits for I2C. Not changed: after a resume,
-`dpm_edp_restore_voltage`'s result is not looked at before
-`clk_nodes_restore` puts the PLLs back, as CIX's. Around the power sequence the workers
+was, and lowering one never waits for I2C.
+
+A rail whose write failed may hold anything from the old voltage to the
+new; `pwr_rail.c` marks it unsure, and its next write is made even when
+the voltage asked for is the one recorded (shared bucks too). Each
+`sky1soc_perf` pass first writes an unsure domain's recorded voltage, then
+plans: the 200 mV between the clusters and the DSU is planned from the
+records, and until that write succeeds nothing else is changed (the values
+the rails may hold lie between two the planner had checked). After a
+resume, `dpm_edp_restore_voltage` says which rails it could not set
+again; once `ddr_s3_exit` is done (before it, the clock changes upset the
+DDR's resume in pm_emu; the AP cores run only afterwards) their DVFS
+elements' clocks go to their lowest OPP's frequency, recorded so by
+`sky1soc_perf` or DVFS, the rail unsure (CIX's restored the PLLs whatever
+the rails). At boot `sky1soc_perf`'s first pass waits until DVFS has set
+(or, after its retries, given up) the clusters' and DSU's boot OPP, and
+starts from DVFS's record; a boot OPP not set leaves the lowest OPP's
+voltage recorded, unsure. Around the power sequence the workers
 finish their jobs first (`rtos_quiesce`; CIX suspends its tasks). A stuck
 bus thus stops its worker for about 35 ms, then costs nothing; the rest of
 the PM goes on meanwhile, which
@@ -349,7 +364,9 @@ the PLL itself (and left `sky1soc_perf` dividing a frequency the PLL no
 longer had): `test_pm.py --scmi` reports those clock generator writes as
 different, the rest as before. `test_pm_faults.py` asks big cluster 0 by
 fast channel, message, fast channel and checks after each that the rail
-has the voltage the PLL's setting needs and that the level was applied.
+has the voltage the PLL's setting needs and that the level was applied. It also checks the rewrite of an unsure voltage, a resume whose rail
+cannot be set (big cluster 0 at its lowest level after it, then raised
+voltage first), and a boot whose voltage writes are all lost.
 
 ```sh
 python3 scripts/open/test_pm_faults.py OURS.elf

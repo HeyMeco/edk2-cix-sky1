@@ -63,8 +63,9 @@ void pmic_set_custom_scheme(const uint8_t *opp_max, const uint8_t *rails);
 /* CIX's dpm_edp_get_pmic_i2c_addr: the PMIC on an I2C port, 0xff for none */
 uint8_t dpm_edp_get_pmic_i2c_addr(uint8_t port);
 const struct rail *dpm_edp_get_pwr_rail_config_from_i2cinfo(uint8_t port, uint8_t buck);
-/* The rails at the voltages last asked for (after suspend) */
-bool dpm_edp_restore_voltage(void);
+/* The rails at the voltages last asked for (after suspend); the EDP
+ * domains whose rail could not be set, a bit each (not CIX's) */
+uint32_t dpm_edp_restore_voltage(void);
 /* CIX's dpm_edp_set_gb: a rail's offset changed, its voltage set again */
 bool dpm_edp_set_gb(uint8_t edp_id, int32_t gb_mV);
 

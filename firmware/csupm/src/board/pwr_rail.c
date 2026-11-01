@@ -257,29 +257,46 @@ uint8_t pwr_rail_bound_buck(uint8_t edp_id, bool *is_physical)
 }
 
 /*
+ * Not CIX's: the rails whose last write failed (or whose voltage after a
+ * suspend could not be set again).  The regulator may then hold anything
+ * from the old voltage to the new one; the next write is made even when
+ * the voltage asked for is the one recorded.
+ */
+static uint16_t volt_unsure;
+
+/*
  * A bound domain's buck goes to the higher of the two domains' voltages
- * (old and new alike; nothing is written when that does not change); a
- * binding that is not physical sets the other domain's regulator too.
+ * (old and new alike; nothing is written when that does not change, unless
+ * one of them is unsure); a binding that is not physical sets the other
+ * domain's regulator too.
  */
 bool pwr_rail_setVoltage(uint8_t edp_id, uint16_t old_voltage, uint16_t new_voltage, bool debug)
 {
 	uint8_t b = pwr_rail_bound_buck(edp_id, NULL), other;
-	uint16_t v = 0;
+	uint16_t v = 0, mask = (uint16_t)(1u << edp_id);
 	bool ok;
 
-	if (b >= ARRAY_SIZE(s_binding))
-		return dev_pmic_setVoltage(rail_cfg(edp_id), old_voltage, new_voltage, debug);
-	other = s_binding[b].edp_id0 == edp_id ? s_binding[b].edp_id1 : s_binding[b].edp_id0;
-	ok = dpm_edp_get_voltage((DPM_EDP_DOMAIN)other, &v);
-	if (v > old_voltage)
-		old_voltage = v;
-	if (v > new_voltage)
-		new_voltage = v;
-	if (old_voltage == new_voltage)
-		return ok;
-	ok = dev_pmic_setVoltage(rail_cfg(edp_id), old_voltage, new_voltage, debug);
-	if (!s_binding[b].is_physical && ok)
-		ok = dev_pmic_setVoltage(rail_cfg(other), old_voltage, new_voltage, debug);
+	if (b >= ARRAY_SIZE(s_binding)) {
+		ok = dev_pmic_setVoltage(rail_cfg(edp_id), old_voltage, new_voltage, debug);
+	} else {
+		other = s_binding[b].edp_id0 == edp_id ? s_binding[b].edp_id1 : s_binding[b].edp_id0;
+		mask |= (uint16_t)(1u << other);
+		ok = dpm_edp_get_voltage((DPM_EDP_DOMAIN)other, &v);
+		if (v > old_voltage)
+			old_voltage = v;
+		if (v > new_voltage)
+			new_voltage = v;
+		if (old_voltage == new_voltage && !(volt_unsure & mask))
+			return ok;
+		ok = dev_pmic_setVoltage(rail_cfg(edp_id), old_voltage, new_voltage, debug);
+		if (!s_binding[b].is_physical && ok)
+			ok = dev_pmic_setVoltage(rail_cfg(other), old_voltage, new_voltage, debug);
+	}
+	/* one buck: its domains are sure or unsure together */
+	if (ok)
+		volt_unsure &= (uint16_t)~mask;
+	else
+		volt_unsure |= mask;
 	return ok;
 }
 
@@ -313,7 +330,7 @@ static bool edp_set_voltage(DPM_EDP_DOMAIN edp_id, uint32_t vol_mV)
 	mv = (uint32_t)((int32_t)vol_mV + r->offset_mv);
 	if (mv > EDP_MV_MAX)
 		mv = EDP_MV_MAX;
-	if (mv == volt_set[edp_id])
+	if (mv == volt_set[edp_id] && !(volt_unsure & (1u << edp_id)))
 		return true;
 	if (!pwr_rail_setVoltage((uint8_t)edp_id, volt_set[edp_id], (uint16_t)mv, true)) {
 		/*
@@ -332,17 +349,27 @@ static bool edp_set_voltage(DPM_EDP_DOMAIN edp_id, uint32_t vol_mV)
 /*
  * CIX's dpm_edp_restore_voltage (after suspend): each rail asked for a
  * voltage gets the one it had again (pwr_rail_setVoltage from 0, so it is
- * written whatever the regulator has).
+ * written whatever the regulator has).  Not CIX's: the rails that could
+ * not be set (a bit per EDP domain; they are unsure), so that their
+ * domains' clocks are not restored above what the rail may hold
+ * (dvfs_rails_lost).
  */
-static bool edp_restore_voltage(void)
+static uint32_t edp_restore_voltage(void)
 {
-	bool ok = true;
+	uint32_t failed = 0;
 
 	for (uint8_t d = 0; d < EDP_N; d++) {
-		if (rail_cfg(d) && volt_set[d])
-			ok &= pwr_rail_setVoltage(d, 0, volt_set[d], true);
+		if (rail_cfg(d) && volt_set[d] && !pwr_rail_setVoltage(d, 0, volt_set[d], true))
+			failed |= 1u << d;
 	}
-	return ok;
+	return failed;
+}
+
+/* Not CIX's: is the rail of DVFS element dvfs_idx unsure? */
+bool dpm_edp_unsure_dvfs(unsigned int dvfs_idx)
+{
+	return dvfs_idx < DVFS_ELEMENT_IDX_COUNT &&
+	       (volt_unsure & (1u << dvfs_elem_id_map_tab[dvfs_idx].edp_id)) != 0;
 }
 
 /* the voltage at the regulator, or the boot voltage of a rail without one */
@@ -375,6 +402,7 @@ struct edp_call {
 	uint8_t edp_id;
 	int32_t mv;
 	bool ok;
+	uint32_t failed;
 };
 
 static void edp_job(void *arg)
@@ -386,7 +414,8 @@ static void edp_job(void *arg)
 		c->ok = edp_set_voltage((DPM_EDP_DOMAIN)c->edp_id, (uint32_t)c->mv);
 		break;
 	case CALL_RESTORE:
-		c->ok = edp_restore_voltage();
+		c->failed = edp_restore_voltage();
+		c->ok = c->failed == 0;
 		break;
 	case CALL_GB:
 		c->ok = edp_set_gb(c->edp_id, c->mv);
@@ -394,10 +423,15 @@ static void edp_job(void *arg)
 	}
 }
 
-static bool edp_call(struct edp_call c)
+static struct edp_call edp_call_full(struct edp_call c)
 {
 	rtos_call(RTOS_PMIC, edp_job, &c);
-	return c.ok;
+	return c;
+}
+
+static bool edp_call(struct edp_call c)
+{
+	return edp_call_full(c).ok;
 }
 
 bool dpm_edp_set_voltage(DPM_EDP_DOMAIN edp_id, uint32_t vol_mV)
@@ -406,9 +440,9 @@ bool dpm_edp_set_voltage(DPM_EDP_DOMAIN edp_id, uint32_t vol_mV)
 					   .mv = (int32_t)vol_mV });
 }
 
-bool dpm_edp_restore_voltage(void)
+uint32_t dpm_edp_restore_voltage(void)
 {
-	return edp_call((struct edp_call){ .what = CALL_RESTORE });
+	return edp_call_full((struct edp_call){ .what = CALL_RESTORE }).failed;
 }
 
 bool dpm_edp_set_gb(uint8_t edp_id, int32_t gb_mV)

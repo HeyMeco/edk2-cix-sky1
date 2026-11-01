@@ -39,6 +39,7 @@
  */
 #include "hsm/hsm.h"
 #include "board/board.h"
+#include "dpm/dvfs_cfg.h"
 #include "fan/fan.h"
 #include "i2c.h"
 #include "irq.h"
@@ -428,17 +429,26 @@ void ss_s3_enter(void)
 
 void ss_s3_exit(void)
 {
+	uint32_t lost;
+
 	dev_mbox_toggle_all_rst(~BIT(8));	/* mailbox 8 keeps the SE's words */
 	/* CIX's check_boot_reason logs the S5 power reason */
 	lcru_axprot();
 	tlb_ctrl_restore();
 	/* CIX: app_i2c_setup(400 kHz, overwrite_i2c_master | 7, 8 without the masters) */
 	i2c_setup(400000, 7 | overwrite_i2c_master, 8 & ~overwrite_i2c_master);
-	dpm_edp_restore_voltage();
+	lost = dpm_edp_restore_voltage();
 	clk_nodes_restore();
 	recover_counter_after_sleep();
 	if (!package_without_ddr())
 		ddr_s3_exit();
+	/*
+	 * Not CIX's: no clock left above a rail that could not be set (the AP
+	 * cores run once this returns; set before ddr_s3_exit, the clocks
+	 * upset the DDR's resume)
+	 */
+	if (lost)
+		dvfs_rails_lost(lost);
 	pmic_resume();				/* set_mp2845b_psi7 on Phecda */
 	irq_restore();
 	fwlog_enable_dram(false, true);
