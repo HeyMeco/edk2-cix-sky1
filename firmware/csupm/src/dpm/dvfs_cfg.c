@@ -16,6 +16,10 @@
  * so the domains name that element.
  */
 #include <fwk_module_idx.h>
+#include <mod_dvfs.h>
+#ifdef BUILD_HAS_MOD_SKY1SOC_PERF
+#include <mod_sky1soc_perf.h>
+#endif
 
 #include "clk/clk.h"
 #include "dpm.h"
@@ -547,6 +551,44 @@ bool apply_config_dvfs_sustained_level(void)
 		dpm_edp_set_voltage((DPM_EDP_DOMAIN)m->edp_id, opp->voltage);
 	}
 	return true;
+}
+
+/*
+ * Not CIX's: after a resume, the EDP domains whose rail could not be set
+ * again (dpm_edp_restore_voltage): clk_nodes_restore has put their clocks
+ * back as they were before the suspend, on a rail that may hold less.
+ * Each DVFS element on one goes to its lowest OPP's frequency, recorded
+ * so by its owner (sky1soc_perf for the CPU clusters and the DSU, dvfs
+ * otherwise); the rail is unsure, so the next change writes it first.
+ */
+void dvfs_rails_lost(uint32_t edp_mask)
+{
+	uint32_t owned = 0;
+
+	create_element_table();
+	for (uint32_t i = 0; i < DVFS_ELEMENT_IDX_COUNT; i++) {
+		const struct mod_dvfs_domain_config *cfg = elem_cfg(i);
+		const struct dvfs_elem_id_map_tab *m = &dvfs_elem_id_map_tab[i];
+		CLK_TREE_STRUCT *node;
+
+		if (!(edp_mask & (1u << m->edp_id)) || !cfg->opps || cfg->opps[0].frequency == 0)
+			continue;
+#ifdef BUILD_HAS_MOD_SKY1SOC_PERF
+		if (sky1soc_perf_owns(i)) {
+			owned |= 1u << i;
+			continue;
+		}
+#endif
+		node = clk_nodes_get((CLK_TREE_ENUM_IDX)m->clk_id);
+		(void)clk_api_set_freq(&node->clk_tree_node, cfg->opps[0].frequency * 1000);
+		dvfs_domain_lost(i, &cfg->opps[0]);
+	}
+#ifdef BUILD_HAS_MOD_SKY1SOC_PERF
+	if (owned)
+		sky1soc_perf_rails_lost(owned);
+#else
+	(void)owned;
+#endif
 }
 
 /*

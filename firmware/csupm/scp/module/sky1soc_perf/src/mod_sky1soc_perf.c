@@ -88,6 +88,7 @@ struct mod_sky1soc_dom_ctx {
 	uint32_t req_voltage;
 	uint32_t req_freq;
 	uint32_t pass_level;	/* curr_level when the pass was planned */
+	bool unsure;		/* its voltage write failed: written first next pass */
 	fwk_id_t clock_id;
 	uint8_t active_ap_count;	/* cores online */
 	const struct mod_psu_device_api *psu_api;
@@ -128,6 +129,9 @@ static struct mod_sky1soc_perf_ctx {
 	uint8_t group_idx;	/* the first change of those running */
 	uint8_t op_pending_count;
 	bool op_failed;		/* one of them failed: the rest is not run */
+	bool boot_done;		/* dvfs has set (or given up) the boot OPPs */
+	bool boot_wait;		/* a pass waits for that */
+	uint8_t lost_mask;	/* domains whose rail a resume could not set */
 	bool fc_sched;		/* a fast-channel pass came while busy */
 	bool dsu_dvfs;
 	const struct mod_scmi_perf_updated_api *scmi_perf_updated_api;
@@ -142,6 +146,8 @@ static const fwk_id_t sky1soc_event_id_dsu_dvfs =
 	FWK_ID_EVENT_INIT(FWK_MODULE_IDX_SKY1SOC_PERF, MOD_SKY1SOC_PERF_EVENT_IDX_DSU_DVFS);
 
 static void sky1soc_perf_op_fsm(const struct fwk_event *event);
+static bool sky1soc_boot_settled(void);
+static void sky1soc_apply_lost(void);
 
 static fwk_id_t dvfs_element(unsigned int idx)
 {
@@ -500,6 +506,10 @@ static int sky1soc_perf_update(struct perf_plugins_perf_update *data)
 		g_ctx.fc_sched = true;
 		return FWK_PENDING;
 	}
+	if (!g_ctx.boot_done && !sky1soc_boot_settled()) {
+		g_ctx.boot_wait = true;	/* a pass again at dvfs's DVFS_DONE */
+		return FWK_PENDING;
+	}
 	memcpy(g_ctx.tdp_opp_run, g_ctx.dpm_opp_run, g_ctx.tdp_opp_size * sizeof(uint32_t));
 	sky1soc_apply_tdp(data);
 
@@ -543,6 +553,24 @@ static int sky1soc_perf_update(struct perf_plugins_perf_update *data)
 	}
 	sky1soc_plan_dsu(data);
 	sky1soc_plan_voltages();
+
+	/*
+	 * Not CIX's: a voltage that may not be what is recorded (a write that
+	 * failed, a rail a resume could not set) is written first, as
+	 * recorded, before anything else: the 200 mV between the clusters and
+	 * the DSU is planned from the records.
+	 */
+	for (uint8_t i = 0; i <= n; i++) {
+		struct mod_sky1soc_dom_ctx *ctx = &g_ctx.ctx[i];
+
+		if (ctx->curr_voltage != 0 &&
+		    (ctx->unsure || dpm_edp_unsure_dvfs(g_ctx.ap_dom_begin + i))) {
+			ctx->unsure = false;
+			sky1soc_add_op(i, SKY1SOC_OP_VOLTAGE, ctx->curr_voltage);
+		}
+	}
+	if (g_ctx.ops_count != 0)
+		g_ctx.ops[g_ctx.ops_count - 1].barrier = true;
 
 	/* frequencies down */
 	for (uint8_t i = 0; i <= n; i++) {
@@ -672,12 +700,70 @@ static void sky1soc_abort_ops(void)
 
 		if (!op->failed)
 			continue;
-		if (op->op_type == SKY1SOC_OP_VOLTAGE)
+		if (op->op_type == SKY1SOC_OP_VOLTAGE) {
 			ctx->curr_voltage = lo;
-		else
+			ctx->unsure = true;
+		} else {
 			ctx->curr_freq = hi;
+		}
 	}
 	g_ctx.ops_count = g_ctx.curr_idx;
+}
+
+/*
+ * Not CIX's: the domains whose rail a resume could not set (lost_mask,
+ * sky1soc_perf_rails_lost) at their lowest OPP, as their clocks were put,
+ * the voltage unsure.  Applied between passes.
+ */
+static void sky1soc_apply_lost(void)
+{
+	for (uint8_t i = 0; i <= g_ctx.ap_dom_count; i++) {
+		struct mod_sky1soc_dom_ctx *ctx = &g_ctx.ctx[i];
+		struct mod_dvfs_opp opp;
+
+		if (!(g_ctx.lost_mask & (1u << i)) ||
+		    g_ctx.dvfs_api->get_nth_opp(dvfs_element(g_ctx.ap_dom_begin + i), 0, &opp) !=
+			    FWK_SUCCESS)
+			continue;
+		ctx->curr_level = ctx->pass_level = opp.level;
+		ctx->curr_freq = opp.frequency;
+		ctx->curr_voltage = opp.voltage;
+		ctx->unsure = true;
+	}
+	g_ctx.lost_mask = 0;
+}
+
+/*
+ * Not CIX's: the first pass waits until dvfs has set the boot OPPs of
+ * these domains (or given up: its retries), then starts from dvfs's
+ * record; a domain whose boot OPP was not set has its sustained OPP's
+ * clock (the boot set it before dvfs) and its lowest OPP's voltage, unsure.
+ */
+static bool sky1soc_boot_settled(void)
+{
+	struct mod_dvfs_opp opp, low;
+
+	for (uint8_t i = 0; i <= g_ctx.ap_dom_count; i++) {
+		if (!dvfs_domain_settled(g_ctx.ap_dom_begin + i, &opp))
+			return false;
+	}
+	for (uint8_t i = 0; i <= g_ctx.ap_dom_count; i++) {
+		struct mod_sky1soc_dom_ctx *ctx = &g_ctx.ctx[i];
+
+		(void)dvfs_domain_settled(g_ctx.ap_dom_begin + i, &opp);
+		if (opp.level != 0) {
+			ctx->curr_level = opp.level;
+			ctx->curr_freq = opp.frequency;
+			ctx->curr_voltage = opp.voltage;
+		} else if (ctx->curr_level != 0 &&
+			   g_ctx.dvfs_api->get_nth_opp(dvfs_element(g_ctx.ap_dom_begin + i), 0,
+						      &low) == FWK_SUCCESS) {
+			ctx->curr_voltage = low.voltage;
+			ctx->unsure = true;
+		}
+	}
+	g_ctx.boot_done = true;
+	return true;
 }
 
 /*
@@ -693,8 +779,13 @@ static void sky1soc_perf_op_fsm(const struct fwk_event *event)
 		case SKY1SOC_STATE_START:
 			g_ctx.state = SKY1SOC_STATE_RUN;
 			g_ctx.curr_idx = 0;
+			g_ctx.group_idx = 0;
 			g_ctx.op_pending_count = 0;
 			g_ctx.op_failed = false;
+			if (g_ctx.lost_mask) {	/* planned before a resume lost a rail */
+				sky1soc_abort_ops();
+				goto done;
+			}
 			break;
 		case SKY1SOC_STATE_RUN:
 			break;
@@ -702,7 +793,7 @@ static void sky1soc_perf_op_fsm(const struct fwk_event *event)
 			fwk_assert(g_ctx.op_pending_count != 0);
 			if (--g_ctx.op_pending_count != 0)
 				return;
-			if (g_ctx.op_failed) {
+			if (g_ctx.op_failed || g_ctx.lost_mask) {
 				sky1soc_abort_ops();
 				goto done;
 			}
@@ -732,6 +823,8 @@ static void sky1soc_perf_op_fsm(const struct fwk_event *event)
 			goto done;
 	}
 done:
+	if (g_ctx.lost_mask)
+		sky1soc_apply_lost();
 	g_ctx.state = SKY1SOC_STATE_IDLE;
 	if (g_ctx.fc_sched) {
 		on_fast_channel_interrupt(false);
@@ -766,6 +859,38 @@ bool sky1soc_perf_get_level(unsigned int dvfs_idx, uint32_t *level)
 		return false;
 	*level = g_ctx.ctx[dvfs_idx - g_ctx.ap_dom_begin].curr_level;
 	return *level != 0;
+}
+
+/*
+ * Not CIX's: after a resume, the domains (a bit per DVFS element) whose
+ * rail could not be set: their clocks to their lowest OPP's frequency now
+ * (the DSU's post-divider as high as that needs, at most 7), and their
+ * record with it once no pass runs (a pass running ends at its barrier).
+ */
+void sky1soc_perf_rails_lost(uint32_t dvfs_mask)
+{
+	for (uint8_t i = 0; i <= g_ctx.ap_dom_count; i++) {
+		struct mod_dvfs_opp opp;
+		uint32_t div;
+
+		if (!(dvfs_mask & (1u << (g_ctx.ap_dom_begin + i))) ||
+		    g_ctx.dvfs_api->get_nth_opp(dvfs_element(g_ctx.ap_dom_begin + i), 0, &opp) !=
+			    FWK_SUCCESS || opp.frequency == 0)
+			continue;
+		if (i == g_ctx.ap_dom_count) {
+			div = (g_ctx.dsu_pll + opp.frequency - 1) / opp.frequency;
+			pll_ctrl_set_POSTDIV2_with_gating(div < 1 ? 1 : div > 7 ? 7 : div, DSU_PLL_BASE,
+							  DSU_PLL_GATE, 1);
+		} else {
+			CLK_TREE_STRUCT *node =
+				clk_nodes_get(g_ctx.config->ap_dom_cfg[i].clock_enum_id);
+
+			(void)clk_api_set_freq(&node->clk_tree_node, opp.frequency * 1000u);
+		}
+		g_ctx.lost_mask |= (uint8_t)(1u << i);
+	}
+	if (g_ctx.state == SKY1SOC_STATE_IDLE)
+		sky1soc_apply_lost();
 }
 
 /* CIX's sky1soc_set_dsu_dvfs */
@@ -824,6 +949,12 @@ static int sky1soc_perf_process_event(const struct fwk_event *event, struct fwk_
 		sky1soc_perf_op_fsm(event);
 	} else if (fwk_id_is_equal(event->id, sky1soc_event_id_run_ops)) {
 		sky1soc_perf_op_fsm(event);
+	} else if (fwk_id_get_event_idx(event->id) == MOD_SKY1SOC_PERF_EVENT_IDX_DVFS_DONE) {
+		/* Not CIX's: a pass that waited for dvfs's boot OPPs */
+		if (g_ctx.boot_wait) {
+			g_ctx.boot_wait = false;
+			on_fast_channel_interrupt(false);
+		}
 	} else if (fwk_id_is_equal(event->id, sky1soc_event_id_dsu_dvfs)) {
 		g_ctx.dsu_dvfs = event->params[0] != 0;
 	} else if (fwk_id_is_equal(event->id, sky1soc_event_id_ap_core)) {

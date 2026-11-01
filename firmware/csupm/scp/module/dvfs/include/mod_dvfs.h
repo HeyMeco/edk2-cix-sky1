@@ -12,6 +12,7 @@
 #include <fwk_macros.h>
 #include <fwk_module_idx.h>
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -228,6 +229,13 @@ static const fwk_id_t mod_dvfs_event_id_set =
 /*! <tt>Get current OPP </tt> event identifier */
 static const fwk_id_t mod_dvfs_event_id_get_opp =
     FWK_ID_EVENT_INIT(FWK_MODULE_IDX_DVFS, MOD_DVFS_EVENT_IDX_GET_OPP);
+
+/*
+ * CSU_PM (open): whether a domain has no request running or waiting, and
+ * its OPP as recorded; a domain's rail lost at a resume, its clock at opp.
+ */
+bool dvfs_domain_settled(unsigned int idx, struct mod_dvfs_opp *opp);
+void dvfs_domain_lost(unsigned int idx, const struct mod_dvfs_opp *opp);
 
 /*!
  * \}

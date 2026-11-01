@@ -111,6 +111,14 @@ uint16_t dpm_dxs_get_opp_max(DPM_DXS_DOMAIN dxs_id);
  * (or the boot voltage of a rail without regulator) */
 bool dpm_edp_set_voltage(DPM_EDP_DOMAIN edp_id, uint32_t vol_mV);
 bool dpm_edp_get_voltage(DPM_EDP_DOMAIN edp_id, uint16_t *pVol_mV);
+/* Not CIX's: is the rail of a DVFS element unsure (its last write failed)? */
+bool dpm_edp_unsure_dvfs(unsigned int dvfs_idx);
+/*
+ * Not CIX's: after a resume, the EDP domains (a bit each) whose rail could
+ * not be set again: their DVFS elements' clocks to their lowest OPP's
+ * frequency, and dvfs's or sky1soc_perf's record of them with it.
+ */
+void dvfs_rails_lost(uint32_t edp_mask);
 /* The rail of an EDP domain on this board (CIX's DPM_PWR_RAIL_CFG; src/pmic.c's
  * layout), NULL past the last */
 const struct rail *dpm_edp_get_pwr_rail_config(DPM_EDP_DOMAIN edp_id);

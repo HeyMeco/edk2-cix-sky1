@@ -131,6 +131,10 @@ struct mod_dvfs_domain_ctx {
 
     /* SET_OPP Request is pending for this domain */
     bool request_pending;
+
+    /* CSU_PM (open): the rail lost at a resume: the OPP to record */
+    bool lost;
+    struct mod_dvfs_opp lost_opp;
 };
 
 static struct mod_dvfs_ctx {
@@ -573,6 +577,44 @@ static int dvfs_set_level(fwk_id_t domain_id, uintptr_t cookie, uint32_t level)
     return dvfs_set_level_start(ctx, cookie, new_opp, false, 0);
 }
 
+/*
+ * CSU_PM (open): has domain idx no request running or waiting (its boot
+ * OPP set, or given up)?  Its OPP as recorded (level 0: none set).
+ */
+bool dvfs_domain_settled(unsigned int idx, struct mod_dvfs_opp *opp)
+{
+    struct mod_dvfs_domain_ctx *ctx =
+        get_domain_ctx(FWK_ID_ELEMENT(FWK_MODULE_IDX_DVFS, idx));
+
+    if ((ctx == NULL) || (ctx->state != DVFS_DOMAIN_STATE_IDLE) ||
+        ctx->request_pending) {
+        return false;
+    }
+    *opp = ctx->current_opp;
+    return true;
+}
+
+/*
+ * CSU_PM (open): the domain's rail could not be set after a resume and
+ * its clock was put at opp (dvfs_rails_lost): recorded at once, or when
+ * the request running completes.
+ */
+void dvfs_domain_lost(unsigned int idx, const struct mod_dvfs_opp *opp)
+{
+    struct mod_dvfs_domain_ctx *ctx =
+        get_domain_ctx(FWK_ID_ELEMENT(FWK_MODULE_IDX_DVFS, idx));
+
+    if (ctx == NULL) {
+        return;
+    }
+    if (ctx->state == DVFS_DOMAIN_STATE_IDLE) {
+        ctx->current_opp = *opp;
+    } else {
+        ctx->lost_opp = *opp;
+        ctx->lost = true;
+    }
+}
+
 static const struct mod_dvfs_domain_api dvfs_domain_api = {
     .get_current_opp = dvfs_get_current_opp,
     .get_sustained_opp = dvfs_get_sustained_opp,
@@ -646,6 +688,12 @@ static int dvfs_complete(
     int status;
     uintptr_t cookie = ctx->request.cookie;
 
+    /* CSU_PM (open): a rail lost meanwhile (dvfs_domain_lost) */
+    if (ctx->lost) {
+        ctx->current_opp = ctx->lost_opp;
+        ctx->lost = false;
+    }
+
     if (ctx->request.response_required) {
         /*
          * If the DVFS request requires a response we send it now, no retries
@@ -698,7 +746,9 @@ static int dvfs_complete(
      * identifier is reported to that module when it completes.
      */
 #ifdef BUILD_HAS_MOD_SKY1SOC_PERF
-    if (cookie == FWK_ID_MODULE(FWK_MODULE_IDX_SKY1SOC_PERF).value) {
+    /* CSU_PM (open): and any request on one of its domains (the boot OPP) */
+    if ((cookie == FWK_ID_MODULE(FWK_MODULE_IDX_SKY1SOC_PERF).value) ||
+        sky1soc_perf_owns(fwk_id_get_element_idx(ctx->domain_id))) {
         struct fwk_event event = {
             .source_id = FWK_ID_MODULE_INIT(FWK_MODULE_IDX_SKY1SOC_PERF),
             .target_id = FWK_ID_MODULE_INIT(FWK_MODULE_IDX_SKY1SOC_PERF),

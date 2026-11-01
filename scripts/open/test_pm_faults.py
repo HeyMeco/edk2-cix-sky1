@@ -37,6 +37,14 @@ two owners: big cluster 0 asked by fast channel, message, fast channel (and
   fast channel, message): after each the rail holds the voltage the PLL's
   setting needs, and the level asked for is the PLL's.
 
+unsure: a voltage write that failed (NACKed, or lost: set but failed) is
+  written again, as recorded, by the next pass before anything else, and
+  the regulator holds it.  A resume while big0's PMIC NACKs: big0's PLL at
+  its lowest level's setting and LEVEL_GET says so; the bus healthy, a
+  raise writes the voltage first.  A boot with big0's PMIC losing every
+  voltage write (dvfs's boot OPP given up): the first raise writes the
+  voltage before the PLL.
+
 The stacks' high-water marks are checked at the end of each (the tasks'
 stacks are filled with 0xa5 when created).  A check that fails prints
 FAIL; the exit status is the number of them.
@@ -602,6 +610,139 @@ def two_owner_scenarios(elf):
     two_owners(elf, (("fc", -1), ("msg", 2)))
 
 
+# --- unsure voltages: rewritten first; resume; boot -----------------------------------
+
+def next_pass_rewrites(elf, mode):
+    """Big0 by fast channel to its highest level while its voltage writes
+    fail (mode), the bus healthy again, then its lowest level asked (where
+    the record has it): the pass writes the voltage it has recorded first,
+    and the regulator then holds it."""
+    tag = f"unsure {mode}"
+    cpu, soc = boot(elf, "o6n")
+    lv = levels(cpu, soc, BIG0)
+    bus, blocks = calibrate(cpu, soc, "fc", BIG0, lv)
+    dev = soc.i2c[bus].devices[0x60]
+    fault = BusFault(cpu, soc, bus)
+    before = bytes(dev.regs)
+    fault.arm(mode)
+    nl = len(fault.log)
+    request(cpu, soc, "fc", BIG0, lv[-1], ms=200)
+    failed = [tx for w, a, wr, tx in fault.log[nl:] if wr and len(tx) >= VOUT_LEN]
+    fault.arm(None)
+    pm_emu.run_for(cpu, soc, 2100)
+    if not failed:
+        check(False, f"{tag}: no voltage write tried")
+        return
+    reg = failed[0][0]
+    want = bytes([reg]) + before[reg:reg + 2]    # the lowest level's voltage, as before the fault
+    nw, nl = len(cpu.writes), len(fault.log)
+    request(cpu, soc, "fc", BIG0, lv[0])
+    v, first = vout_writes(fault, nl), first_pll_write(cpu, nw, blocks)
+    held = bytes(dev.regs[reg:reg + 2])
+    check(bool(v) and (first is None or v[0][0] <= first) and v[0][1] == want
+          and held == want[1:],
+          f"{tag}: next pass: {len(v)} voltage writes "
+          f"({v[0][1].hex(' ') if v else '-'}; recorded {want.hex(' ')}), "
+          f"PLL {'not written' if first is None else 'after' if v and v[0][0] <= first else 'first'}, "
+          f"regulator {held.hex(' ')}")
+
+
+def suspend_resume(cpu, soc, during_resume=None):
+    """TF-A's suspend (test_pm.power_suite), then the wake; during_resume()
+    is called before the wake."""
+    soc.se.suspend()
+    test_pm.pm_msg(cpu, soc, test_pm.TFA, test_pm.STR_BOOT_CORE_NOTIFY, (0,))
+    pm_emu.scmi(cpu, soc, 0x12, 3, (0, 4), mbox=test_pm.TFA, budget=3_000_000)
+    asleep = test_pm.run_until(cpu, soc, "asleep")
+    if during_resume:
+        during_resume()
+    soc.se.wake()
+    soc.s5.wake()
+    return asleep, test_pm.run_until(cpu, soc, "quiet")
+
+
+def resume_rail_lost(elf):
+    """Big0 at its highest level by fast channel; suspended; its PMIC's bus
+    NACKs while it resumes, so the rail is not set again: after the resume
+    its PLL is at its lowest level's setting, LEVEL_GET says so; the bus
+    healthy again, its highest level: the voltage, then the PLL."""
+    tag = "resume, rail lost"
+    cpu, soc = boot(elf, "o6n")
+    lv = levels(cpu, soc, BIG0)
+    bus, blocks = calibrate(cpu, soc, "fc", BIG0, lv)
+    request(cpu, soc, "fc", BIG0, lv[0])
+    low_regs = pll_regs(cpu, blocks)
+    request(cpu, soc, "fc", BIG0, lv[-1])
+    high_regs = pll_regs(cpu, blocks)
+    fault = BusFault(cpu, soc, bus)
+    a, r = suspend_resume(cpu, soc, lambda: fault.arm("nack"))
+    regs = pll_regs(cpu, blocks)
+    check(a == "asleep" and r == "quiet" and regs == low_regs,
+          f"{tag}: suspend {a}, resume {r}: PLL at "
+          + ("its lowest level's setting" if regs == low_regs else
+             "the highest level's setting" if regs == high_regs else "another setting"))
+    cur = level(cpu, soc, BIG0)
+    check(cur == lv[0], f"{tag}: LEVEL_GET {cur} (lowest {lv[0]})")
+    fault.arm(None)
+    pm_emu.run_for(cpu, soc, 2100)
+    nw, nl = len(cpu.writes), len(fault.log)
+    request(cpu, soc, "fc", BIG0, lv[-2])
+    request(cpu, soc, "fc", BIG0, lv[-1])
+    first, v = first_pll_write(cpu, nw, blocks), vout_writes(fault, nl)
+    check(first is not None and bool(v) and v[0][0] <= first and pll_regs(cpu, blocks) == high_regs,
+          f"{tag}: bus healthy, highest level: {len(v)} voltage writes, PLL "
+          + ("not written" if first is None else "after them" if v and v[0][0] <= first else "first"))
+
+
+def boot_writes_lost(elf):
+    """Big0's PMIC loses every voltage write from reset (they reach the
+    regulator, the transfer fails): the boot voltages and dvfs's boot OPP
+    fail (dvfs gives up after its retries).  The bus healthy, big0 by fast
+    channel to its lowest, then its highest level: a voltage write first,
+    no PLL write before one, the level set."""
+    tag = "boot, writes lost"
+    orig = pm_emu.CadenceI2c.transfer
+    state = {"cpu": None}
+
+    def transfer(c, addr):
+        write = not c.r[pm_emu.CR] & pm_emu.CR_RW
+        vout = write and len(c.tx) >= VOUT_LEN and c.name == BOOT_LOST_BUS
+        orig(c, addr)
+        if vout:
+            c.isr |= pm_emu.ISR_NACK
+    pm_emu.CadenceI2c.transfer = transfer
+    try:
+        cpu, soc = boot(elf, "o6n")
+    finally:
+        pm_emu.CadenceI2c.transfer = orig
+    lv = levels(cpu, soc, BIG0)
+    bus = int(BOOT_LOST_BUS[3:])
+    fault = BusFault(cpu, soc, bus)
+    nw, nl = len(cpu.writes), len(fault.log)
+    request(cpu, soc, "fc", BIG0, lv[0])
+    v0 = vout_writes(fault, nl)
+    request(cpu, soc, "fc", BIG0, lv[-1])
+    blocks = sorted({a & ~(PLL_BLOCK - 1) for _, a, _, _ in cpu.writes[nw:]
+                     if test_pm.CGC[0] <= a < test_pm.CGC[1]})
+    first, v = first_pll_write(cpu, nw, blocks), vout_writes(fault, nl)
+    check(bool(v0) and bool(v) and first is not None and v[0][0] <= first,
+          f"{tag}: lowest level: {len(v0)} voltage writes; highest: PLL "
+          + ("not written" if first is None else "after a voltage write" if v and v[0][0] <= first
+             else "before any voltage write"))
+    cur = level(cpu, soc, BIG0)
+    check(cur == lv[-1], f"{tag}: level {cur} (asked {lv[-1]})")
+
+
+BOOT_LOST_BUS = "i2c1"                  # big0's PMIC on the O6N
+
+
+def unsure_scenarios(elf):
+    next_pass_rewrites(elf, "nack")
+    next_pass_rewrites(elf, "lost")
+    resume_rail_lost(elf)
+    boot_writes_lost(elf)
+
+
 def main():
     global verbose
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
@@ -613,6 +754,7 @@ def main():
     sensor_scenario(a.elf)
     raise_scenarios(a.elf)
     two_owner_scenarios(a.elf)
+    unsure_scenarios(a.elf)
     print(f"{failures} failed")
     return min(failures, 125)
 
