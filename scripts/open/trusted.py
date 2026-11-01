@@ -135,6 +135,19 @@ def build_se(out, version):
                   "cix_debug_elf_sha256": sha256(elf)}
 
 
+def build_pm(out, version):
+    """CSU_PM firmware from firmware/csupm (Xtensa, the container's GCC with
+    the pm_core_v1 description), as the XBIN image the SE loads.  Checks that
+    every instruction is one the core runs.  Returns (path, manifest info)."""
+    out = Path(out) / "csupm"
+    # the version the AP reads has room for 24 characters (md_fwver.c)
+    run(["make", "-C", str(ROOT / "firmware/csupm"), f"O={out}", f"CSUPM_VERSION={version[:24]}",
+         "all", "check"], capture=True)
+    path = out / "csupm.xbin"
+    log(f"  csupm.xbin: {path.stat().st_size} bytes from source")
+    return path, {"csu_pm": "source", "csu_pm_sha256": sha256(path)}
+
+
 def build_tools():
     run(["make", "-C", str(TFA), "PLAT=sky1", "certtool", "fiptool"], capture=True)
     return TFA / "tools/cert_create/cert_create", TFA / "tools/fiptool/fiptool"
@@ -231,10 +244,11 @@ def build_bootloader2(cfg, target="RELEASE", out=None, jobs=None, ref=None, stmm
     }
 
 
-def build_bootloader1(cfg, ref_bl1, target="RELEASE", out=None, jobs=None, se=None):
-    """bootloader1 with the source-built BL2 (and, given se, SE firmware) in
-    place of CIX's, re-signed with the published chain-A keys; CSU_PM stays
-    as it is in ref_bl1.  Returns (path, manifest info)."""
+def build_bootloader1(cfg, ref_bl1, target="RELEASE", out=None, jobs=None, se=None, pm=None):
+    """bootloader1 with the source-built BL2 (and, given se and pm, SE and
+    CSU_PM firmware) in place of CIX's, re-signed with the published chain-A
+    keys; what is not given stays as it is in ref_bl1.  Returns (path,
+    manifest info)."""
     if not cixfw.CHAINS[cfg["signing_chain"]]["keys_public"]:
         die(f"{cfg['board']}: signing chain {cfg['signing_chain']} has no public keys")
     out = Path(out or ROOT / "output" / cfg["board"] / target / "open")
@@ -270,6 +284,16 @@ def build_bootloader1(cfg, ref_bl1, target="RELEASE", out=None, jobs=None, se=No
         # zero padding to CIX's size: the boot ROM copies it over .bss and the stack
         ref.replace("se", se_payload + bytes(se_slot[3] - len(se_payload)))
         log(f"  bootloader1.img: SE firmware {len(se_payload)} bytes (padded to {se_slot[3]})")
+    if pm:
+        pm_payload = Path(pm).read_bytes()
+        pm_slot = [img for img in ref.images() if img[1] == "pm"][0]
+        if len(pm_payload) > pm_slot[3]:
+            die(f"CSU_PM firmware ({len(pm_payload)} bytes) is larger than CIX's ({pm_slot[3]} bytes)")
+        # not padded: the SE checks CSU_PM's hash over the XBIN's header and
+        # sections only, and finds its signature from its length; the image
+        # shrinks inside CIX's slot and nothing else moves
+        ref.replace("pm", pm_payload, shrink=True)
+        log(f"  bootloader1.img: CSU_PM firmware {len(pm_payload)} bytes (CIX's slot: {pm_slot[3]})")
     ref.resign(key1, key2)
     if not all(ok for _, ok in ref.verify()):
         die("re-signed bootloader1 does not verify")
@@ -277,8 +301,8 @@ def build_bootloader1(cfg, ref_bl1, target="RELEASE", out=None, jobs=None, se=No
     path.write_bytes(bytes(ref.data))
     log(f"  bootloader1.img: BL2 {size} bytes (padded to {len(payload)}), re-signed")
     return path, {
-        "bootloader1": ("CSU_PM from the reference, SE firmware and BL2 from source" if se else
-                        "SE and CSU_PM from the reference, BL2 from source"),
+        "bootloader1": "BL2 from source; SE firmware {}; CSU_PM {}".format(
+            "from source" if se else "from the reference", "from source" if pm else "from the reference"),
         "bootloader1_reference_sha256": sha256(ref_bl1),
         "bl2_sha256": sha256(bl2),
         "bootloader1_sha256": sha256(path),

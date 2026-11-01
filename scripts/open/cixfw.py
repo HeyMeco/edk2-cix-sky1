@@ -411,15 +411,24 @@ class Bl1:
             res.append((name, ok))
         return res
 
-    def replace(self, name, payload):
-        """Replace one image in place; it must fit before its signature."""
+    def replace(self, name, payload, shrink=False):
+        """Replace one image in place; it must fit before its signature.
+
+        With shrink, a smaller image may end pages earlier: its signature
+        moves down with it (it always sits 0x200 before the 4 KiB boundary
+        that follows the data) and the space it leaves is zeroed; no other
+        image moves (each entry has its own offset).  The SE's loader finds
+        CSU_PM's signature from the image's length the same way, and hashes
+        the XBIN's sections only, so a CSU_PM image must not be padded."""
         for i, n, off, size, _, sig in self.images():
             if n != name:
                 continue
-            if _sig_offset(off + len(payload)) != sig:
+            new = _sig_offset(off + len(payload))
+            if new != sig and not (shrink and new < sig):
                 raise ValueError(f"{name}: {len(payload):#x} bytes do not fit the slot at {off:#x} "
                                  f"(at most {sig - off:#x}); moving images is not supported yet")
-            self.data[off:sig] = payload + bytes(sig - off - len(payload))
+            self.data[off:sig + 0x200] = bytes(sig + 0x200 - off)
+            self.data[off:off + len(payload)] = payload
             struct.pack_into("<I", self.data, BL1_ENTRY + 24 * i + 16, len(payload))
             self.data[BL1_DIGEST + 0x48 * i:BL1_DIGEST + 0x48 * i + 32] = hashlib.sha256(payload).digest()
             return

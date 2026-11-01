@@ -62,6 +62,22 @@ def test_resign(tmp):
     b.resign(*keys)
     check(all(ok for _, ok in b.verify()) and b.images()[2][3] == len(new), "replaced image verifies")
 
+    _, pname, poff, psize, _, psig = b.images()[1]
+    small = bytes(b.data[poff:poff + psize // 2])         # a CSU_PM image pages smaller
+    try:
+        cixfw.Bl1(bytes(b.data)).replace(pname, small)
+        check(False, "a smaller image needs shrink")
+    except ValueError:
+        pass
+    s = cixfw.Bl1(bytes(b.data))
+    s.replace(pname, small, shrink=True)
+    s.resign(*keys)
+    _, _, soff, ssize, _, ssig = s.images()[1]
+    check(all(ok for _, ok in s.verify()) and ssize == len(small) and ssig < psig
+          and s.images()[2][2] == b.images()[2][2] and not any(s.data[soff + ssize:ssig])
+          and not any(s.data[ssig + 0x200:psig + 0x200]),
+          "shrunk image verifies, its signature moves down, nothing else moves")
+
     bad = cixfw.Bl1(bytes(b.data))
     bad.data[off + 0x100] ^= 1
     check(not dict(bad.verify())[name], "a flipped image byte is detected")
