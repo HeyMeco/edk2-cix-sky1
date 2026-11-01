@@ -248,7 +248,7 @@ Security fixes, where CIX's behaviour is a hole:
 |---|---|---|
 | BL2 ([below](#bl2)) | authenticates every image, whatever the fuses say, against the root built into it | skips authentication on unfused boards; never checks bootloader3's trusted key certificate |
 | BL31 ([below](#bl31)) | SPI NOR SiP call: normal-world buffers must be in non-secure DRAM; out-of-range power-domain IDs ignored | the OS can have flash data written over secure memory, or secure memory to flash |
-| BL31 | SiP calls `0xC2000030/31` left out | pass OS pointers and lengths straight into SE commands |
+| BL31 | SiP calls `0xC2000030/31` left out | pass OS pointers and lengths straight into the SE commands that burn the OEM key hash into the eFuse ([eFuses](efuses.md#burning)) |
 | BL31, TrustZone configuration ([below](#trustzone-configuration)) | a secure storage region overlapping the firmware is dropped; every board gets CIX's stock configuration | Radxa's O6/O6N file puts secure storage over UEFI |
 | OP-TEE ([below](#op-tee)) | NOR secure storage only inside the region the TrustZone configuration enables | an offset past the end of an 8 MiB flash, which wraps onto the firmware header |
 | StandaloneMM ([below](#standalonemm)) | the UEFI transaction passthrough checks lengths | UEFI, and the OS through OP-TEE, can have flash data written past StMM's buffer into secure memory |
@@ -354,8 +354,10 @@ Left out on purpose:
 
 * SiP calls `0xC2000030` and `0xC2000031`, which pass a caller-supplied
   address and length straight into SE mailbox commands `0x8200001A` and
-  `0x8200001B`. Nothing in UEFI calls them and their purpose is unknown; an
-  unchecked normal-world pointer in EL3 is not worth copying blind.
+  `0x8200001B`: burning the OEM public key hash into the eFuse, and reading
+  whether it is burnt ([eFuses](efuses.md#burning)). From the normal world,
+  that is a permanent change to the chip's boot chain behind an unchecked
+  pointer.
 * SPI-NOR erase and write in BL31 (`spi_nor_write`, "override flash"): the
   CIX BL31 has the code but nothing calls it.
 * The CIX BL31's renumbered POST codes (`0xC0xx`).
@@ -535,6 +537,8 @@ records):
 
 Differences from CIX's firmware, on purpose:
 
+* (the eFuse fields, who reads them and who can burn them:
+  [eFuses](efuses.md))
 * secret eFuse fields (CIX device and model keys, test keys, OEM model key)
   go only to requests on the TEE mailbox; CIX's answers any field to the
   non-secure mailbox (`0x8200000e`), so the OS can read the keys OP-TEE's

@@ -190,7 +190,8 @@ The *CIX P1 Security Development Guide* V1.0 describes the chain like this:
   be changed later), or burns the key hash into eFuse with
   `private_pem_convert_public_hash.py` and `fastboot flash oem_pk_fuse
   hash.bin` (permanent; `EfuseOemKeyDxe` does the same from UEFI and is
-  pinned off in `Sky1Board.dsc.inc`).
+  pinned off in `Sky1Board.dsc.inc`; every path that burns eFuses:
+  [eFuses](efuses.md#burning)).
 * OP-TEE TAs are signed with the OEM key too
   (`optee_core_export/keys/oem_privatekey.pem`).
 
