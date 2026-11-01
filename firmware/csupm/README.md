@@ -308,6 +308,11 @@ set, and three places differ from CIX's for it:
   voltage only sets the clock), so the next raise sets its voltage first.
 - `dpm_edp_set_voltage`: a lower voltage that fails keeps the lower as the
   rail's (CIX's keeps the old), so that asking for the old one writes it.
+  This one is CIX's too, not the three rounds': CIX's MP5475 write reports
+  failure after four NACKed tries even when the read-back shows the
+  voltage set. In pm_emu, big cluster 0 lowered to 2520 with its writes
+  set but NACKed, then raised to 6931 by fast channel: CIX's image (and
+  ours before) writes the PLL and no voltage, the regulator at 810 mV.
 
 `scmi_perf` answers a level set before DVFS has done it, as CIX's, so a
 failure does not reach the SCMI caller; DVFS raises a voltage before the
@@ -325,8 +330,15 @@ resume, `dpm_edp_restore_voltage` says which rails it could not set
 again; once `ddr_s3_exit` is done (before it, the clock changes upset the
 DDR's resume in pm_emu; the AP cores run only afterwards) their DVFS
 elements' clocks go to their lowest OPP's frequency, recorded so by
-`sky1soc_perf` or DVFS, the rail unsure (CIX's restored the PLLs whatever
-the rails). At boot `sky1soc_perf`'s first pass waits until DVFS has set
+`sky1soc_perf` or DVFS, the rail unsure. CIX's ignores the restore's
+result too, but on a dead bus never gets past it: in pm_emu, with big
+cluster 0's bus NACKing, its image is still in `dpm_edp_restore_voltage`
+(in a critical section) after 4446 transfers, so the PM never resumes;
+ours resumes with those clusters at their lowest OPP. Between
+`clk_nodes_restore` and that, their PLLs are as before the suspend, their
+cores still off. In pm_emu the regulators keep their voltage across the
+suspend, so a resume with the rail lost is not under-volted there; on a
+board that depends on whether the PMIC keeps its setting (not known). At boot `sky1soc_perf`'s first pass waits until DVFS has set
 (or, after its retries, given up) the clusters' and DSU's boot OPP, and
 starts from DVFS's record; a boot OPP not set leaves the lowest OPP's
 voltage recorded, unsure. Around the power sequence the workers
