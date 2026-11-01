@@ -25,6 +25,7 @@ mask ROM ─▶ SE firmware ─▶ CSU_PM ─▶ TF-A BL2 ─▶ BL31 + OP-TEE (
 | SPI image packer (`cix_package_tool`) | — | **open**: `cixfw.py pack`, used by every build |
 | `memory_config`, `pm_config` | CIX generators | built from source where the board package has them |
 | Sensor fusion hub firmware (`sfh_fw.bin`, Cortex-M) | [firmware/sfh](../firmware/sfh) | **built from source** (`--open`); same hardware writes as CIX's in every scenario of [test_sfh.py](../scripts/open/test_sfh.py) |
+| EC firmware (`ec_fw.bin`, Orion O6 only; ITE IT5570E, 8051) | [firmware/ec](../firmware/ec) | **written from scratch** after Radxa's EC V1.07; same pin changes, I2C transfers, host-command answers and e-flash writes as the vendor's in [test_ec.py](../scripts/open/test_ec.py) in 14 of 16 scenarios, and the update to it and back works in the model; `--open-ec`; not hardware-tested ([below](#ec-firmware-orion-o6)) |
 | `trustzone_config` | CIX generator | CIX stock binary on every board; identical to the generator's output apart from its timestamp ([below](#trustzone-configuration)) |
 
 With `--open` on an Orion O6/O6N, everything that runs before UEFI apart
@@ -115,7 +116,13 @@ FIP on every board is rooted at `0d999213` (the pregenerated
 ./build.sh orion-o6 --open          # dist/orion-o6_2026Q3_open.bin
 ./build.sh orion-o6n --open --boot-firmware cix
 ./build.sh orion-o6 --open --target DEBUG
+./build.sh orion-o6 --open-ec       # dist/orion-o6_2026Q3_openec.bin (with --open: _open_openec)
 ```
+
+`--open-ec` (Orion O6 only, independent of `--open`) puts the EC firmware
+built from [firmware/ec](../firmware/ec) (SDCC, in the container) at
+`ec_addr` (0x10000) in place of Radxa's `ec_fw.bin`
+([below](#ec-firmware-orion-o6)).
 
 `--open` builds, with [scripts/open/trusted.py](../scripts/open/trusted.py):
 
@@ -599,6 +606,61 @@ bootloader1 (`--vendor-pm` keeps CIX's); it has not run on hardware yet.
 The plan is in the
 [README](../firmware/csupm/README.md#plan).
 
+### EC firmware (Orion O6)
+
+The O6's EC (ITE IT5570E, 8051; [pins](../scripts/open/ec_o6_pins.py)
+from Radxa's V1.2 schematic, sheet 35) sequences the board's power
+(always-on rails, `RSM_RST`, the SoC's power button and sleep signals,
+S0 rails, the PMIC enable gate), runs the fan from the SoC's PVT
+temperature (read from CSU_PM's I2C slave) and five board NTCs, sets the
+two RTS5453H PD controllers up, and answers the host on I2C6 at 0x76
+(CIX's ChromeOS-EC style host commands: UEFI's `Ite5570EcLib`, and
+Linux's `google,cros-ec-i2c` with CIX's `cix-ec-*` drivers in device-tree
+mode). Radxa's image is a Keil C51 build of CIX's EC code base, mostly
+laptop code the O6 never runs.
+
+[firmware/ec](../firmware/ec) is a new firmware (SDCC) that does what the
+vendor's does on the O6: its sequencer tables, its thresholds and duty
+table, its NTC conversion (the vendor's own routine run over every ADC
+code), its host-command answers byte for byte, including the persistent
+buffers some commands read leftovers from, and its e-flash records
+(AC-loss policy at 0x1F8FF, power-off reason at 0x1FCFC). `i8051_emu.py`
+interprets the 8051 and `ec_emu.py` models the IT5570 (timers, interrupt
+and wake-up controllers, GPIO, ADC, PWM, SMBus masters and slaves, the
+flash follow mode, the e-flash) and the board (rails and power goods, the
+SoC's sleep signals, CSU_PM, the PD controllers, NTCs).
+[test_ec.py](../scripts/open/test_ec.py) runs both images through 16
+scenarios (AC on, button, S0, OS shutdown, button in G3, short and long
+press, both AC-loss policies, heating and cooling, fan modes, a target fan
+speed, an NTC at 90 C, every host command, the AC-loss write, UEFI's EC
+reset) and compares what the board sees in order, with a timing
+tolerance. It also installs each image over the other the way UEFI does
+(the new image in the SPI flash, host command 3E19, the mirror reset) and
+checks that the new one boots, reaches S0 and answers. Run it with
+`scripts/open/run_ec_tests.sh`: it uses PyPy (`pypy3` on `PATH` or
+`$PYPY`) when there is one, about 28 times faster than CPython (the
+suite in under a minute).
+
+Not the same: the version string (`V1.07-open`); the vendor's probes of
+parts the O6 lacks (PMICs, IO expander, light sensor, an SMBus scan),
+its debug console and its keyboard, HID, battery and charger code are
+left out; GPIO reads (0x93), which return the previous read, can see a
+write a hook earlier or later than the vendor's; the vendor's slow hooks
+run at slightly different moments (within a period: after a power-up from
+G3 its first thermal pass comes a hook earlier).
+
+The EC runs from its internal e-flash; a new image in the SPI flash
+(offset 0x10000) is copied in only when UEFI's platform reset (host
+command 0x3E19) asks the EC to mirror and reset, which the open firmware
+does the same way. Programming its own e-flash (the AC-loss policy, the
+power-off reason) runs from scratch ROM: the model copies what SCAR0 maps
+and stops on any code fetch from the e-flash while it erases or programs,
+and both firmwares pass. What the model cannot show is the real chip:
+pin timing, the PD controllers' and CSU_PM's real answers, the fan, the
+mirror itself. A first test on a board should keep a way back: an SPI
+programmer for the flash, and Radxa's image to mirror back (the open
+firmware's 3E19 does that too).
+
 ## Roadmap
 
 1. Boot-test `--open` on an O6 (UART log of BL2, BL31 and OP-TEE; variables
@@ -615,6 +677,10 @@ The plan is in the
    `CSU_PM: open firmware`; then SCMI from Linux: cpufreq, clocks,
    sensors, fans on the O6N; suspend/resume)
    ([plan](../firmware/csupm/README.md#plan)).
+4. The O6's EC (`--open-ec`): flash, then UEFI's platform reset (3E19)
+   mirrors it in; check UART1 (`Orion O6 EC V1.07-open`), power on and
+   off, the fan, the AC-loss setting, Linux's cros-ec. Radxa's image goes
+   back the same way ([EC firmware](#ec-firmware-orion-o6)).
 
 ## Debugging
 
