@@ -239,6 +239,39 @@ SE mailbox requests (`firmware/se/service/runtime.c`):
 So with CIX's SE firmware the operating system can read the device key the
 OP-TEE hardware unique key is derived from.
 
+## Reading the fuse state from a running board
+
+To tell whether a board is locked to a fused key (so whether it could run
+firmware signed with another key), two values are enough: the life cycle
+and the secure-boot bit. Neither is a secret field, so any firmware,
+CIX's or the open one, exposes them; no exploit is needed.
+
+The SE leaves them, with the serial number and chip ID and the hash of the
+root key that verified bootloader1, in the BL33 handoff block the key
+manager writes at SoC `0x83E00000` (`PcdSeHandoffInfoBaseAddr`,
+[firmware/se/framework/km.c](../firmware/se/framework/km.c): CIX's
+`csec_km_meta_t`, config words from offset `0x60`). From the UEFI Shell:
+
+```
+mem 0x83E00000 0x120          # the whole block, hex and ASCII
+mem 0x83E00064 4              # life cycle:      04 blank, 05 nonsecure, 07 secure
+mem 0x83E0006C 4              # secure boot:     01 on, 00 off
+mem 0x83E00074 0x10          # serial number (8 bytes), then chip ID (8 bytes)
+mem 0x83E00000 0x20          # hash of the root key that verified bootloader1 (0 = none)
+```
+
+Values are little-endian (the life-cycle byte is the first one printed).
+`04`/`00` means nothing is fused; `07`/`01` means the board is locked to
+the fused platform key, which no reading changes (fuses only go 0 to 1).
+The block holds no secret keys (the device and model keys and what is
+derived from them go to OP-TEE's block at `0x824FE000`, not here), so a
+dump of it is safe to share.
+
+If the region reads all `0x00` or `0xff`, the handoff did not land there;
+read the fields over the SE mailbox instead (request `0x8200000e`, above):
+`0x154` for the secure-boot bit and signature algorithm, `0x188`/`0x1a8`
+for the OEM root hash (all zero: empty), `0x074` for CIX's image-key hash.
+
 ## Burning
 
 Burning is permanent. Setting the OEM public key hash binds the chip's
