@@ -117,22 +117,17 @@ def build_sfh(out):
 
 
 def build_se(out, version):
-    """SE firmware from firmware/se, with CIX's DDR driver relinked from
-    their debug build (fetched at the commit manifests/cix-debug-firmware.json
-    pins).  Returns (path, manifest info)."""
-    import cix_debug
-    out = Path(out) / "se"
+    """SE firmware from firmware/se, all of it from source (CIX's DDR driver
+    included: firmware/se/ddr).  The Makefile can still relink parts of
+    CIX's driver from their debug build (CIX_ELF=, for tests); the build
+    does not.  Returns (path, manifest info)."""
+    out = Path(out).resolve() / "se"
     out.mkdir(parents=True, exist_ok=True)
-    elf = cix_debug.fetch()
-    island = out / "ddr_island.S"
-    run([sys.executable, str(ROOT / "scripts/open/se_ddr_island.py"), str(elf), str(island),
-         "--data", "g_soc_pvt_data"], capture=True)
-    run(["make", "-C", str(ROOT / "firmware/se"), f"O={out}", f"DDR_ISLAND={island}",
-         f"MBEDTLS_DIR={ROOT / 'mbedtls'}", f"SE_FW_VERSION=beta2.0-{version}"], capture=True)
+    run(["make", "-C", str(ROOT / "firmware/se"), f"O={out}", f"MBEDTLS_DIR={ROOT / 'mbedtls'}",
+         f"SE_FW_VERSION=beta2.0-{version}"], capture=True)
     path = out / "se_fw.bin"
-    log(f"  se_fw.bin: {path.stat().st_size} bytes from source (DDR driver: CIX's)")
-    return path, {"se_fw": "source, CIX's DDR driver relinked", "se_fw_sha256": sha256(path),
-                  "cix_debug_elf_sha256": sha256(elf)}
+    log(f"  se_fw.bin: {path.stat().st_size} bytes from source")
+    return path, {"se_fw": "source", "se_fw_sha256": sha256(path)}
 
 
 def build_pm(out, version):

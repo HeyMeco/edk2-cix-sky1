@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: BSD-2-Clause-Patent
 """Differential test of the open SE firmware against CIX's (debug build).
 
-  test_se.py OPEN_se_fw.elf FLASH.bin [--cix CIX_se_fw.elf] [--life-cycle N] [-v]
+  test_se.py OPEN_se_fw.elf FLASH.bin [--cix CIX_se_fw.elf] [--life-cycle N] [--ddr] [-v]
 
 Both run in se_emu.py on the same Sky1 model and flash image, from reset
 until the debug service (after BL2 is started), with the DDR driver's entry
-points stubbed (it is the same CIX code in both).  Compared:
+points stubbed, or with --ddr the DDR driver running on se_emu's model of
+the DDR controllers, PIs and PHYs (DdrModel: what CIX's driver waits for;
+the board's memory configuration in the flash image drives it), and the
+memory size and channel count it reports compared too.  Compared:
 
 * register writes, per register in order (UART data, postcodes and the
   log-level scratch register excepted);
@@ -20,7 +23,7 @@ from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from se_emu import Se, SkySoc  # noqa: E402
+from se_emu import DdrModel, Se, SkySoc  # noqa: E402
 
 DDR_STUBS = {
     "drv_ddr_init": 0, "drv_ddr_postci": 0, "drv_ddr_get_mem_size": 0x4000,
@@ -77,17 +80,47 @@ def keys_efuse(flash, secure=False):
     return fuses
 
 
-def run(elf, flash, life_cycle, efuse=None):
-    soc = SkySoc(flash, life_cycle=life_cycle, efuse=efuse)
-    stubs = dict(DDR_STUBS)
+# --ddr: CIX's memory-configuration write-back (drv_memcfg_flash_write, after
+# the DDR driver updates a block) uses the boot ROM's copy of the
+# bootloader1 header in SRAM as its sector buffer, so CIX's firmware reads
+# the header from flash again before loading BL2; the open one does not.
+# The QSPI controller's registers are left out and the flash contents
+# compared instead.
+DDR_IGNORE_RANGES = [(0xe0044000, 0xe0044100)]
+
+
+# MEM_CONFIG_FEATURE (MEMORY_INIT_S + 0x23): the DDR features --ddr-feature can override
+DDR_FEATURES = ["WckAlwaysOn", "DataMask", "AutoPrechargeEn", "PbrEn", "RfmEn", "SelBankInQ", "PortPriority",
+                "BdwP0", "BdwP1", "AddressMode", "MbistEn", "MbistMode", "EyeScanEn", "BpEn", "WrLEcc", "RdLEcc",
+                "RPriorityP0", "WPriorityP0", "BdwOvflowP0", "RPriorityP1", "WPriorityP1", "BdwOvflowP1",
+                "TrainMode", "IEcc", "PeriodicTrain", "SSC", "DfsEn"]
+
+
+def ddr_feature_hook(features):
+    """Before each initialisation pass (MemDramFunctionalInit), set DDR
+    features in the driver's MEMORY_INIT_S, as if the memory configuration
+    had them: drives code paths the boards' configurations do not."""
+    def hook(se):
+        mem_init = se.read32(se.elf.addr("gMemInitPtr"))
+        for name, value in features.items():
+            se.write(mem_init + 0x23 + DDR_FEATURES.index(name), bytes([value]))
+    return hook
+
+
+def run(elf, flash, life_cycle, efuse=None, ddr=False, features=None, count=200_000_000):
+    soc = SkySoc(flash, life_cycle=life_cycle, efuse=efuse, ddr=DdrModel() if ddr else None)
+    stubs = {} if ddr else dict(DDR_STUBS)
     if "cix" in str(elf):
         stubs.update(CIX_STUBS)
     se = Se(elf, soc, stubs=stubs, stop=("service_debug_entry", "service_idle_entry"))
-    stopped = se.run(count=200_000_000)
+    if features:
+        se.hooks[se.elf.addr("MemDramFunctionalInit")] = ddr_feature_hook(features)
+    stopped = se.run(count=count)
     regs = defaultdict(list)
+    ignore = IGNORE_RANGES + (DDR_IGNORE_RANGES if ddr else [])
     for fn, addr, size, value in se.writes:
         if addr not in IGNORE and not is_memory(addr) and \
-                not any(lo <= addr < hi for lo, hi in IGNORE_RANGES):
+                not any(lo <= addr < hi for lo, hi in ignore):
             regs[addr].append(value)
     mem = {}
     for lo, hi, name in MEMORY:
@@ -167,6 +200,12 @@ def main():
     ap.add_argument("--services", action="store_true", help="then compare answers to run-time requests")
     ap.add_argument("--suspend", action="store_true", help="then compare a suspend and resume")
     ap.add_argument("--keys", action="store_true", help="with device and model keys in the eFuse")
+    ap.add_argument("--ddr", action="store_true",
+                    help="run the DDR driver (not stubbed) on the model of the DDR subsystem")
+    ap.add_argument("--count", type=int, default=200_000_000,
+                    help="instruction budget of each boot (the eye scan, --ddr-feature EyeScanEn=1, needs ~10x)")
+    ap.add_argument("--ddr-feature", action="append", default=[], metavar="NAME=VALUE",
+                    help=f"with --ddr, override a DDR feature ({', '.join(DDR_FEATURES)})")
     ap.add_argument("--secure", action="store_true",
                     help="open firmware alone, secure boot fused: boots the image as it is and refuses "
                          "it with BL2 or CSU_PM altered")
@@ -179,15 +218,36 @@ def main():
     if a.secure:
         return secure_boot(a.open_elf, flash)
     efuse = keys_efuse(flash) if a.keys else None
-    results, sessions = [], []
+    results, sessions, reports = [], [], []
     for elf in (cix_elf, a.open_elf):
-        se, stopped, regs, mem = run(elf, flash, a.life_cycle, efuse)
+        features = {f.split("=")[0]: int(f.split("=")[1], 0) for f in a.ddr_feature}
+        se, stopped, regs, mem = run(elf, flash, a.life_cycle, efuse, a.ddr, features, a.count)
         sessions.append(se)
         where = stopped or (f"polling in {se.poll[0]}" if se.poll else se.pc_func())
-        print(f"{Path(elf).name}: {len(se.writes)} writes, stopped at {where}")
+        extra = ""
+        if a.ddr:
+            ddr = se.soc.ddr
+            ddr_writes = sum(1 for _, addr, _, _ in se.writes if ddr.channel(addr)[0] is not None)
+            report = (se.call("drv_ddr_get_mem_size"), se.call("drv_ddr_get_ch_num"))
+            reports.append(report)
+            extra = (f"; DDR: {ddr_writes} controller/PI/PHY writes, {ddr.resets} resets, "
+                     f"{se.irqs_taken} interrupts, {report[0]} MiB on {report[1]} channels")
+        print(f"{Path(elf).name}: {len(se.writes)} writes, stopped at {where}{extra}")
         results.append((regs, mem))
     (ra, ma), (rb, mb) = results
     bad = 0
+    if a.ddr:
+        if reports[0] != reports[1]:
+            bad += 1
+            print(f"  memory size and channels: CIX {reports[0]} open {reports[1]}")
+        fa, fb = (bytes(se.soc.flash) for se in sessions)
+        changed = [i for i in range(0, len(flash), 0x1000) if fa[i:i + 0x1000] != flash[i:i + 0x1000]]
+        print(f"flash: {len(changed)} sectors written by CIX's firmware"
+              + (f" ({', '.join(hex(i) for i in changed[:4])})" if changed else ""))
+        if fa != fb:
+            bad += 1
+            diff = [i for i in range(len(fa)) if fa[i] != fb[i]]
+            print(f"  flash: {len(diff)} bytes differ, first at {diff[0]:#x}")
     for reg in sorted(set(ra) | set(rb)):
         if ra.get(reg) != rb.get(reg):
             bad += 1
@@ -201,6 +261,21 @@ def main():
             bad += 1
             print(f"  memory {page:#010x}: {len(diff)} bytes differ, first at {page + diff[0]:#x}")
     print(f"{len(set(ra) | set(rb))} registers compared")
+    if a.ddr:
+        # a DDR interrupt at run time (inline and link ECC errors, a timeout
+        # on channel 1): reported and acknowledged by the driver's handler
+        got = []
+        for se in sessions:
+            ddr, mark = se.soc.ddr, len(se.writes)
+            ddr.set_status(1, 0x580, 0x803)
+            ddr.set_status(1, 0x57c, 0x10)
+            ok = se.irq(221)
+            got.append((ok, [(addr, v) for _, addr, _, v in se.writes[mark:] if ddr.channel(addr)[0] is not None],
+                        ddr.status[1][:]))
+        same = got[0] == got[1]
+        bad += not same
+        print(f"{'ok  ' if same else 'FAIL'} DDR interrupt: {[(hex(x), hex(y)) for x, y in got[1][1]]}"
+              + ("" if same else f" (CIX {[(hex(x), hex(y)) for x, y in got[0][1]]})"))
     if a.services:
         for name, chan, fid, words in REQUESTS:
             got = [request(se, chan, fid, list(words)) for se in sessions]

@@ -106,10 +106,10 @@ def main():
     port_t = sum(total[g] for g, _, k in GROUPS if k == "port")
     port_c = sum(done[g] for g, _, k in GROUPS if k == "port")
     if a.tracker:
-        print(f"port, in the emulator, by CIX's code ({sum(total.values()) // 1024} KB)"
+        print(f"port, in the emulator, by CIX's code ({sum(total.values()) // 1000} KB)"
               f"   {port_c * 100 // port_t}% of what is ported")
         for g, label, kind in GROUPS:
-            kb = f"{total[g] // 1024:3d} KB"
+            kb = f"{total[g] // 1000:3d} KB"
             if kind == "port":
                 p = done[g] * 100 // total[g]
                 print(f"  {label:38s} {kb}   {bar(p)} {p:3d}%")
