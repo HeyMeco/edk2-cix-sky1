@@ -74,6 +74,9 @@ SECTIONS
 
 	_stack_top = ORIGIN(dram1) + LENGTH(dram1);
 	_stack_bottom = _stack_top - 0x4000;
+	/* the SCP-firmware task's stack (src/rtos.c): main's, but for the
+	 * 2 KB main stands on while it starts the scheduler */
+	_scp_stack_top = _stack_top - 0x800;
 	ASSERT(_bss_end <= _stack_bottom, "bss overlaps the stack")
 
 	/* the heap (lib/malloc.c) is the rest of DRAM1 */

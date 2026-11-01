@@ -25,7 +25,7 @@ location lists. Built with XtensaTools 14.10 (`xt-clang` 10.0.1, RI-2022.10).
 | SCP-firmware modules, upstream (SCMI, perf, clock, power domain, PPU v1, DVFS, sensors, PSU) | 32 KB | 360 | public (BSD-3-Clause), with CIX's changes (`scp/module/*/README`) |
 | SCP-firmware CIX modules (`sky1soc_perf`, timer, `clock_lite`, `clkpll`, RCSU, PMIC, `locked_perf`) | 8 KB | 95 | translated (`clock_lite` by upstream `clock`) |
 | SCP-firmware framework and sky1 product configuration | 11 KB | 228 | public framework; CIX's configuration (`scp/config`) |
-| FreeRTOS kernel, Xtensa port, CLI | 11 KB | 175 | replaced: no RTOS (SCP-firmware events and alarms) |
+| FreeRTOS kernel, Xtensa port, CLI | 11 KB | 175 | the kernel from upstream (FreeRTOS-Kernel V11.1.0, MIT, submodule), co-operative, with our port; no CLI |
 | Cadence runtime (`xclib`, libgcc, HAL, XTOS, overlay manager) | 18 KB | 121 | replaced (own libc, GCC's libgcc) |
 
 Twenty code overlays (32 KB, paged into one window at `0x2002f224`) hold
@@ -147,7 +147,7 @@ instruction-set check on the image); SCP-firmware is the submodule
 `SCP-firmware` (v2.11.0):
 
 ```sh
-git submodule update --init firmware/csupm/SCP-firmware
+git submodule update --init firmware/csupm/SCP-firmware firmware/csupm/FreeRTOS-Kernel
 make -C firmware/csupm O=/tmp/csupm all check
 ```
 
@@ -198,9 +198,9 @@ configuration (from the BIOS) asks: fans on curves from the PVT and board
 sensors (TMP75s or EC registers), PVT polling and thresholds, PROCHOT
 throttling, the watchdog, the EC's reads over the I2C slave on bus 3, DDR
 DFS only when the display allows it, custom rail layouts (rails sharing a
-buck), the heartbeat. CIX's FreeRTOS tasks and its timer, event and job
-framework are replaced by SCP-firmware alarms and events (`dpm` and
-`pm_svc` modules) with CIX's periods.
+buck), the heartbeat. CIX's timer, event and job framework is replaced
+by SCP-firmware alarms and events (`dpm` and `pm_svc` modules) with
+CIX's periods, its tasks by FreeRTOS's (below).
 
 The system power sequence ([`src/hsm`](src/hsm), CIX's `subsys_hsm.c` and
 `pwr_hsm.c`) runs CIX's state machine: TF-A's suspend (PM message 0x42
@@ -239,7 +239,7 @@ drivers that hand an interrupt on). Modules, upstream and ours:
 | `power_domain`, `scmi_power_domain`, `scmi_system_power` | upstream (`scmi_system_power` with CIX's change) | ISP0, GPUTOP under SYSTOP; shutdown, reset and suspend to the system power sequence |
 | `rcsu` | ours, CIX's `extmodules/rcsu` | the RCSU power controls (SRAM repair, power bits) |
 | `timer` | upstream | alarms |
-| `xt_timer` | ours | CCOUNT extended to 64 bits, CCOMPARE2 |
+| `xt_timer` | ours | CCOUNT extended to 64 bits, CCOMPARE2; an alarm due within 256 cycles is set 256 cycles ahead (written at CCOUNT, CCOMPARE would already be behind it and fire only when CCOUNT wraps, 10.7 s later: this stopped every board timer after a resume) |
 | `clkpll`, `clock`, `scmi_clock` | ours (CIX's `clkpll`), upstream, upstream with CIX's changes | the 273 clocks of CIX's tree the OS sees |
 | `sensor`, `scmi_sensor` | upstream | 20 temperatures |
 | `soc_sensor` | ours, CIX's changed `reg_sensor` | the PVT sensors and the board's temperatures |
@@ -251,6 +251,64 @@ drivers that hand an interrupt on). Modules, upstream and ours:
 | `locked_perf` | ours, CIX's `extmodules/plugin_lockedperf` | plugin: levels and limits pinned by the platform |
 | `dpm` | ours | the DPM's 1 ms tick (alarm), its work (software interrupt 33), the counters' interrupts |
 | `pm_svc` | ours | CIX's timer list and jobs for the board services, on one alarm |
+
+### Tasks and I2C
+
+The PM runs four FreeRTOS tasks ([`src/rtos.c`](src/rtos.c); the kernel
+is upstream's, the port and configuration are [`rtos`](rtos)):
+SCP-firmware's loop (every module, SCMI, the DPM, the board services'
+timers, PVT, fans, PROCHOT, the power sequence), a PMIC worker (every PMIC
+transfer at run time: rail voltages for `pmic`, the DPM's rails and their
+offsets, fault status), a board-sensor worker (the TMP75s) and idle. The
+scheduler is co-operative: a task runs until it waits, so the code
+written for one event loop still runs to completion between the points
+where a task waits, and the tasks need no locks. A task switch is a call
+(`portYIELD`), where the windowed ABI leaves nothing live outside the
+register windows: [`rtos/port/portasm.S`](rtos/port/portasm.S) spills them
+to the stacks with a chain of `call12`s and changes stack pointer; a
+`retw` then reloads the next task's frames through window underflows.
+Interrupts stay deferred as above; the vectors never switch tasks.
+SCP-firmware's task waits only at its loop's end. With no worker job
+queued or under way it sleeps in WAITI itself, so an interrupt (the 50 µs
+fine tick's twenty thousand a second above all) costs no task switch;
+otherwise the idle task sleeps and wakes it for any interrupt. While it waits anywhere
+else (for the PMIC worker, in the few calls that answer at once: PM
+messages 0x400 and 0x804), the idle task serves only the
+tick and the I2C controllers' interrupts (`ARCH_IRQ_KERNEL`), so no
+framework handler runs in the middle of an event. Another task's events
+go through the framework's interrupt queue (`fwk_is_interrupt_context` is
+true outside SCP-firmware's task). The tick (CCOMPARE1, interrupt 7, as
+CIX's) only runs while a task waits with a time-out. SCP-firmware's task
+has main's stack (the top of DRAM1, which DDR retention's borrowing is
+measured from); the others' are in bss.
+
+The I2C masters ([`src/i2c.c`](src/i2c.c)) move bytes with CIX's register
+sequence. In a worker a transfer waits for the controller's interrupt
+(aggregator line 24), the task asleep; before the scheduler runs, during
+the power sequence and in SCP-firmware's task it polls, as CIX's driver
+does. Either way it gives up after 10 ms (CIX's waits 600 ms; a PMIC
+transfer takes about 100 µs at 400 kHz). A time-out or lost arbitration
+resets the controller (CIX's master has no recovery); after three in a
+row the bus is down, and its transfers fail at once for a back-off that
+doubles from 100 ms to 2 s, then one is tried. CIX's PMIC voltage write
+(`dev_pmic_mp5475_setVoltage` and the paged PMICs') retries for ever on a
+dead bus: its tries counter only stops the writes when it is exactly −1;
+ours stops after three rounds. `scmi_perf` answers a level set before
+DVFS has done it, as CIX's; DVFS raises a voltage before the frequency, so
+a voltage that cannot be set leaves the frequency where it was, and
+lowering one never waits for I2C. Around the power sequence the workers
+finish their jobs first (`rtos_quiesce`; CIX suspends its tasks). A stuck
+bus thus stops its worker for about 35 ms, then costs nothing; the rest of
+the PM goes on meanwhile, which
+[`scripts/open/test_pm_faults.py`](../../scripts/open/test_pm_faults.py)
+checks on pm_emu with a bus made to hang (`CadenceI2c.fault`): SCMI
+answered on another channel, the DPM following the die to 100 C, the fans
+speeding up, another cluster's voltage on a healthy bus, the level set once
+the bus is free, the stacks' high-water marks.
+
+```sh
+python3 scripts/open/test_pm_faults.py OURS.elf
+```
 
 The configurations in [`scp/config`](scp/config) are CIX's, read from its
 image with [`scripts/open/dwarf_dump.py`](../../scripts/open/dwarf_dump.py)
@@ -301,7 +359,13 @@ of the five boards' (O6, O6N, MS-R1, Orange Pi 6 with its MP2845 and
 shared bucks, Orange Pi 6 Plus), apart from the version and RAM log pages
 and, on the MS-R1, where its 200 ms board-sensor read falls among the
 SCMI questions (paced by instructions, not time; the transfers are the
-same). A run with every phase takes several minutes (CIX's reference is
+same). On the three boards whose fans the PM drives (O6N, MS-R1, Orange
+Pi 6), `--runtime` also reports writes landing one phase early: fan PWM
+(`0x4411x028`), `0xa004x034`, and on the MS-R1 one TMP75 read. They are
+the same writes, the phases are paced by instructions, and the image
+before the tasks (one loop, polled I2C) has the same ones. Run the tests with PyPy
+(`pypy3` instead of `python3`, about 28 times faster; see the EC's
+README for where to get it). A run with every phase takes several minutes (CIX's reference is
 cached in `out/test_pm-cache`). What pm_emu models of devices (the S5
 controller, power policy units, DDR controllers, the SE's side of
 suspend, PMICs and TMP75s, tachometers, the watchdog's lock) is in its
@@ -322,20 +386,30 @@ The tables match in every case tried.
 
 Not ported, on purpose: the debug CLI and what only it reaches (CI-700
 event collections and DFD trace, GPIO interrupt helpers, forced operating
-points), logging and dumps, CIX's interrupt-driven I2C path (the polled
-driver moves the same bytes). Where the open firmware differs from CIX's
-on purpose: the heartbeat timer is created once (CIX's adds another on
-every resume), and the services start 1 ms after the handshake (CIX's
-from its event worker once it first idles). What the emulator cannot
+points), logging and dumps, CIX's I2C state machine for tasks (ours waits
+for the same interrupts with CIX's polled register sequence). Where the
+open firmware differs from CIX's on purpose: the heartbeat timer is
+created once (CIX's adds another on every resume), the services start
+1 ms after the handshake (CIX's from its event worker once it first
+idles), and I2C: the 10 ms time-out, the controller reset and the
+back-off of a bus that is down, the PMIC writes' end on a dead bus, the
+masters' interrupt sources on line 24 (`test_pm.py` leaves that register
+out; CIX's masters poll). What the emulator cannot
 show: real fans (pulses per turn, polarity, stall), the EC's reads over
 the I2C slave, MP2845/AU4683 read-back formats, the watchdog's count. CIX
 never unmasks interrupt lines 28-30 (PVT alarms, PROCHOT), whose reset
-masks are unknown; the test unmasks them to exercise those paths.
+masks are unknown; the test unmasks them to exercise those paths. Built
+with `make CSUPM_THERMAL_IRQ=1` (a clean output directory), ours enables
+the PVT warnings and PROCHOT itself: on a part where these reset masked, a
+board's PROCHOT# is otherwise never seen. Off by default, as CIX's: on a
+board whose PROCHOT# is not driven the pin could read asserted and keep
+the CPUs at 500 MHz, so it wants trying on each board first.
 
 RAM: DRAM0 (64 KB: read-only data, initialised data) has about 2 KB left;
 the DPM's and board's initialised tables are in DRAM1 (`.dram1.data`, as
-in CIX's image), and the heap leaves 53 KB beyond what DDR retention
-borrows during suspend (`pm.ld` checks it).
+in CIX's image), and the heap leaves 43 KB beyond what DDR retention
+borrows during suspend (`pm.ld` checks it). The tasks' stacks: 14 KB for
+SCP-firmware's, 4 KB for each worker, 2 KB for idle.
 
 ### What CIX's image does before it idles
 
@@ -371,6 +445,7 @@ python3 scripts/open/csupm_coverage.py OURS.elf [--units]
 | Power-on: clock and reset block, watchdog, UART, I2C, PMICs | done |
 | Interconnect counters, PVT sensors, mailboxes | done |
 | Interrupts (aggregator, mailboxes), timer, idle with WAITI | done |
+| Tasks (FreeRTOS, co-operative), I2C workers, I2C on interrupts with time-outs and bus recovery (`test_pm_faults.py`) | done |
 | SCP-firmware framework and modules: transport, SCMI base, power domains, system power, sensors, permissions | done |
 | Clock tree and PLLs, SCMI clocks | done |
 | V/F tables from the fuses, boot DVFS levels (`test_vf.py`) | done |
@@ -379,7 +454,7 @@ python3 scripts/open/csupm_coverage.py OURS.elf [--units]
 | Board services: fans, PVT, board sensors, PROCHOT, watchdog, MP2845/AU4683, rail layouts, I2C slave, DDR DFS, with the boards' PM configurations (`--services`, `--board`) | done |
 | RTT, RAM log, version, PCC tables | done |
 | System power sequence (shutdown, reset, suspend/resume, DDR retention, S3 script), PM messages | done |
-| CIX `Source/common` and `Source/projects/sky1`, without the debug CLI | 72% and 96% of CIX's code; what is left (`csupm_coverage.py --units`) is replaced (FreeRTOS, CIX's timer/event/job framework, `ipc_arbiter`), CLI-only, or CIX's interrupt-driven I2C path |
-| Our image passes `test_pm.py` | done: every phase, six configurations; the version and RAM log pages differ by design |
+| CIX `Source/common` and `Source/projects/sky1`, without the debug CLI | 72% and 96% of CIX's code; what is left (`csupm_coverage.py --units`) is replaced (FreeRTOS's port, CIX's timer/event/job framework, `ipc_arbiter`), CLI-only, or CIX's I2C state machine for tasks |
+| Our image passes `test_pm.py` | done: every phase, six configurations; the version and RAM log pages differ by design; on O6N, MS-R1 and Orange Pi 6 `--runtime` places some of the same fan and sensor writes one phase early (instruction pacing, as before the tasks) |
 | `build.sh --open` puts it in bootloader1 (`--vendor-pm` keeps CIX's); the open SE verifies it in secure boot and both SEs load it identically (`test_se.py`) | done |
 | Boot test on hardware (UART4, SCMI from Linux, fans, suspend/resume) | to do |

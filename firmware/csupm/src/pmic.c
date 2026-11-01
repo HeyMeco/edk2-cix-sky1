@@ -19,6 +19,7 @@
 #include "i2c.h"
 #include "lcru.h"
 #include "pmic.h"
+#include "rtos.h"
 #include "clk/clk.h"
 #include "dpm/dvfs_cfg.h"
 
@@ -88,14 +89,19 @@ static bool dev_pmic_mp5475_readVoltage(const struct pmic_dev *dev, uint8_t buck
 /*
  * The write, tried four times 80 us apart; after a retry the voltage is
  * read back and written again until it is within 4 mV (CIX's loop: once
- * the tries are spent it retries for as long as the read-back disagrees,
- * and a read-back that agrees then still counts as a failure).  The
+ * the tries are spent a failed write ends a round, and a read-back that
+ * agrees then still counts as a failure).  CIX's loop has no end: its
+ * tries counter only stops the writes when it equals -1, so on a bus that
+ * stays dead it writes for ever; here a failed write ends every round
+ * after the fourth try and there are SET_ROUNDS rounds at most.  The
  * voltage is then what the regulator has: an even number of mV.
  */
+#define SET_ROUNDS		3
+
 static bool dev_pmic_mp5475_setVoltage(const struct pmic_dev *dev, uint8_t buck, uint16_t *mv)
 {
 	uint8_t w[3];
-	int left = 3;
+	int left = 3, rounds = 0;
 	bool ok;
 
 	if ((uint16_t)(*mv - MP5475_MV_MIN) > MP5475_MV_MAX - MP5475_MV_MIN)
@@ -112,7 +118,7 @@ static bool dev_pmic_mp5475_setVoltage(const struct pmic_dev *dev, uint8_t buck,
 			left--;
 			retried = true;
 			us_delay(80);
-			if (left == -1) {
+			if (left < 0) {
 				ok = false;
 				break;
 			}
@@ -122,6 +128,10 @@ static bool dev_pmic_mp5475_setVoltage(const struct pmic_dev *dev, uint8_t buck,
 		if (dev_pmic_mp5475_readVoltage(dev, buck, &now) &&
 		    (now > *mv ? now - *mv : *mv - now) < 4)
 			break;
+		if (++rounds == SET_ROUNDS) {
+			ok = false;
+			break;
+		}
 	}
 	*mv &= (uint16_t)~1u;
 	return ok;
@@ -282,13 +292,14 @@ static bool dev_pmic_generic_readVoltage(const struct pmic_dev *dev, uint8_t buc
 /*
  * The page and VOUT_COMMAND (one transfer each, a repeated start between),
  * tried four times 80 us apart; after a retry the voltage is read back and
- * written again until it is within 10 mV (as the MP5475's).
+ * written again until it is within 10 mV (as the MP5475's, rounds bounded
+ * as there).
  */
 static bool dev_pmic_generic_setVoltage(const struct pmic_dev *dev, uint8_t buck, uint16_t *mv)
 {
 	uint8_t page[2] = { dev->reg_info->page, buck };
 	uint8_t vout[3] = { dev->reg_info->vout_command, 0, 0 };
-	int left = 3;
+	int left = 3, rounds = 0;
 
 	if ((uint16_t)(*mv - 300) > 1746)
 		return false;
@@ -301,7 +312,7 @@ static bool dev_pmic_generic_setVoltage(const struct pmic_dev *dev, uint8_t buck
 			left--;
 			retried = true;
 			us_delay(80);
-			if (left == -1) {
+			if (left < 0) {
 				ok = false;
 				break;
 			}
@@ -311,6 +322,8 @@ static bool dev_pmic_generic_setVoltage(const struct pmic_dev *dev, uint8_t buck
 		if (dev_pmic_generic_readVoltage(dev, buck, &now) &&
 		    (now > *mv ? now - *mv : *mv - now) < 10)
 			return ok;
+		if (++rounds == SET_ROUNDS)
+			return false;
 	}
 }
 
@@ -493,21 +506,44 @@ bool dev_pmic_setVoltage(const struct rail *r, uint16_t old_mv, uint16_t new_mv,
 	return true;
 }
 
-/* CIX's dev_pmic_readVoltage */
-bool dev_pmic_readVoltage(const struct rail *r, uint16_t *mv)
-{
-	struct pmic_dev *dev = dev_pmic_find(r->bus, r->addr);
+/* CIX's dev_pmic_readVoltage (on the PMIC worker) */
+struct read_voltage_call {
+	const struct rail *r;
+	uint16_t *mv;
+	bool ok;
+};
 
-	return dev && dev->drv->read_voltage(dev, r->buck, mv);
+static void read_voltage_job(void *arg)
+{
+	struct read_voltage_call *c = arg;
+	struct pmic_dev *dev = dev_pmic_find(c->r->bus, c->r->addr);
+
+	c->ok = dev && dev->drv->read_voltage(dev, c->r->buck, c->mv);
 }
 
-/* CIX's dev_pmic_read_status: each regulator type's driver once */
-bool dev_pmic_read_status(enum pmic_status_time idx)
+bool dev_pmic_readVoltage(const struct rail *r, uint16_t *mv)
 {
+	struct read_voltage_call c = { .r = r, .mv = mv };
+
+	rtos_call(RTOS_PMIC, read_voltage_job, &c);
+	return c.ok;
+}
+
+/* CIX's dev_pmic_read_status: each regulator type's driver once (on the
+ * PMIC worker, src/rtos.c) */
+static void read_status_job(void *arg)
+{
+	enum pmic_status_time idx = (enum pmic_status_time)(uintptr_t)arg;
+
 	for (unsigned i = 0; i < PMIC_DEV_MAX; i++) {
 		if (s_pmic_drv[i])
 			(void)s_pmic_drv[i]->read_status(idx);
 	}
+}
+
+bool dev_pmic_read_status(enum pmic_status_time idx)
+{
+	rtos_call(RTOS_PMIC, read_status_job, (void *)(uintptr_t)idx);
 	return true;
 }
 

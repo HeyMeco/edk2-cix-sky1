@@ -12,6 +12,7 @@
  * setting one sets the buck to the higher of the two.
  */
 #include "pmic.h"
+#include "rtos.h"
 #include "dpm/dpm.h"
 
 /*
@@ -292,8 +293,11 @@ static uint16_t volt_set[EDP_N];	/* at the regulator */
 /*
  * CIX's dpm_edp_set_voltage: the board's offset added, at most 980 mV,
  * written when it changes (a rail without a regulator only records it).
+ *
+ * These run on the PMIC worker (src/rtos.c), whoever asks: one rail at a
+ * time, so that a rail sharing a buck sees the other's voltage as it is.
  */
-bool dpm_edp_set_voltage(DPM_EDP_DOMAIN edp_id, uint32_t vol_mV)
+static bool edp_set_voltage(DPM_EDP_DOMAIN edp_id, uint32_t vol_mV)
 {
 	const struct rail *r;
 	uint32_t mv;
@@ -322,7 +326,7 @@ bool dpm_edp_set_voltage(DPM_EDP_DOMAIN edp_id, uint32_t vol_mV)
  * voltage gets the one it had again (pwr_rail_setVoltage from 0, so it is
  * written whatever the regulator has).
  */
-bool dpm_edp_restore_voltage(void)
+static bool edp_restore_voltage(void)
 {
 	bool ok = true;
 
@@ -346,12 +350,60 @@ bool dpm_edp_get_voltage(DPM_EDP_DOMAIN edp_id, uint16_t *pVol_mV)
 }
 
 /* CIX's dpm_edp_set_gb: a new offset for a rail, its voltage set again */
-bool dpm_edp_set_gb(uint8_t edp_id, int32_t gb_mV)
+static bool edp_set_gb(uint8_t edp_id, int32_t gb_mV)
 {
 	struct rail *r;
 
 	if (edp_id >= EDP_N || !(r = rail_cfg(edp_id)) || !r->type)
 		return false;
 	r->offset_mv = (int16_t)((int32_t)((uint32_t)gb_mV << 22) >> 22);
-	return dpm_edp_set_voltage((DPM_EDP_DOMAIN)edp_id, volt_without_gb[edp_id]);
+	return edp_set_voltage((DPM_EDP_DOMAIN)edp_id, volt_without_gb[edp_id]);
+}
+
+/* --- the same, on the PMIC worker ------------------------------------------- */
+
+struct edp_call {
+	enum { CALL_SET, CALL_RESTORE, CALL_GB } what;
+	uint8_t edp_id;
+	int32_t mv;
+	bool ok;
+};
+
+static void edp_job(void *arg)
+{
+	struct edp_call *c = arg;
+
+	switch (c->what) {
+	case CALL_SET:
+		c->ok = edp_set_voltage((DPM_EDP_DOMAIN)c->edp_id, (uint32_t)c->mv);
+		break;
+	case CALL_RESTORE:
+		c->ok = edp_restore_voltage();
+		break;
+	case CALL_GB:
+		c->ok = edp_set_gb(c->edp_id, c->mv);
+		break;
+	}
+}
+
+static bool edp_call(struct edp_call c)
+{
+	rtos_call(RTOS_PMIC, edp_job, &c);
+	return c.ok;
+}
+
+bool dpm_edp_set_voltage(DPM_EDP_DOMAIN edp_id, uint32_t vol_mV)
+{
+	return edp_call((struct edp_call){ .what = CALL_SET, .edp_id = (uint8_t)edp_id,
+					   .mv = (int32_t)vol_mV });
+}
+
+bool dpm_edp_restore_voltage(void)
+{
+	return edp_call((struct edp_call){ .what = CALL_RESTORE });
+}
+
+bool dpm_edp_set_gb(uint8_t edp_id, int32_t gb_mV)
+{
+	return edp_call((struct edp_call){ .what = CALL_GB, .edp_id = edp_id, .mv = gb_mV });
 }

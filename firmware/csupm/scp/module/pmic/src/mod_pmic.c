@@ -25,6 +25,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "rtos.h"
 #include "scp_dpm.h"
 
 enum mod_pmic_request {
@@ -43,12 +44,21 @@ struct mod_pmic_operation {
 	};
 };
 
+/* a change on the PMIC worker */
+struct mod_pmic_job {
+	fwk_id_t element_id;
+	uint8_t edp_idx;
+	uint32_t voltage;
+	bool ok;
+};
+
 struct mod_pmic_element_ctx {
 	struct {
 		bool enabled;
 		uint32_t voltage;
 	} state;
 	struct mod_pmic_operation op;
+	struct mod_pmic_job job;
 	struct {
 		const struct mod_psu_driver_response_api *hal;
 	} apis;
@@ -63,6 +73,8 @@ static uint32_t soc_pmic_voltage = 790;
 
 static const fwk_id_t mod_pmic_event_id_switch =
 	FWK_ID_EVENT_INIT(FWK_MODULE_IDX_PMIC, MOD_PMIC_EVENT_IDX_SWITCH);
+static const fwk_id_t mod_pmic_event_id_done =
+	FWK_ID_EVENT_INIT(FWK_MODULE_IDX_PMIC, MOD_PMIC_EVENT_IDX_DONE);
 
 /* CIX's mod_pmic_get_cfg_ctx */
 static int mod_pmic_get_cfg_ctx(fwk_id_t element_id, union mod_pmic_element_cfg *cfg,
@@ -184,8 +196,54 @@ static int mod_pmic_set_voltage(fwk_id_t element_id, uint32_t voltage)
 	return FWK_E_STATE;
 }
 
-/* CIX's mod_pmic_switch_proc: set the rail, answer the PSU */
+/* on the PMIC worker: the rail set, then the end back to the element */
+static void mod_pmic_job_run(void *arg)
+{
+	struct mod_pmic_job *job = arg;
+
+	job->ok = dpm_edp_set_voltage((DPM_EDP_DOMAIN)job->edp_idx, job->voltage);
+}
+
+static void mod_pmic_job_done(void *arg)
+{
+	struct mod_pmic_job *job = arg;
+	struct fwk_event_light event = {
+		.source_id = job->element_id,
+		.target_id = job->element_id,
+		.id = mod_pmic_event_id_done,
+	};
+
+	(void)fwk_put_event(&event);
+}
+
+/*
+ * CIX's mod_pmic_switch_proc: set the rail, answer the PSU.  The rail is
+ * set by the PMIC worker, so that the event loop goes on while the I2C
+ * transfers do (CIX: its job ran in its own task); the answer comes with
+ * the done event.
+ */
 static void mod_pmic_switch_proc(fwk_id_t element_id)
+{
+	struct mod_pmic_element_ctx *ctx;
+	union mod_pmic_element_cfg cfg;
+	int status;
+
+	status = mod_pmic_get_cfg_ctx(element_id, &cfg, &ctx);
+	fwk_assert(status == FWK_SUCCESS);
+	fwk_assert(ctx->op.request == MOD_PMIC_REQUEST_SET_VOLTAGE);
+	ctx->job = (struct mod_pmic_job){
+		.element_id = element_id,
+		.edp_idx = cfg.edp_idx,
+		.voltage = ctx->op.voltage,
+	};
+	if (!rtos_submit(RTOS_PMIC, mod_pmic_job_run, &ctx->job, mod_pmic_job_done)) {
+		/* the worker's queue full: wait for it */
+		rtos_call(RTOS_PMIC, mod_pmic_job_run, &ctx->job);
+		mod_pmic_job_done(&ctx->job);
+	}
+}
+
+static void mod_pmic_done_proc(fwk_id_t element_id)
 {
 	struct mod_pmic_element_ctx *ctx;
 	union mod_pmic_element_cfg cfg;
@@ -195,7 +253,7 @@ static void mod_pmic_switch_proc(fwk_id_t element_id)
 	status = mod_pmic_get_cfg_ctx(element_id, &cfg, &ctx);
 	fwk_assert(status == FWK_SUCCESS);
 	fwk_assert(ctx->op.request == MOD_PMIC_REQUEST_SET_VOLTAGE);
-	if (dpm_edp_set_voltage(cfg.edp_idx, ctx->op.voltage)) {
+	if (ctx->job.ok) {
 		ctx->state.voltage = ctx->op.voltage;
 		response.status = FWK_SUCCESS;
 	} else {
@@ -208,9 +266,12 @@ static void mod_pmic_switch_proc(fwk_id_t element_id)
 static int mod_pmic_process_event(const struct fwk_event *event, struct fwk_event *resp_event)
 {
 	(void)resp_event;
-	if (!fwk_id_is_equal(event->id, mod_pmic_event_id_switch))
+	if (fwk_id_is_equal(event->id, mod_pmic_event_id_switch))
+		mod_pmic_switch_proc(event->target_id);
+	else if (fwk_id_is_equal(event->id, mod_pmic_event_id_done))
+		mod_pmic_done_proc(event->target_id);
+	else
 		return FWK_E_PARAM;
-	mod_pmic_switch_proc(event->target_id);
 	return FWK_SUCCESS;
 }
 

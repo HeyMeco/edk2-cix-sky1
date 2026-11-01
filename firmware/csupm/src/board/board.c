@@ -68,6 +68,21 @@ static void isr(unsigned int line, void (*fn)(void))
 		(void)fwk_interrupt_enable(line);
 }
 
+/*
+ * CIX's firmware never enables the sources of lines 29 (PVT warning) and
+ * 30 (PROCHOT) in the aggregator, and their reset values are not known:
+ * on a part where they reset to 0, a board's PROCHOT# is never seen and
+ * the PVT alarms never fire.  Built with CSUPM_THERMAL_IRQ=1 they are
+ * enabled here (every sensor's warning, PROCHOT); the handlers mask their
+ * own source as they fire (src/pvt.c, src/board/prochot.c), so a level
+ * that stays asserted interrupts once.  Off by default: on a board whose
+ * PROCHOT# is not driven the pin could read asserted and keep the CPUs at
+ * 500 MHz; it wants trying on each board first.
+ */
+#ifndef CSUPM_THERMAL_IRQ
+#define CSUPM_THERMAL_IRQ	0
+#endif
+
 /* the handlers, as the services' module starts (CIX: intr_platform_init) */
 void board_irq_init(void)
 {
@@ -76,6 +91,10 @@ void board_irq_init(void)
 	isr(PVT_SAFE_LINE, pvt_safe_irq);
 	isr(PVT_WARN_LINE, pvt_warning_irq);
 	isr(PROCHOT_LINE, prochot_outside_isr);
+	if (CSUPM_THERMAL_IRQ) {
+		REG32(AGG_ENABLE(PVT_WARN_LINE)) |= BIT(PVT_N) - 1;
+		REG32(AGG_ENABLE(PROCHOT_LINE)) |= 1;
+	}
 	config_board_sensor_start();
 }
 

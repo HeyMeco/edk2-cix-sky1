@@ -26,8 +26,11 @@
  * Shutdown: through PTS into S5: the S5 interrupt, the core clock down,
  * sleep type 2.  Warm reset: the S5 controller's warm reset.
  *
- * Not here: CIX's RTOS (tasks suspended around the sequence, its tick
- * timer stopped and restarted) and the log messages.  The performance
+ * CIX's RTOS suspends its tasks around the sequence; here the I2C workers
+ * finish their jobs first (rtos_quiesce) and the sequence runs in the
+ * SCP-firmware task, which nothing else can run beside (the scheduler is
+ * co-operative), its I2C polled.  The tick only runs while a task waits
+ * with a time-out, so there is none to stop.  Not here: the log messages.  The performance
  * streams (suspended here, restored by ss_run) and the SoC idle switch
  * are src/perf's.  The fans (src/fan), the board
  * services' timers (pm_svc_pts/run, as CIX's md_timer), the MP2845s'
@@ -47,6 +50,7 @@
 #include "perf/perf.h"
 #include "plat.h"
 #include "pmic.h"
+#include "rtos.h"
 #include "rtt/rtt.h"
 #include "s3script/s3script.h"
 #include "soc.h"
@@ -439,7 +443,8 @@ void ss_s3_exit(void)
 	irq_restore();
 	fwlog_enable_dram(false, true);
 	REG32(PM_FAST_CHANNEL) = PM_FC_RLOG_ON;
-	/* CIX restarts its RTOS tick (CCOMPARE1, line 7) here */
+	/* CIX restarts its RTOS tick (CCOMPARE1, line 7) here; ours only runs
+	 * while a task waits with a time-out (rtos/port/port.c) */
 }
 
 void ss_s5_enter(void)
@@ -530,6 +535,9 @@ bool pm_idle(void)
 		}
 		return !str_postponed;
 	}
+	/* the I2C workers' jobs done first; the sequence's own I2C is polled
+	 * (CIX suspends its tasks around it) */
+	rtos_quiesce();
 	if (target == HSM_ST_POR)
 		soc_warm_reset(0);
 	ss_hsm_set((SS_HSM_STATE)target);
@@ -565,6 +573,7 @@ bool pm_idle(void)
 		sensor_hub_timeout_set();
 		audio_div_war_retry(true);
 	}
+	rtos_unquiesce();
 	if (resume_evt_signalled) {
 		resume_evt_signalled = false;
 		on_sys_pwr_event(resume_evt);

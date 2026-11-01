@@ -46,9 +46,20 @@ SCP_SRCS	:= $(patsubst %,$(SCP)/framework/src/%.c,$(SCP_FWK)) \
 		   $(foreach m,$(SCP_MODULES),$(wildcard $(call mod_dir,$(m))/src/*.c)) \
 		   $(wildcard scp/src/*.c) $(wildcard $(patsubst %,scp/config/config_%.c,$(SCP_MODULES)))
 
-FW_CFLAGS := $(CFLAGS) -Os -Iinclude -Isrc -Wvla $(SCP_DEFS) $(SCP_INC)
+# FreeRTOS (V11.1.0, submodule): the kernel, our port and configuration
+# (rtos/), the tasks (src/rtos.c)
+RTOS		:= FreeRTOS-Kernel
+RTOS_INC	:= -Irtos -Irtos/port -I$(RTOS)/include
+RTOS_SRCS	:= $(RTOS)/tasks.c $(RTOS)/queue.c $(RTOS)/list.c
+
+# CSUPM_THERMAL_IRQ=1: the PVT warning and PROCHOT aggregator sources on
+# (src/board/board.c says why it is off by default)
+CSUPM_THERMAL_IRQ ?= 0
+
+FW_CFLAGS := $(CFLAGS) -Os -Iinclude -Isrc -Wvla $(SCP_DEFS) $(SCP_INC) $(RTOS_INC) \
+	     -DCSUPM_THERMAL_IRQ=$(CSUPM_THERMAL_IRQ)
 # upstream code builds without -Wextra -Werror
-SCP_CFLAGS := $(filter-out -Wextra -Werror,$(CFLAGS)) -Os -Iinclude -Isrc $(SCP_DEFS) $(SCP_INC)
+SCP_CFLAGS := $(filter-out -Wextra -Werror,$(CFLAGS)) -Os -Iinclude -Isrc $(SCP_DEFS) $(SCP_INC) $(RTOS_INC)
 
 # upstream modules kept with a change (scp/module/*/README) build as upstream's
 $(O)/scp/module/scmi_clock/%: FW_CFLAGS = $(SCP_CFLAGS)
@@ -64,7 +75,8 @@ SRCS	:= arch/vectors.S src/main.c src/lcru.c src/uart.c src/i2c.c src/pmic.c src
 	   $(wildcard src/rtt/*.c) $(wildcard src/log/*.c) $(wildcard src/pcc/*.c) \
 	   $(wildcard src/hsm/*.c) $(wildcard src/msg/*.c) \
 	   $(wildcard src/board/*.c) $(wildcard src/fan/*.c) $(wildcard src/mclp/*.c) $(wildcard src/s3script/*.c) \
-	   lib/string.c lib/malloc.c lib/printf.c lib/libgcc.c $(SCP_SRCS)
+	   src/rtos.c rtos/port/port.c rtos/port/portasm.S \
+	   lib/string.c lib/malloc.c lib/printf.c lib/libgcc.c $(SCP_SRCS) $(RTOS_SRCS)
 OBJS	:= $(patsubst %,$(O)/%.o,$(SRCS)) $(SCP_GEN)/fwk_module_list.c.o
 
 all: $(O)/csupm.xbin
@@ -97,7 +109,7 @@ $(SCP_GEN)/fwk_module_idx.h $(SCP_GEN)/fwk_module_list.c: scp/modules.py Makefil
 	@mkdir -p $(SCP_GEN)
 	@python3 scp/modules.py $(SCP_GEN) $(SCP_MODULES)
 
-$(O)/%.c.o: %.c $(CORE) $(wildcard include/*.h scp/include/*.h src/clk/*.h src/dpm/*.h src/rtt/*.h src/log/*.h src/pcc/*.h src/hsm/*.h src/msg/*.h src/mclp/*.h src/s3script/*.h src/board/*.h src/fan/*.h src/perf/*.h scp/module/*/include/*.h scp/module/*/include/*/*.h) $(SCP_GEN)/fwk_module_idx.h Makefile
+$(O)/%.c.o: %.c $(CORE) $(wildcard include/*.h rtos/*.h rtos/port/*.h scp/include/*.h src/clk/*.h src/dpm/*.h src/rtt/*.h src/log/*.h src/pcc/*.h src/hsm/*.h src/msg/*.h src/mclp/*.h src/s3script/*.h src/board/*.h src/fan/*.h src/perf/*.h scp/module/*/include/*.h scp/module/*/include/*/*.h) $(SCP_GEN)/fwk_module_idx.h Makefile
 	@mkdir -p $(dir $@)
 	@echo "  CC      $<"
 	@$(CC) $(FW_CFLAGS) -c -o $@ $<
@@ -107,11 +119,16 @@ $(O)/$(SCP)/%.c.o: $(SCP)/%.c $(CORE) $(SCP_GEN)/fwk_module_idx.h Makefile
 	@echo "  CC      $<"
 	@$(CC) $(SCP_CFLAGS) -c -o $@ $<
 
+$(O)/$(RTOS)/%.c.o: $(RTOS)/%.c $(CORE) $(wildcard rtos/*.h rtos/port/*.h) Makefile
+	@mkdir -p $(dir $@)
+	@echo "  CC      $<"
+	@$(CC) $(SCP_CFLAGS) -c -o $@ $<
+
 $(SCP_GEN)/fwk_module_list.c.o: $(SCP_GEN)/fwk_module_list.c $(CORE)
 	@echo "  CC      $<"
 	@$(CC) $(SCP_CFLAGS) -c -o $@ $<
 
-$(O)/%.S.o: %.S $(CORE) $(wildcard include/*.h) Makefile
+$(O)/%.S.o: %.S $(CORE) $(wildcard include/*.h rtos/port/*.h) Makefile
 	@mkdir -p $(dir $@)
 	@echo "  AS      $<"
 	@$(CC) $(FW_CFLAGS) -c -o $@ $<
