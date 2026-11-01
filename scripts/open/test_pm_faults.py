@@ -698,8 +698,8 @@ def boot_writes_lost(elf):
     """Big0's PMIC loses every voltage write from reset (they reach the
     regulator, the transfer fails): the boot voltages and dvfs's boot OPP
     fail (dvfs gives up after its retries).  The bus healthy, big0 by fast
-    channel to its lowest, then its highest level: a voltage write first,
-    no PLL write before one, the level set."""
+    channel to its lowest, then its highest level: in the raise, a voltage
+    write before the PLL's, and the level set."""
     tag = "boot, writes lost"
     orig = pm_emu.CadenceI2c.transfer
     state = {"cpu": None}
@@ -718,9 +718,11 @@ def boot_writes_lost(elf):
     lv = levels(cpu, soc, BIG0)
     bus = int(BOOT_LOST_BUS[3:])
     fault = BusFault(cpu, soc, bus)
-    nw, nl = len(cpu.writes), len(fault.log)
+    nl = len(fault.log)
     request(cpu, soc, "fc", BIG0, lv[0])
     v0 = vout_writes(fault, nl)
+    # the raise only: in the lower before it the PLL goes first, rightly
+    nw, nl = len(cpu.writes), len(fault.log)
     request(cpu, soc, "fc", BIG0, lv[-1])
     blocks = sorted({a & ~(PLL_BLOCK - 1) for _, a, _, _ in cpu.writes[nw:]
                      if test_pm.CGC[0] <= a < test_pm.CGC[1]})
