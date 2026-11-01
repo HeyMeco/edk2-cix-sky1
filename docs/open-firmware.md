@@ -639,7 +639,12 @@ tolerance. It also installs each image over the other the way UEFI does
 checks that the new one boots, reaches S0 and answers. Run it with
 `scripts/open/run_ec_tests.sh`: it uses PyPy (`pypy3` on `PATH` or
 `$PYPY`) when there is one, about 28 times faster than CPython (the
-suite in under a minute).
+whole suite in under a minute, against about 25 minutes), and falls back
+to `python3`. `test_ec.py`, `ec_emu.py` and `i8051_emu.py` run unchanged
+under PyPy 7.3 (Python 3.11). On macOS take the official build
+(`https://downloads.python.org/pypy/pypy3.11-v7.3.20-macos_arm64.tar.bz2`,
+unpacked anywhere, `PYPY=<dir>/bin/pypy3`): Homebrew's `pypy3.10` bottle
+does not install. `ec_ntc_table.py` needs numpy: run it with `python3`.
 
 Not the same: the version string (`V1.07-open`); the vendor's probes of
 parts the O6 lacks (PMICs, IO expander, light sensor, an SMBus scan),
