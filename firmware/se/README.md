@@ -94,11 +94,19 @@ CIX's code for every function `ddr/` does not define.
 | Cold boot from reset to AP release, against CIX's firmware in the emulator | identical (831 registers, DRAM and PM SRAM) for life cycles 4, 5 and 7, with and without device keys |
 | `build.sh --open` puts it in bootloader1 (re-signed with the chain-A keys) | done; not yet boot-tested on hardware |
 
-The services keep CIX's interface, with two differences: secret eFuse
+The services keep CIX's interface, with three differences: secret eFuse
 fields (device and model keys) are given only to requests on the TEE
 mailbox, the hash service only reads DRAM, and the request to burn the
 OEM root key hash into the eFuse is refused: nothing here programs eFuses.
 CIX's firmware does all three for the non-secure side.
+
+Elsewhere: no debug monitor; the memory-configuration block lookup stays
+inside its table (CIX's reads past it); a write enable per erased flash
+sector; in the DDR driver, no training report or register dumps, the
+BIST's pass/fail arrays (only printed) dropped with the BIST runs kept,
+and the density table padded to 16 entries because CIX's lookup reads past
+its 9. The full list for every stage is in
+[docs/open-firmware.md](../../docs/open-firmware.md#how-the-open-firmware-differs-from-cixs).
 
 `scripts/open/test_se.py` runs CIX's debug build and this firmware in
 Unicorn (`scripts/open/se_emu.py`, a model of the SoC as the SE sees it) on
