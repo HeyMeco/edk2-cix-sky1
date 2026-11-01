@@ -381,4 +381,5 @@ python3 scripts/open/csupm_coverage.py OURS.elf [--units]
 | System power sequence (shutdown, reset, suspend/resume, DDR retention, S3 script), PM messages | done |
 | CIX `Source/common` and `Source/projects/sky1`, without the debug CLI | 72% and 96% of CIX's code; what is left (`csupm_coverage.py --units`) is replaced (FreeRTOS, CIX's timer/event/job framework, `ipc_arbiter`), CLI-only, or CIX's interrupt-driven I2C path |
 | Our image passes `test_pm.py` | done: every phase, six configurations; the version and RAM log pages differ by design |
-| `build.sh --open` puts it in bootloader1 | to do |
+| `build.sh --open` puts it in bootloader1 (`--vendor-pm` keeps CIX's); the open SE verifies it in secure boot and both SEs load it identically (`test_se.py`) | done |
+| Boot test on hardware (UART4, SCMI from Linux, fans, suspend/resume) | to do |

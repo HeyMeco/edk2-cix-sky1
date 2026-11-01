@@ -534,12 +534,15 @@ def main():
     ap.add_argument("--vendor-se", action="store_true",
                     help="with --open, keep CIX's SE firmware in bootloader1 instead of the one built "
                          "from firmware/se")
+    ap.add_argument("--vendor-pm", action="store_true",
+                    help="with --open, keep CIX's CSU_PM firmware in bootloader1 instead of the one "
+                         "built from firmware/csupm (not yet boot-tested on hardware)")
     ap.add_argument("--vendor-stmm", action="store_true",
                     help="with --open, embed CIX's StandaloneMM image from the reference bootloader2 "
                          "instead of the one built from source")
     a = ap.parse_args()
-    if (a.vendor_stmm or a.vendor_se) and not a.open:
-        ap.error("--vendor-stmm and --vendor-se need --open")
+    if (a.vendor_stmm or a.vendor_se or a.vendor_pm) and not a.open:
+        ap.error("--vendor-stmm, --vendor-se and --vendor-pm need --open")
 
     all_boards = boards()
     if a.list:
@@ -584,7 +587,11 @@ def main():
             if not a.vendor_se:
                 se, se_info = trusted.build_se(outdir / "open", commit)
                 open_info.update(se_info)
-            bl1, bl1_info = trusted.build_bootloader1(cfg, ref_bl1, a.target, outdir / "open", a.jobs, se)
+            pm = None
+            if not a.vendor_pm:
+                pm, pm_info = trusted.build_pm(outdir / "open", version)
+                open_info.update(pm_info)
+            bl1, bl1_info = trusted.build_bootloader1(cfg, ref_bl1, a.target, outdir / "open", a.jobs, se, pm)
             open_info.update(bl1_info)
             open_info["bootloader3_certificates"] = "cert_create"
             sfh, sfh_info = trusted.build_sfh(outdir / "open")
