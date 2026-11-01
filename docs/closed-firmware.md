@@ -35,6 +35,33 @@ are BSD-3-Clause for TF-A and BSD-2-Clause for OP-TEE):
 * `cixtech/cix_opensource__tee__op-tee`, same branch (OP-TEE 3.17 +
   `plat-cix`)
 
+## Security issues in CIX's boot firmware
+
+Found while rebuilding the firmware from CIX's binaries and debug builds
+(2026Q3 bootloader1 and bootloader2, SE firmware 2.0.2026W01.01 debug
+build). Each is read from CIX's code and, for the SE, reproduced in the
+emulator; none has been tried on a board. They are in the vendor firmware
+of every board, and the Orange Pi 6, Orange Pi 6 Plus and retail MS-R1
+(signing chain B) can only run that firmware. On the O6 and O6N, `--open`
+builds firmware without them ([open firmware](open-firmware.md#how-the-open-firmware-differs-from-cixs)).
+
+| Issue | Where | Who can use it | Effect | `--open` |
+|---|---|---|---|---|
+| The OS can have the **OEM public key hash burned into the eFuse** | BL31 SiP calls `0xC2000030`/`0xC2000031` pass a caller's buffer to SE requests `0x8200001A` (burn) and `0x8200001B` (status); the SE burns | the OS kernel (EL1) | a permanent change to the chip: per CIX's *Security Development Guide*, bootloader3 and everything after it must then be signed with that key, so the board boots only firmware its holder signs | BL31 has no such calls; the SE refuses the request and burns nothing ([eFuses](efuses.md#burning)) |
+| The OS can **read the eFuse device and model keys** | SE request `0x8200000e` answers any eFuse field to the normal world's mailbox | the OS kernel | OP-TEE's hardware unique key is HKDF-SHA256 of the device key, and the TA encryption key of the model key: whoever can run kernel code learns the keys protecting OP-TEE's secure storage and encrypted TAs on that chip, which survive reinstalling the OS | secret fields go to the TEE mailbox only ([eFuses](efuses.md#reading-fuses-from-the-ap)) |
+| The SE **hashes any address** | SE hash request `0x8200000c` | the OS kernel | digests of SE SRAM and the eFuse mirror, a confirmation oracle for their contents | DRAM only |
+| **NOR writes over secure memory** | BL31 SiP call `0xC200000B` takes a normal-world buffer address unchecked | the OS kernel | flash data written over BL31's or OP-TEE's memory, or secure memory written to flash | buffers must be in non-secure DRAM ([BL31](open-firmware.md#bl31)) |
+| **Unchecked transaction length** | StandaloneMM's UEFI transaction passthrough | UEFI, and the OS through OP-TEE | flash data written past StMM's buffer into secure memory | lengths checked ([StandaloneMM](open-firmware.md#standalonemm)) |
+| **No authentication on unfused boards** | BL2 skips image authentication when the SE reports secure boot off, and never checks bootloader3's trusted key certificate | anyone who can write the flash | modified bootloader2 and bootloader3 run | every image authenticated ([BL2](open-firmware.md#bl2)) |
+| **Secure storage past the end of the flash** | OP-TEE's NOR file system offset on 8 MiB flashes | (by accident) | the first secure-storage write lands on the firmware header and bootloader1 | inside the configured region only ([OP-TEE](open-firmware.md#op-tee)) |
+| **Secure storage over UEFI** | Radxa's `trustzone_config.bin` for the O6/O6N | (by accident, when NOR secure storage is used) | OP-TEE's NOR file system overwrites bootloader3 | CIX's stock configuration; overlaps refused ([TrustZone configuration](open-firmware.md#trustzone-configuration)) |
+
+Not a fault of the firmware but worth knowing: the SE loads the sensor
+fusion hub firmware from flash with no signature or hash check on every
+board ([sensor fusion hub](open-firmware.md#sensor-fusion-hub)), and on a
+chip without secure boot an unsigned secure-debug block in flash that
+names the chip turns on JTAG ([eFuses](efuses.md#secure-debug)).
+
 ## bootloader2: BL31 and BL32
 
 Despite the name, `bootloader2.img` is not BL2 but a TF-A FIP (TOC
