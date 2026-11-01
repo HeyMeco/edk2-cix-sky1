@@ -41,11 +41,8 @@ void lcru_mbox_reset(uint32_t mask);
 void wdt_off(void);
 void scratch_clear(void);
 
-/* CIX's dev_counters.c: the three counter blocks (PWM, tachometers, timers)
- * and the AP's free-running counter */
-void dev_cnts_init(void);
-void dev_cnts_set_instance(uint32_t base, uint32_t inst, uint32_t ref_clk_hz);
-uint64_t dev_cnts_get_ap_free_counter(void);
+/* CIX's dev_counters.c: the counter blocks, the AP's free-running counter */
+#include "perf/dev_counters.h"
 /* CIX's dev_gpio_init */
 void dev_gpio_init(void);
 

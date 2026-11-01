@@ -15,7 +15,7 @@ mask ROM ─▶ SE firmware ─▶ CSU_PM ─▶ TF-A BL2 ─▶ BL31 + OP-TEE (
 | Stage | Source | Status here |
 |---|---|---|
 | SE firmware (Cortex-M33: SoC bring-up, eFuse, image checks, AP services) | [firmware/se](../firmware/se); CIX's DDR driver relinked from their debug build | **built from source** (`--open`; `--vendor-se` keeps CIX's); same register writes and memory contents as CIX's in [test_se.py](../scripts/open/test_se.py) ([below](#se-firmware)) |
-| CSU_PM (Xtensa LX7, Arm SCP-firmware based) | [firmware/csupm](../firmware/csupm): SCP-firmware v2.11.0 and CIX's code translated from its debug build | **ported, in the emulator only**: same boot register writes, I2C transfers and SCMI answers as CIX's in [test_pm.py](../scripts/open/test_pm.py), suspend/resume, shutdown and reset; bootloader1 still ships CIX's binary ([below](#csu_pm)) |
+| CSU_PM (Xtensa LX7, Arm SCP-firmware based) | [firmware/csupm](../firmware/csupm): SCP-firmware v2.11.0 and CIX's code translated from its debug build | **ported, in the emulator only**: does what CIX's does in [test_pm.py](../scripts/open/test_pm.py) at boot, over SCMI, for PM messages, through suspend/resume, shutdown and reset and at run time (DPM, fans, thermal), with each board's PM configuration; bootloader1 still ships CIX's binary ([below](#csu_pm)) |
 | TF-A BL2 | `arm-trusted-firmware` + patch 0002 | **built from source** (`--open`, chain A), re-signed into bootloader1 |
 | TF-A BL31 | `arm-trusted-firmware` + patches 0004-0007 | **built from source** (`--open`) |
 | OP-TEE BL32 | `optee_os` + patch queue | **built from source** (`--open`) |
@@ -48,10 +48,10 @@ pre-BL33 firmware                               1509 KB   ███████�
 │   │   ├── DDR driver (DRAM training)            44 KB   closed: CIX's code, relinked
 │   │   └── PVT table (V/F selection data)        11 KB   closed: CIX's data
 │   ├── CSU_PM (Xtensa LX7)                      327 KB   ░░░░░░░░░░░░░░░░░░░░   0% open (CIX's binary ships)
-│   │   └── port, not shipped yet (by CIX's code, 193 KB; 60% of what is ported)
-│   │       ├── SCP-firmware framework, modules   49 KB   ████████████████░░░░  79% ported
-│   │       ├── CIX Source/projects/sky1          29 KB   ██████████████░░░░░░  70% ported
-│   │       ├── CIX Source/common                 69 KB   ████████░░░░░░░░░░░░  42% ported
+│   │   └── port, not shipped yet (by CIX's code, 193 KB; 79% of what is ported)
+│   │       ├── SCP-firmware framework, modules   49 KB   ████████████████░░░░  80% ported
+│   │       ├── CIX Source/projects/sky1          29 KB   ███████████████████░  96% ported
+│   │       ├── CIX Source/common                 69 KB   ██████████████░░░░░░  72% ported
 │   │       ├── FreeRTOS, Cadence runtime         28 KB   replaced: no RTOS, own libc
 │   │       └── debug CLI                         15 KB   not ported
 │   └── TF-A BL2                                  92 KB   ████████████████████ 100% open
@@ -72,10 +72,12 @@ open firmware has a counterpart for (same name, or named in its sources as
 what they translate), regenerated with
 `python3 scripts/open/csupm_coverage.py csupm.elf --tracker` (`--units`
 lists what is left per CIX source file). It counts translation, not
-equivalence; `test_pm.py` checks behaviour. CIX's Source/common is the
-lowest partly because the open firmware has its own I2C, PVT and
-interconnect-counter drivers rather than CIX's (same register writes, other
-names). The tools
+equivalence; `test_pm.py` checks behaviour. What is left is mostly code
+the open firmware replaces rather than translates (CIX's timer, event and
+job framework and IPC arbiter, by SCP-firmware's events, alarms and
+transport; its interrupt-driven I2C path, by a polled driver moving the
+same bytes) or that only CIX's debug CLI reaches (CI-700 event
+collections, the SCMI decoder). The tools
 around them (bootloader1 container, FIP certificates, SPI packer) are
 open. Data CIX generates (`memory_config`, `pm_config`,
 `trustzone_config`) is built from source where the board package has it
@@ -465,19 +467,24 @@ function from the debug build. In the emulator, against CIX's image
 | What | Same as CIX's |
 |---|---|
 | boot register writes | all 1329, in order |
-| boot I2C transfers (PMIC rails, DVFS levels) | all 33, in order |
+| boot I2C transfers (PMIC rails, DVFS levels) | all, in order |
 | SCMI answers (base, power domains, system power, sensors, 273 clocks, performance on 12 domains, levels set directly and through fast channels) | all 215, with the same PLL writes and I2C transfers |
-| shared memory (RTT, PCC tables, version, RAM log) | 5 of 8 pages; the version is ours, CIX's RAM log holds bytes from past its unflushed line buffer |
+| shared memory (RTT, PCC tables, DPM data board, version, RAM log) | all but the version (ours) and the RAM log (CIX's holds bytes from past its unflushed line buffer) |
 | CIX's PM messages (UEFI, Linux, TF-A) | all 20 answers |
-| suspend, resume, shutdown, warm reset (`--power`) | all but 16 registers on resume: performance counters CIX's DPM runtime sets up again, not ported |
+| suspend, resume, shutdown, warm reset | all |
+| run time: DPM (performance streams, power model, arbiters, TDP/EDP limits), PROCHOT, die at 100 C | all, including the DPM's state |
+| board services: fans and Linux's fan modes, PVT thresholds, PMIC faults, DDR DFS, board sensors | all |
+| the five boards' PM configurations (O6, O6N, MS-R1, Orange Pi 6 with MP2845 PMICs and shared bucks, Orange Pi 6 Plus) | every phase above |
 | V/F tables on simulated parts ([test_vf.py](../scripts/open/test_vf.py): straps, fuses, ATE phases, part numbers, BIOS configurations, Phecda) | every case tried |
 
-Not there yet: CIX's DPM runtime (power model, TDP and EDP limits,
-performance streams), fans, the PMIC error notification to the AP, PMICs
-other than the MP5475 (Phecda's and Alcor's MP2845s), the custom rail
-layouts a BIOS PM configuration can give, and `build.sh --open` putting
-the image in bootloader1; until then bootloader1 keeps CIX's binary. It has
-not run on hardware. The plan is in the
+The emulator models devices from what CIX's image does with them, so what
+it cannot show is real hardware behaviour: fans (pulses per turn,
+polarity, stall), the EC's reads over the I2C slave, MP2845/AU4683
+read-back formats, the watchdog's count, and whether the interrupt lines
+CIX never unmasks (PVT alarms, PROCHOT) are live. Left out on purpose:
+the debug CLI and what only it reaches. Not done: `build.sh --open`
+putting the image in bootloader1; until then bootloader1 keeps CIX's
+binary. It has not run on hardware. The plan is in the
 [README](../firmware/csupm/README.md#plan).
 
 ## Roadmap
@@ -489,10 +496,10 @@ not run on hardware. The plan is in the
 2. Boot-test the open SE (UART5 log; `--vendor-se` to compare), then
    suspend/resume and the SFH.
 3. CSU_PM from source. The open firmware matches CIX's in the emulator at
-   boot, over SCMI (clocks and DVFS included), for CIX's PM messages and
-   through suspend/resume, shutdown and reset. Next: CIX's DPM runtime
-   (power model, TDP/EDP limits, performance streams) and fans, then
-   `build.sh --open` puts it in bootloader1, with a switch that keeps
+   boot, over SCMI, for CIX's PM messages, through suspend/resume,
+   shutdown and reset, and at run time (DPM, fans, thermal), with each
+   board's PM configuration. Next: `build.sh --open` puts it in
+   bootloader1, with a switch that keeps
    CIX's binary as `--vendor-se` does for the SE, then a hardware boot test
    (UART4) ([plan](../firmware/csupm/README.md#plan)).
 

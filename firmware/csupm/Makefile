@@ -27,7 +27,7 @@ SCP_GEN		:= $(O)/scp/gen
 SCP_MODULES	:= xt_timer timer cix_mbox transport scmi rcsu power_domain scmi_power_domain \
 		   scmi_system_power soc_sensor sensor scmi_sensor \
 		   resource_perms clkpll clock dvfs psu pmic sky1soc_perf locked_perf \
-		   scmi_clock scmi_perf
+		   scmi_clock scmi_perf pm_svc dpm
 SCP_FWK		:= fwk_arch fwk_core fwk_delayed_resp fwk_dlist fwk_id fwk_interrupt \
 		   fwk_io fwk_log fwk_mm fwk_module fwk_notification fwk_ring fwk_slist \
 		   fwk_status fwk_string fwk_time assert
@@ -59,9 +59,11 @@ $(O)/scp/module/transport/%: FW_CFLAGS = $(SCP_CFLAGS)
 $(O)/scp/module/scmi_system_power/%: FW_CFLAGS = $(SCP_CFLAGS)
 
 SRCS	:= arch/vectors.S src/main.c src/lcru.c src/uart.c src/i2c.c src/pmic.c src/soc.c \
-	   src/pmu.c src/mbox.c src/power.c src/pvt.c src/plat.c $(wildcard src/clk/*.c) $(wildcard src/dpm/*.c) \
+	   src/mbox.c src/power.c src/pvt.c src/plat.c $(wildcard src/clk/*.c) $(wildcard src/dpm/*.c) \
+	   $(wildcard src/perf/*.c) \
 	   $(wildcard src/rtt/*.c) $(wildcard src/log/*.c) $(wildcard src/pcc/*.c) \
-	   $(wildcard src/hsm/*.c) $(wildcard src/msg/*.c) $(wildcard src/mclp/*.c) $(wildcard src/s3script/*.c) \
+	   $(wildcard src/hsm/*.c) $(wildcard src/msg/*.c) \
+	   $(wildcard src/board/*.c) $(wildcard src/fan/*.c) $(wildcard src/mclp/*.c) $(wildcard src/s3script/*.c) \
 	   lib/string.c lib/malloc.c lib/printf.c lib/libgcc.c $(SCP_SRCS)
 OBJS	:= $(patsubst %,$(O)/%.o,$(SRCS)) $(SCP_GEN)/fwk_module_list.c.o
 
@@ -95,7 +97,7 @@ $(SCP_GEN)/fwk_module_idx.h $(SCP_GEN)/fwk_module_list.c: scp/modules.py Makefil
 	@mkdir -p $(SCP_GEN)
 	@python3 scp/modules.py $(SCP_GEN) $(SCP_MODULES)
 
-$(O)/%.c.o: %.c $(CORE) $(wildcard include/*.h scp/include/*.h src/clk/*.h src/dpm/*.h src/rtt/*.h src/log/*.h src/pcc/*.h src/hsm/*.h src/msg/*.h src/mclp/*.h src/s3script/*.h scp/module/*/include/*.h scp/module/*/include/*/*.h) $(SCP_GEN)/fwk_module_idx.h Makefile
+$(O)/%.c.o: %.c $(CORE) $(wildcard include/*.h scp/include/*.h src/clk/*.h src/dpm/*.h src/rtt/*.h src/log/*.h src/pcc/*.h src/hsm/*.h src/msg/*.h src/mclp/*.h src/s3script/*.h src/board/*.h src/fan/*.h src/perf/*.h scp/module/*/include/*.h scp/module/*/include/*/*.h) $(SCP_GEN)/fwk_module_idx.h Makefile
 	@mkdir -p $(dir $@)
 	@echo "  CC      $<"
 	@$(CC) $(FW_CFLAGS) -c -o $@ $<

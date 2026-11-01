@@ -98,5 +98,5 @@ void md_version_broadcast(void)
 	if (pos >= FWVER_MAX)
 		vAssertCalledWithTRC(0xf14e0222);
 	memcpy((void *)(uintptr_t)base, buf, pos);
-	REG32(base + FWVER_PMIC_TYPE) = (uint32_t)pmic_get_preset();	/* CIX's pmic_type_id */
+	REG32(base + FWVER_PMIC_TYPE) = dpm_edp_cfg_get_pmic_topology_id();	/* CIX's pmic_type_id */
 }

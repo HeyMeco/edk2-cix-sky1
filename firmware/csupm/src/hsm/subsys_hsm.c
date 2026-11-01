@@ -27,15 +27,16 @@
  * sleep type 2.  Warm reset: the S5 controller's warm reset.
  *
  * Not here: CIX's RTOS (tasks suspended around the sequence, its tick
- * timer stopped and restarted), the performance streams it suspends and
- * restores (perf_stream_suspend/restore, md_timer_pts/run: not ported),
- * the fans (no fan is configured on the boards this firmware supports; the
- * pads are set as CIX's fan_ctrl_start sets them), the SoC idle switch of
- * CIX's DPM runtime (perf_soc_idle_switch, not ported: off), the MP2845
- * regulators' PSI setting (set_mp2845b_psi7: those regulators are not
- * driven yet), and the log messages.
+ * timer stopped and restarted) and the log messages.  The performance
+ * streams (suspended here, restored by ss_run) and the SoC idle switch
+ * are src/perf's.  The fans (src/fan), the board
+ * services' timers (pm_svc_pts/run, as CIX's md_timer), the MP2845s'
+ * PSI setting (src/pmic.c) and the watchdog (src/dpm/pm_config.c) are
+ * their own files'.
  */
 #include "hsm/hsm.h"
+#include "board/board.h"
+#include "fan/fan.h"
 #include "i2c.h"
 #include "irq.h"
 #include "lcru.h"
@@ -43,12 +44,15 @@
 #include "mbox.h"
 #include "mclp/mclp.h"
 #include "msg/msg.h"
+#include "perf/perf.h"
 #include "plat.h"
 #include "pmic.h"
 #include "rtt/rtt.h"
 #include "s3script/s3script.h"
 #include "soc.h"
 #include "uart.h"
+
+#include <mod_pm_svc.h>
 
 volatile uint32_t stdby_target = STDBY_NONE;
 bool trigger_slpTyp = true;
@@ -100,13 +104,14 @@ static uint64_t str_postpone_at;
 void trigger_STR(void)
 {
 	soc_idle_switch_was_enabled = perf_soc_idle_switch_get_enable();
-	/* CIX: perf_soc_idle_switch_set_enable(false) when it was on */
+	if (soc_idle_switch_was_enabled)
+		(void)perf_soc_idle_switch_set_enable(false);
 	stdby_target = HSM_ST_S3;
 }
 
 void trigger_SD(void)
 {
-	/* CIX: perf_soc_idle_switch_set_enable(false) */
+	(void)perf_soc_idle_switch_set_enable(false);
 	stdby_target = HSM_ST_S5;
 }
 
@@ -365,24 +370,6 @@ static void power_up_dsu_and_bsp(void)
 	(void)soc_pull_register(PPU_CORE(boot_core_id) + PPU_PWSR, 15, PPU_ON, 800000);
 }
 
-/* --- fans (CIX's fan_ctrl_start and fan_iomux_set) ---------------------------- */
-
-/*
- * The fans' PWM and tachometer pads, and aggregator lines 22 and 23 for
- * the tachometers.  CIX then starts the fans its configuration has; none
- * is configured here (the boards' fans are on the EC or not driven yet).
- */
-void fan_ctrl_start(void)
-{
-	static const uint32_t pads[] = { 0x4417014c, 0x44170150, 0x44170144, 0x44170148, 0x44170154,
-					 0x44170158 };
-
-	REG32(AGG_ENABLE(22)) = 0x7fff;
-	REG32(AGG_ENABLE(23)) = 0x7fff;
-	for (unsigned i = 0; i < ARRAY_SIZE(pads); i++)
-		REG32(pads[i]) = (REG32(pads[i]) & ~0x180u) + 0x80;
-}
-
 /* --- states (CIX's ss_*_enter and ss_*_exit) --------------------------------- */
 
 /* CIX's ss_init_exit: going to power-on is a warm reset */
@@ -394,12 +381,15 @@ void ss_init_exit(void)
 /* CIX's ss_run_exit: perf_stream_suspend, md_timer_pts, app_msgSave */
 void ss_run_exit(void)
 {
+	perf_stream_suspend();
+	pm_svc_pts();
 	app_msgSave();
 }
 
-/* CIX's ss_pts_enter: fan_ctrl_suspend (no fan configured) */
+/* CIX's ss_pts_enter: the fans' counters freed */
 void ss_pts_enter(void)
 {
+	fan_ctrl_suspend();
 }
 
 void ss_pts_exit(void)
@@ -439,12 +429,13 @@ void ss_s3_exit(void)
 	lcru_axprot();
 	tlb_ctrl_restore();
 	/* CIX: app_i2c_setup(400 kHz, overwrite_i2c_master | 7, 8 without the masters) */
-	i2c_setup(400000, 7, 8);
+	i2c_setup(400000, 7 | overwrite_i2c_master, 8 & ~overwrite_i2c_master);
 	dpm_edp_restore_voltage();
 	clk_nodes_restore();
 	recover_counter_after_sleep();
 	if (!package_without_ddr())
 		ddr_s3_exit();
+	pmic_resume();				/* set_mp2845b_psi7 on Phecda */
 	irq_restore();
 	fwlog_enable_dram(false, true);
 	REG32(PM_FAST_CHANNEL) = PM_FC_RLOG_ON;
@@ -496,8 +487,8 @@ static void on_sys_pwr_event(uint32_t bits)
 	if (s3script_has_table() && s3script_check_table())
 		(void)s3script_execute_table();
 	power_up_dsu_and_bsp();
-	/* CIX: perf_soc_idle_switch_set_enable(true) if it was on */
-	(void)soc_idle_switch_was_enabled;
+	if (soc_idle_switch_was_enabled)
+		(void)perf_soc_idle_switch_set_enable(true);
 	fan_ctrl_start();
 }
 
@@ -561,7 +552,7 @@ bool pm_idle(void)
 		lcru_core_clock(1);		/* 400 MHz */
 		uart_init();			/* dbguart_init */
 		CLK_ASSERT(pll_ctrl_get_state((void *)0xa0062100), 0xf19f0295);	/* detect_clk */
-		wdt_off();			/* wdt_restore: no timeout set */
+		wdt_restore();
 		sensor_hub_wakeup_set(false);
 		if (audio_div_workaround()) {
 			REG32(PM_MAGIC) = PM_MAGIC_SFH_STOP;

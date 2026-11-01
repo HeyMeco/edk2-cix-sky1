@@ -20,12 +20,12 @@ location lists. Built with XtensaTools 14.10 (`xt-clang` 10.0.1, RI-2022.10).
 
 | Part | Code | Functions | Source |
 |---|---|---|---|
-| CIX `Source/common` (DPM, clock tree and PLLs, CI-700/NI-700 PMU, I2C, PMIC, fans, PVT, mailbox, S3 script, logging) | 71 KB | 876 | to write |
-| CIX `Source/projects/sky1` (V/F fuses and tables, power model, PLL policy, HSM, messages, debug CLI 14 KB) | 46 KB | 377 | to write (no CLI) |
-| SCP-firmware modules, upstream (SCMI, perf, clock, power domain, PPU v1, DVFS, sensors, PSU) | 32 KB | 360 | public (BSD-3-Clause), CIX changes to find |
-| SCP-firmware CIX modules (`sky1soc_perf`, timer, `clock_lite`, `clkpll`, RCSU, PMIC, `locked_perf`) | 8 KB | 95 | to write |
-| SCP-firmware framework and sky1 product configuration | 11 KB | 228 | public framework; configuration to write |
-| FreeRTOS kernel, Xtensa port, CLI | 11 KB | 175 | public (MIT) |
+| CIX `Source/common` (DPM, clock tree and PLLs, CI-700/NI-700 PMU, I2C, PMIC, fans, PVT, mailbox, S3 script, logging) | 71 KB | 876 | translated, apart from what only the CLI reaches and what is replaced |
+| CIX `Source/projects/sky1` (V/F fuses and tables, power model, PLL policy, HSM, messages, debug CLI 14 KB) | 46 KB | 377 | translated (no CLI) |
+| SCP-firmware modules, upstream (SCMI, perf, clock, power domain, PPU v1, DVFS, sensors, PSU) | 32 KB | 360 | public (BSD-3-Clause), with CIX's changes (`scp/module/*/README`) |
+| SCP-firmware CIX modules (`sky1soc_perf`, timer, `clock_lite`, `clkpll`, RCSU, PMIC, `locked_perf`) | 8 KB | 95 | translated (`clock_lite` by upstream `clock`) |
+| SCP-firmware framework and sky1 product configuration | 11 KB | 228 | public framework; CIX's configuration (`scp/config`) |
+| FreeRTOS kernel, Xtensa port, CLI | 11 KB | 175 | replaced: no RTOS (SCP-firmware events and alarms) |
 | Cadence runtime (`xclib`, libgcc, HAL, XTOS, overlay manager) | 18 KB | 121 | replaced (own libc, GCC's libgcc) |
 
 Twenty code overlays (32 KB, paged into one window at `0x2002f224`) hold
@@ -176,9 +176,31 @@ What runs, in CIX's order:
    message ports on the mailboxes ([`src/msg`](src/msg)), the PCC tables
    for ACPI CPPC ([`src/pcc`](src/pcc)), GPIO.
 4. SCP-firmware's modules ([`scp/`](scp)): initialised, bound and
-   started, then CIX's `pm_ready` ends with `0x5a5c`, which tells the SE to
-   start the AP, and the PM serves interrupts and events, sleeping in
-   WAITI.
+   started, then CIX's `pm_ready` sends `0x5a5c`, which tells the SE to
+   start the AP, and starts the run-time services: the DPM, the
+   performance streams, fans, PVT polling, board sensors, the watchdog;
+   then the PM serves interrupts, alarms and events, sleeping in WAITI.
+
+At run time ([`src/dpm`](src/dpm), [`src/perf`](src/perf), CIX's
+`dpm_*.c`, `cfg_*.c`, `sky1_pwr_model.c`, `act_streams.c`, the NI-700 and
+CI-700 counters): every 1 ms the performance streams are sampled (AMU,
+DDR, NPU, interconnect counters; a 50 µs fine tick on CCOMPARE0) and CIX's
+DPM iteration runs: the dashboard, power from the streams and CIX's power
+model (in double precision where CIX's is: `src/dpm/dfloat.c`, software
+IEEE double, bit-exact), the expected OPPs, the skin and die temperature
+arbiters (PID), the OPP limits, and their export to `scmi_perf` (TDP caps,
+fast channels) and the AP's data board. Board services
+([`src/board`](src/board), [`src/fan`](src/fan), CIX's `dev_fan.c`,
+`dev_pvt.c`, `app_pvt.c`, `config_sensor.c`, `intr_mgmt.c`, `dev_gpio.c`,
+`dpdpu.c`, `i2c_slave_mode.c`, `dev_pmic.c` and its MP5475, MP2845 and
+AU4683 drivers, `pwr_rail_bind.c`, `pm_config.c`) do what the board's PM
+configuration (from the BIOS) asks: fans on curves from the PVT and board
+sensors (TMP75s or EC registers), PVT polling and thresholds, PROCHOT
+throttling, the watchdog, the EC's reads over the I2C slave on bus 3, DDR
+DFS only when the display allows it, custom rail layouts (rails sharing a
+buck), the heartbeat. CIX's FreeRTOS tasks and its timer, event and job
+framework are replaced by SCP-firmware alarms and events (`dpm` and
+`pm_svc` modules) with CIX's periods.
 
 The system power sequence ([`src/hsm`](src/hsm), CIX's `subsys_hsm.c` and
 `pwr_hsm.c`) runs CIX's state machine: TF-A's suspend (PM message 0x42
@@ -197,8 +219,10 @@ by a route field in the header; [`src/msg`](src/msg), CIX's `md_msg.c`,
 `app_msginit.c` and handlers) are answered on mailboxes 0, 2, 4 and 6:
 firmware version, platform information, the S3 script's registration,
 PMIC versions and events, core online/offline and the boot core, locked
-performance, SMN register access, DSU DVFS mode, EDP voltages, fans (no
-fan configured yet: not supported).
+performance, SMN register access, performance streams, DSU DVFS mode,
+EDP voltages, fans (count, status, mode). CIX never sends the AP a PMIC
+error notification (its PM-to-AP send is empty and the report is only
+built from its CLI); the AP reads PMIC faults with message 0x400.
 
 SCP-firmware is built as its CMake would build it (the module index and
 list are generated from `SCP_MODULES` in the Makefile) with
@@ -225,6 +249,8 @@ drivers that hand an interrupt on). Modules, upstream and ours:
 | `pmic` | ours, CIX's `extmodules/pmic` | the EDP rails through the DPM (`dpm_edp_set_voltage`) |
 | `sky1soc_perf` | ours, CIX's `extmodules/plugin_sky1soc` | plugin: CPU clusters and DSU stepped together within 200 mV, TDP caps |
 | `locked_perf` | ours, CIX's `extmodules/plugin_lockedperf` | plugin: levels and limits pinned by the platform |
+| `dpm` | ours | the DPM's 1 ms tick (alarm), its work (software interrupt 33), the counters' interrupts |
+| `pm_svc` | ours | CIX's timer list and jobs for the board services, on one alarm |
 
 The configurations in [`scp/config`](scp/config) are CIX's, read from its
 image with [`scripts/open/dwarf_dump.py`](../../scripts/open/dwarf_dump.py)
@@ -253,15 +279,34 @@ byte; three pages differ: the version (ours), and the RAM log (CIX's text
 records, but CIX's line buffer fills early in boot and is never flushed,
 so CIX's log holds bytes from past it; ours holds its messages).
 
-With `--power` (about a minute more) it then sends the PM messages UEFI,
-Linux and TF-A send (20 answers, the same), runs TF-A's suspend (the same
-43 registers, both asleep), the SE's wake (16641 of 16657 registers the
-same: the 16 others are performance-stream counters CIX's DPM runtime sets
-up again, not ported; the 8 I2C transfers restoring the rails the same),
-SCMI after resume, shutdown and warm reset (the same). What pm_emu models
-of the S5 controller, the power policy units, the DDR controllers and the
-SE's side of suspend is in its source; it is modelled on what CIX's image
-waits for, not known from documentation.
+With `--power` it then sends the PM messages UEFI, Linux and TF-A send,
+runs TF-A's suspend, the SE's wake, SCMI after resume, shutdown and warm
+reset; with `--services` the run-time services after `pm_ready` (fans at
+two temperatures, Linux's fan modes, a PVT threshold, PROCHOT, a PMIC
+fault, a DDR DFS check); with `--runtime MS` the DPM and streams for MS
+simulated milliseconds, a high level asked on big0, then the die at 100 C
+with PROCHOT (pm_emu fast-forwards time while the PM sleeps). `--board
+o6|o6n|ms-r1|opi6|opi6plus|PATH` loads a board's PM configuration into
+both images, `--set NAME=VALUE` changes one of its words. Every phase is
+compared register by register, with the I2C transfers, the SE's and the
+S5 controller's events, the answers and, for the run time, the DPM's
+state and the AP's data board:
+
+```sh
+python3 scripts/open/test_pm.py OURS.elf --scmi --power --services --runtime 100 [--board o6n]
+```
+
+All of it is the same as CIX's, with no board configuration and with each
+of the five boards' (O6, O6N, MS-R1, Orange Pi 6 with its MP2845 and
+shared bucks, Orange Pi 6 Plus), apart from the version and RAM log pages
+and, on the MS-R1, where its 200 ms board-sensor read falls among the
+SCMI questions (paced by instructions, not time; the transfers are the
+same). A run with every phase takes several minutes (CIX's reference is
+cached in `out/test_pm-cache`). What pm_emu models of devices (the S5
+controller, power policy units, DDR controllers, the SE's side of
+suspend, PMICs and TMP75s, tachometers, the watchdog's lock) is in its
+source: modelled on what CIX's image does with them, not known from
+documentation.
 
 [`scripts/open/test_vf.py`](../../scripts/open/test_vf.py) checks the V/F
 tables beyond the emulator's blank fuses: it gives both images the same
@@ -273,14 +318,24 @@ domains' OPPs, the table selectors and the I2C transfers:
 python3 scripts/open/test_vf.py OURS.elf --strap 0x000c0000:0 --fuses 7 --phase 4
 ```
 
-The tables match in every case tried. What is not there yet: the custom
-rail layouts a BIOS configuration can give (with one, CIX also reads the
-third PMIC's status), regulators other than the MP5475 (Phecda's and
-Alcor's MP2845s are not driven), the DPM runtime (power model, TDP and EDP
-limits, CIX's `dpm_opp_run`: [`scp/src/scp_dpm_stubs.c`](scp/src/scp_dpm_stubs.c)
-has what the performance modules call of it, as CIX's firmware has it at
-boot) and CIX's PMIC error notification (its protocol 0x81, from the PM
-to the AP).
+The tables match in every case tried.
+
+Not ported, on purpose: the debug CLI and what only it reaches (CI-700
+event collections and DFD trace, GPIO interrupt helpers, forced operating
+points), logging and dumps, CIX's interrupt-driven I2C path (the polled
+driver moves the same bytes). Where the open firmware differs from CIX's
+on purpose: the heartbeat timer is created once (CIX's adds another on
+every resume), and the services start 1 ms after the handshake (CIX's
+from its event worker once it first idles). What the emulator cannot
+show: real fans (pulses per turn, polarity, stall), the EC's reads over
+the I2C slave, MP2845/AU4683 read-back formats, the watchdog's count. CIX
+never unmasks interrupt lines 28-30 (PVT alarms, PROCHOT), whose reset
+masks are unknown; the test unmasks them to exercise those paths.
+
+RAM: DRAM0 (64 KB: read-only data, initialised data) has about 2 KB left;
+the DPM's and board's initialised tables are in DRAM1 (`.dram1.data`, as
+in CIX's image), and the heap leaves 53 KB beyond what DDR retention
+borrows during suspend (`pm.ld` checks it).
 
 ### What CIX's image does before it idles
 
@@ -319,9 +374,11 @@ python3 scripts/open/csupm_coverage.py OURS.elf [--units]
 | SCP-firmware framework and modules: transport, SCMI base, power domains, system power, sensors, permissions | done |
 | Clock tree and PLLs, SCMI clocks | done |
 | V/F tables from the fuses, boot DVFS levels (`test_vf.py`) | done |
-| DVFS: PMIC, PSU, DVFS, performance plugins, SCMI perf | done; DPM runtime (power model, TDP/EDP limits) to do |
+| DVFS: PMIC, PSU, DVFS, performance plugins, SCMI perf | done |
+| DPM runtime: performance streams, power model, arbiters, TDP/EDP limits (`--runtime`) | done |
+| Board services: fans, PVT, board sensors, PROCHOT, watchdog, MP2845/AU4683, rail layouts, I2C slave, DDR DFS, with the boards' PM configurations (`--services`, `--board`) | done |
 | RTT, RAM log, version, PCC tables | done |
-| System power sequence (shutdown, reset, suspend/resume, DDR retention, S3 script), PM messages | done; fans, PMIC error notification to do |
-| CIX `Source/common` and `Source/projects/sky1`, without the debug CLI | in progress: 42% and 70% of CIX's code (`csupm_coverage.py --units` lists what is left: DPM runtime, performance streams, fans; CIX's event, timer and job framework counts as left but is replaced by SCP-firmware's events) |
-| Our image passes `test_pm.py` | boot registers, I2C, SCMI and PM-message answers pass; left: 16 registers on resume and one after a PM message (both CIX's DPM runtime); the version and RAM log pages differ by design |
+| System power sequence (shutdown, reset, suspend/resume, DDR retention, S3 script), PM messages | done |
+| CIX `Source/common` and `Source/projects/sky1`, without the debug CLI | 72% and 96% of CIX's code; what is left (`csupm_coverage.py --units`) is replaced (FreeRTOS, CIX's timer/event/job framework, `ipc_arbiter`), CLI-only, or CIX's interrupt-driven I2C path |
+| Our image passes `test_pm.py` | done: every phase, six configurations; the version and RAM log pages differ by design |
 | `build.sh --open` puts it in bootloader1 | to do |

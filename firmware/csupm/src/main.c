@@ -5,7 +5,9 @@
  * modules, the SE handshake, then SCP-firmware's event loop.
  */
 #include "arch_scp.h"
+#include "board/board.h"
 #include "clk/clk.h"
+#include "dpm/dpm_rt.h"
 #include "dpm/dvfs_cfg.h"
 #include "hsm/hsm.h"
 #include "i2c.h"
@@ -18,10 +20,12 @@
 #include "pcc/pcc.h"
 #include "pmic.h"
 #include "plat.h"
-#include "pmu.h"
+#include "perf/perf.h"
 #include "pvt.h"
 #include "rtt/rtt.h"
 #include "uart.h"
+
+#include <mod_pm_svc.h>
 
 #define I2C_HZ			400000u
 /* I2C 0-2 are masters (PMICs), 3 a slave, on the boards CIX supports */
@@ -43,10 +47,9 @@ static void se_handshake_up(void)
 /*
  * CIX's pm_ready: scratch words cleared, the audio block's workaround
  * (a warm reset when it fails, on silicon), then ready for the AP (the
- * handshake word was cleared by app_msgInit).  CIX then starts its DPM,
- * performance streams, PVT polling and fans (fan_ctrl_start: no fan is
- * configured; only the pads would be set, which src/hsm does after
- * resume).
+ * handshake word was cleared by app_msgInit).  CIX then starts its DPM
+ * and the performance streams it feeds on, then the board's services
+ * (main below).
  */
 static void se_handshake_ready(void)
 {
@@ -106,20 +109,22 @@ void ss_init(void)
 	g_enable_pll_policy = false;
 	clk_nodes_init();
 	g_enable_pll_policy = policy;
-	pmu_reset_all();			/* perf_stream_init */
+	perf_stream_init();
 	apply_config_dvfs_sustained_level();	/* DVFS domains at their boot OPP */
 	mclp_hwif_init();
 	for (uint32_t ch = 0; ch < MCLP_CHANNELS; ch++) {
 		if (g_chEnMask & BIT(ch))
 			mclp_hwif_power_on_reset(ch);
 	}
+	(void)dpm_init();			/* the DPM task's initProc */
 }
 
 /* CIX's ss_run_enter: the services start */
 void ss_run(void)
 {
 	pm_ss_state = HSM_ST_RUN;
-	pmu_reset_all();			/* perf_stream_restore */
+	sky1_pwr_databoard_init();
+	perf_stream_restore();
 	pvt_init();				/* sky1_pvt_init */
 	dev_cnts_init();
 	dev_cnts_set_instance(0xa0040000, 0, 25000000);
@@ -129,7 +134,9 @@ void ss_run(void)
 	app_msgInit();
 	pcc_init();				/* at the end of app_msgInit */
 	app_msgRestore();			/* after suspend */
+	pm_svc_run();				/* the board services' timers again */
 	dev_gpio_init();
+	board_services_run();			/* PROCHOT's timer, EC handshake, heartbeat */
 	ss_run_entered();			/* CIX's resumeEvt, pm_ready's event */
 }
 
@@ -152,13 +159,14 @@ int main(void)
 	lcru_axprot();
 	wdt_off();
 	lcru_mbox_reset(0x3ff);
+	do_pm_config();				/* the BIOS's PM configuration */
 	uart_init();
 	uart_puts("CSU_PM: open firmware\n");
-	dpm_por_fuses();			/* BIOS configuration, OPN, V/F fuses */
+	dpm_por_fuses();			/* OPN, V/F fuses */
 	plat_init();
-	i2c_setup(I2C_HZ, I2C_MASTERS, I2C_SLAVES);
-	pmic_init();
-	pmic_check();
+	/* CIX's app_i2c_setup: a board sensor on the slave's bus makes it a master */
+	i2c_setup(I2C_HZ, I2C_MASTERS | overwrite_i2c_master, I2C_SLAVES & ~overwrite_i2c_master);
+	pmic_init();				/* pmic_profile_setup */
 	/* CIX tells the SE it runs (0x5c5a) just before this */
 	dpm_por_vf_tables();			/* builtin_perf_profile_setup, cpu_harvest_setup */
 	hsm_init();
@@ -168,5 +176,8 @@ int main(void)
 	ss_run();
 	scp_init();				/* SCMI on the mailboxes */
 	se_handshake_ready();
+	sky1_pmu_fixed_polling_enable();	/* pm_ready: the DPM's streams */
+	dpm_enable();
+	board_services_start();			/* pm_ready: NoC idle, fans, PVT polling */
 	scp_run();
 }

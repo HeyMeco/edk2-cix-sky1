@@ -59,6 +59,12 @@ SECTIONS
 		. = ALIGN(4);
 	} > dram0
 
+	/* initialised data placed in DRAM1 (CIX's .dram1.data: the DPM's tables) */
+	.dram1.data : {
+		*(.dram1.data .dram1.data.*)
+		. = ALIGN(4);
+	} > dram1
+
 	.bss (NOLOAD) : {
 		_bss_start = .;
 		*(.bss .bss.* COMMON)

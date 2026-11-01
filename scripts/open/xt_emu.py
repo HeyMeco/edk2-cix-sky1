@@ -139,6 +139,7 @@ class Xtensa:
         self.stops = {}
         self.stubs = {}
         self.stop_write = None
+        self.until = None                 # CCOUNT a WAITI may not sleep past (pm_emu.run_for)
         self.waiting = False
         self.insns = 0
         self.symbols = []
@@ -488,6 +489,13 @@ class Xtensa:
                 best = d
         if best is None:
             return False
+        if self.until is not None and self.ccount + best > self.until:
+            # asleep at the time limit: stay in WAITI, stop the run there
+            d = max(self.until - self.ccount, 0)
+            self.ccount += d
+            if hasattr(self.bus, "advance"):
+                self.bus.advance(self, d)
+            raise Stop("until")
         self.ccount += best
         if hasattr(self.bus, "advance"):
             self.bus.advance(self, best)
@@ -1406,7 +1414,11 @@ def dfp0(w, op2, r, s, t):
         if t == 7:
             def div0(c, pc, n):
                 b = D(c, s)
-                c.div = {"b": b, "breg": s, "a": None}
+                # CIX's __divdf3 takes a second reciprocal of the divisor
+                # after it has seen the dividend (NEXP01.D): the same
+                # division goes on, the dividend is kept
+                if not (c.div and c.div["b"] == b and c.div["breg"] == s):
+                    c.div = {"b": b, "breg": s, "a": None}
                 c.fr[r] = d2u(1.0 / b) if b else 0x7ff0000000000000
             return _fop(div0, "div0.d")
         if t == 11:
