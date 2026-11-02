@@ -1,12 +1,15 @@
 # SPDX-License-Identifier: BSD-2-Clause-Patent
 # Open SE firmware for CIX Sky1 (replaces bootloader1 image "se").
-#   make [CIX_ELF=path/to/cix/se_fw.elf | DDR_ISLAND=path/to/ddr_island.S] [O=outdir]
+#   make [CIX_ELF=path/to/cix/se_fw.elf [DDR=cix] | DDR_ISLAND=path/to/ddr_island.S] [O=outdir]
 #        [CROSS_COMPILE=arm-none-eabi-] [MBEDTLS_DIR=../../mbedtls] [SE_FW_VERSION=beta2.0-<id>]
 # The DDR driver is ported to ddr/*.c a function at a time.  What is not
 # ported yet comes from CIX's debug build: with CIX_ELF, the DDR island
 # (scripts/open/se_ddr_island.py) is generated from it without every
 # function and variable the ddr/*.c objects define ($(O)/ddr/island.list:
 # what is left).  DDR_ISLAND links a pre-generated island as it is.
+# DDR=cix (with CIX_ELF) leaves out every ddr/*.c and links CIX's whole DDR
+# driver: the rest of the SE from source with CIX's memory training, to tell
+# a fault in the DDR port from one elsewhere.
 
 CROSS_COMPILE	?= arm-none-eabi-
 MBEDTLS_DIR	?= ../../mbedtls
@@ -26,7 +29,16 @@ SRCS	:= $(sort $(wildcard arch/*.c driver/*.c hal/*.c hal/*/*.c framework/*.c \
 	   service/*.c platform/sky1/*.c library/libc/*.c library/crypto/*.c))
 MBEDTLS_SRCS := sha256 sha512 md hkdf rsa rsa_internal bignum oid asn1parse asn1write \
 	   platform platform_util constant_time ecp ecp_curves
+ifeq ($(DDR),cix)
+ifeq ($(CIX_ELF),)
+$(error DDR=cix needs CIX_ELF=path/to/cix/se_fw.elf)
+endif
+DDR_SRCS :=
+else ifneq ($(DDR),)
+$(error DDR=$(DDR): only DDR=cix is known)
+else
 DDR_SRCS := $(sort $(wildcard ddr/*.c))
+endif
 DDR_OBJS := $(DDR_SRCS:%.c=$(O)/%.o)
 OBJS	:= $(SRCS:%.c=$(O)/%.o) $(DDR_OBJS) $(MBEDTLS_SRCS:%=$(O)/mbedtls/%.o)
 PYTHON	?= python3
@@ -58,9 +70,9 @@ $(O)/mbedtls/%.o: $(MBEDTLS_DIR)/library/%.c library/crypto/mbedtls_config.h
 ifneq ($(CIX_ELF),)
 # the island depends on which ddr/*.c there are, not only on their objects
 DDR_LIST := $(O)/ddr/objs.list
-ifneq ($(file < $(DDR_LIST)),$(DDR_OBJS))
+ifneq ($(strip $(file < $(DDR_LIST))),$(strip objs: $(DDR_OBJS)))
 $(shell mkdir -p $(O)/ddr)
-$(file > $(DDR_LIST),$(DDR_OBJS))
+$(file > $(DDR_LIST),objs: $(DDR_OBJS))
 endif
 $(O)/ddr/ddr_island.S: $(CIX_ELF) $(DDR_OBJS) $(DDR_LIST) $(ISLAND_PY)
 	@mkdir -p $(dir $@)

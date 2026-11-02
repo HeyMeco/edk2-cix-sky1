@@ -73,7 +73,10 @@ real BIST and eye-scan results, the interrupt masks' reset values.
 `scripts/open/se_ddr_island.py` (CIX's driver as relinkable assembly; it
 reassembles to CIX's 43 876 code bytes exactly) built the firmware while
 the port was under way and is kept for tests: `make CIX_ELF=...` links
-CIX's code for every function `ddr/` does not define.
+CIX's code for every function `ddr/` does not define, and
+`make DDR=cix CIX_ELF=...` leaves `ddr/` out and links CIX's whole driver
+(`./build.sh <board> --open --cix-ddr`: on hardware, tells a fault in the
+port from one elsewhere in the SE).
 
 ## Status
 
