@@ -10,8 +10,8 @@ when the open image has a function of the same name (the port keeps CIX's
 names), or when the open sources name it as what they translate (`CIX's
 foo`, or the name itself in code or a comment).  It is a measure of the
 port, not of equivalence: test_pm.py checks behaviour.  Code CIX's image
-has that the open firmware replaces rather than translates (FreeRTOS, the
-Cadence runtime) and the debug CLI, which is not ported, are reported
+has that the open firmware replaces rather than translates (FreeRTOS's
+port, by our port of upstream FreeRTOS; the Cadence runtime) and the debug CLI, which is not ported, are reported
 apart.
 
 --units lists, per CIX compile unit, the code not covered (largest first);
@@ -39,7 +39,7 @@ GROUPS = (
     ("scp", "SCP-firmware framework and modules", "port"),
     ("sky1", "CIX Source/projects/sky1", "port"),
     ("common", "CIX Source/common", "port"),
-    ("runtime", "FreeRTOS, Cadence runtime", "replaced: no RTOS, own libc"),
+    ("runtime", "FreeRTOS, Cadence runtime", "upstream FreeRTOS, own port and libc"),
     ("cli", "debug CLI", "not ported"),
 )
 
