@@ -5,7 +5,9 @@ and whether that source can replace the binary. Based on the CIX
 `edk2-non-osi` 2026Q3 binaries and the vendor images in `vendor/orangepi/`
 (analysis of 2026-10-26). Comparisons with public trees are by strings
 (format strings, `__FILE__` paths, assertion text): identical strings do not
-prove identical code, and nothing here has been built or boot-tested.
+prove identical code. The "Can be rebuilt" column has since been brought up
+to date with what this repository builds; none of the firmware built from
+source has been boot-tested on hardware yet.
 
 ## Summary
 
@@ -19,8 +21,8 @@ prove identical code, and nothing here has been built or boot-tested.
 | `memory_config.bin` | DRAM configuration | `mem_config` generator | Radxa/Minisforum: built; Orange Pi: not yet decoded |
 | `trustzone_config.bin` | SPE, NOR secure storage and bootloader3 recovery settings for BL2, BL31 and OP-TEE | `trustzone_config` generator | yes; the CIX stock file on every board ([open firmware](open-firmware.md#trustzone-configuration)) |
 | `se_config.bin` | `CIXSECONFIG` header, otherwise zero | format known from `SeConfigUpdateDxe` | yes |
-| `sfh_fw.bin` | 17 KB Cortex-M image (vectors at `0x2007fff0`, mailbox) | none | no counterpart; small enough to clean-room |
-| `ec_fw.bin` | ITE 8051 EC firmware (`ITE EC-V00.1`, `EC V1.13`) | none | no |
+| `sfh_fw.bin` | 17 KB Cortex-M image (vectors at `0x2007fff0`, mailbox) | none | **built** for O6/O6N with `--open`: [firmware/sfh](../firmware/sfh), 4 KB, same hardware writes as CIX's in an emulator ([open firmware](open-firmware.md#sensor-fusion-hub)) |
+| `ec_fw.bin` | ITE 8051 EC firmware (`ITE EC-V00.1`, `EC V1.13`) | none | Orion O6: **written from scratch** ([firmware/ec](../firmware/ec), `--open-ec`), compared with Radxa's V1.07 in an emulator ([open firmware](open-firmware.md#ec-firmware-orion-o6)); the other boards' EC images: no |
 | `Silicon/CIX/Sky1/Drivers/*.efi`, `Platform/CIX/Sky1/Library/*.lib` | CIX DXE drivers and libraries (CIX Jenkins build paths in the debug directory) | none, except `NorFlashStmmRuntimeDxe`, `I2cDxe`, `SpiDxe` in `edk2-platforms` | small drivers could be clean-roomed; PCIe, TypeC PHY, DPU, CDNSP are large |
 | `fiptool`, `cert_create` | host tools | TF-A `tools/` | built from `arm-trusted-firmware` for `--open` |
 | `cix_package_tool` | host tool | binary only | **replaced** by `scripts/open/cixfw.py pack` (byte-identical) |
@@ -288,6 +290,12 @@ All the real images are ITE (`ITE EC-V00.1`) builds of the same CIX EC code
 base. Where no EC is used, CSU_PM runs the fans from `pm_config` (O6N, MS-R1,
 Orange Pi 6); where the EC runs them, `pm_config` has no fan tables (O6,
 Orange Pi 6 Plus).
+
+For the Orion O6, [firmware/ec](../firmware/ec) is an open replacement for
+Radxa's V1.07, written from scratch for the IT5570E; `--open-ec` puts it in
+the image and UEFI's platform reset mirrors it into the EC
+([open firmware](open-firmware.md#ec-firmware-orion-o6)). It has not run
+on hardware yet.
 
 The Orange Pi 6 vendor UEFI removed every EC call (power rails, AC-loss
 policy, RTC wake, EC defaults; see `OPI6/Library/PlatformEnvHookLib`), but its

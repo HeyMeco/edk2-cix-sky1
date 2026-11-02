@@ -40,19 +40,19 @@ image each stage ships (O6, 2026Q3; the boot ROM is in the chip and cannot
 be replaced, so it is not counted):
 
 ```
-pre-BL33 firmware                               1369 KB   ████████████████████ 100% open
+pre-BL33 firmware                               1379 KB   ████████████████████ 100% open
 ├── bootloader1
 │   ├── SE firmware (Cortex-M33)                 141 KB   ████████████████████ 100% open (CIX's: 334 KB)
 │   │   ├── start-up, eFuse, flash, crypto, key manager,
 │   │   │   SoC bring-up, CI-700, secure boot, services        open (firmware/se)
 │   │   ├── DDR driver (DRAM training)                  open (firmware/se/ddr)
 │   │   └── PVT table (V/F selection data)              CIX's data as generated source
-│   ├── CSU_PM (Xtensa LX7)                      196 KB   ████████████████████ 100% open (CIX's: 327 KB)
+│   ├── CSU_PM (Xtensa LX7)                      206 KB   ████████████████████ 100% open (CIX's: 327 KB)
 │   │   └── by CIX's code (198 KB; 79% translated, the rest replaced or CLI-only)
 │   │       ├── SCP-firmware framework, modules   51 KB   ████████████████░░░░  80% translated
 │   │       ├── CIX Source/projects/sky1          30 KB   ███████████████████░  96% translated
 │   │       ├── CIX Source/common                 71 KB   ██████████████░░░░░░  72% translated
-│   │       ├── FreeRTOS, Cadence runtime         29 KB   replaced: no RTOS, own libc
+│   │       ├── FreeRTOS, Cadence runtime         29 KB   upstream FreeRTOS, own port and libc
 │   │       └── debug CLI                         16 KB   not ported
 │   └── TF-A BL2                                  92 KB   ████████████████████ 100% open
 ├── bootloader2
@@ -60,7 +60,7 @@ pre-BL33 firmware                               1369 KB   ███████�
 │   └── OP-TEE with StandaloneMM                 842 KB   ████████████████████ 100% open
 └── sensor fusion hub firmware (Cortex-M)          4 KB   ████████████████████ 100% open
 
-open    1369 KB  SE (141), CSU_PM (196), BL2 (92), BL31 (94), OP-TEE + StMM (842), SFH (4)
+open    1379 KB  SE (141), CSU_PM (206), BL2 (92), BL31 (94), OP-TEE + StMM (842), SFH (4)
 closed     0 KB  (the boot ROM, in the chip, is not counted)
 ```
 
@@ -78,8 +78,9 @@ lists what is left per CIX source file). It counts translation, not
 equivalence; `test_pm.py` checks behaviour. What is left is mostly code
 the open firmware replaces rather than translates (CIX's timer, event and
 job framework and IPC arbiter, by SCP-firmware's events, alarms and
-transport; its interrupt-driven I2C path, by a polled driver moving the
-same bytes) or that only CIX's debug CLI reaches (CI-700 event
+transport; FreeRTOS's Xtensa port and CIX's I2C state machine for tasks,
+by our port of upstream FreeRTOS and an I2C driver that waits for the same
+interrupts with CIX's register sequence) or that only CIX's debug CLI reaches (CI-700 event
 collections, the SCMI decoder). The tools
 around them (bootloader1 container, FIP certificates, SPI packer) are
 open. Data CIX generates (`memory_config`, `pm_config`,
@@ -146,7 +147,10 @@ built from [firmware/ec](../firmware/ec) (SDCC, in the container) at
    SHA-256 of that key's public half, built into BL2.
 6. SE firmware: `make -C firmware/se` builds `se_fw.bin` (arm-none-eabi
    GCC, Mbed TLS), DDR driver included; the build no longer needs CIX's
-   debug build. `--vendor-se` skips this.
+   debug build. `--vendor-se` skips this. `--cix-ddr` builds it with CIX's
+   DDR driver relinked unchanged from their debug build
+   (`make DDR=cix CIX_ELF=…`, fetched by `scripts/open/cix_debug.py`) in
+   place of `firmware/se/ddr`; the image is `…_open_cixddr.bin`.
 7. CSU_PM: `make -C firmware/csupm all check` (Espressif's Xtensa GCC with
    the pm_core_v1 description, every instruction checked against the
    core's) builds `csupm.xbin`, the XBIN image the SE loads.
@@ -269,9 +273,10 @@ Left out, debug or unused:
   register dumps, and its BIST pass/fail arrays (only printed; the BIST
   runs are kept).
 * CSU_PM ([below](#csu_pm-differences)): the debug CLI and what only it reaches;
-  CIX's code overlays; FreeRTOS and CIX's timer, event and job framework
-  (SCP-firmware events and alarms instead, with CIX's periods); CIX's
-  interrupt-driven I2C path (a polled driver moving the same bytes).
+  CIX's code overlays; CIX's timer, event and job framework (SCP-firmware
+  events and alarms instead, with CIX's periods, under upstream FreeRTOS
+  tasks); CIX's I2C state machine for tasks (the same interrupts and
+  register sequence, with time-outs and bus recovery).
 * BL2: bootloader3 backup recovery (no board's layout has it). BL31: the
   uncalled flash write code. Both: CIX's extra POST codes.
 
@@ -295,7 +300,7 @@ Not functional:
 * versions: the PM reports its build version and commit (CIX's:
   `00.12.001`), the SE `beta2.0-<version>`;
 * images built with GCC and Mbed TLS rather than CIX's toolchains and
-  crypto library, and smaller (SE 141 KB, CIX's 334 KB; CSU_PM 196 KB,
+  crypto library, and smaller (SE 141 KB, CIX's 334 KB; CSU_PM 206 KB,
   CIX's 327 KB);
 * CSU_PM's RAM log holds its messages (CIX's line buffer is never flushed,
   so its log holds stray bytes);
@@ -414,11 +419,18 @@ Written from CIX's debug build (`csupm_sky1` 00.12.001) and checked with
 * No debug CLI, and nothing only it reaches: CI-700 event collections, the
   DFD trace, GPIO interrupt helpers, forced operating points; no log
   dumps.
-* No RTOS: CIX's FreeRTOS tasks and its timer, event and job framework
-  become SCP-firmware alarms and events (`dpm` and `pm_svc` modules) with
-  CIX's periods and order. CIX's 32 KB of code overlays are not needed.
-* I2C: CIX's interrupt-driven transfer path is a polled driver; the bytes
-  on the bus are the same.
+* Tasks: upstream FreeRTOS (V11.1.0, submodule) with our Xtensa port,
+  co-operative: SCP-firmware's loop, a PMIC worker, a board-sensor worker
+  and idle. CIX's timer, event and job framework becomes SCP-firmware
+  alarms and events (`dpm` and `pm_svc` modules) with CIX's periods and
+  order. CIX's 32 KB of code overlays are not needed.
+* I2C: the bytes on the bus are CIX's. A transfer gives up after 10 ms
+  (CIX's waits 600 ms), a time-out or lost arbitration resets the
+  controller (CIX's has no recovery), and a bus that fails three times in
+  a row backs off from 100 ms to 2 s. CIX's PMIC voltage write retries for
+  ever on a dead bus; ours stops after three rounds, and a failed voltage
+  write raises no frequency (`sky1soc_perf`, DVFS, `dpm_edp_set_voltage`;
+  [details](../firmware/csupm/README.md#tasks-and-i2c)).
 * The run-time services (fans, PVT polling, board sensors, watchdog) start
   1 ms after the ready handshake; CIX's start from its event worker once
   it first idles.
@@ -566,7 +578,7 @@ SE has not been boot-tested on hardware.
 
 CSU_PM (`csupm_sky1`, 00.12.001, in the same repository, with full DWARF)
 is Xtensa LX7 (core `pm_core_v1`, Cadence XtensaTools 14.10 clang):
-FreeRTOS, Arm SCP-firmware (public) and about 100 KB of CIX code (clock
+FreeRTOS, Arm SCP-firmware (both public) and about 100 KB of CIX code (clock
 tree and PLLs, V/F tables and DVFS, DPM, PMICs, DDR low power, system power
 states, CI-700/NI-700 counters, messages, a debug CLI).
 [firmware/csupm](../firmware/csupm) rebuilds it: the core has no user TIE,
@@ -578,8 +590,9 @@ decodes the core's FLIX bundles, `xt_emu.py` interprets the core and
 interrupts, the SE's side, S5 and DDR controllers as CIX's image expects
 them).
 
-The open firmware is SCP-firmware v2.11.0 (submodule) with CIX's changes
-to its modules, CIX's own modules and CIX's sources translated function by
+The open firmware is SCP-firmware v2.11.0 and FreeRTOS-Kernel V11.1.0
+(submodules, FreeRTOS with our co-operative Xtensa port) with CIX's changes
+to SCP-firmware's modules, CIX's own modules and CIX's sources translated function by
 function from the debug build. In the emulator, against CIX's image
 ([test_pm.py](../scripts/open/test_pm.py)):
 
@@ -672,7 +685,8 @@ firmware's 3E19 does that too).
    persist across a cold boot; Secure Boot keys enrol; suspend and resume).
    `--vendor-stmm` isolates the StandaloneMM image if variables misbehave.
    Then make it the default for the chain-A boards.
-2. Boot-test the open SE (UART5 log; `--vendor-se` to compare), then
+2. Boot-test the open SE (UART5 log; `--vendor-se` to compare, `--cix-ddr`
+   to tell the DDR port from the rest of the SE), then
    suspend/resume and the SFH.
 3. CSU_PM from source. The open firmware matches CIX's in the emulator at
    boot, over SCMI, for CIX's PM messages, through suspend/resume,
@@ -702,7 +716,10 @@ UARTs on the Orion O6/O6N, 115200 baud (from
 
 Output starts on the EC, then the SE, then the AP. A board that stays silent
 on UART5 rejected bootloader1 (or, with the open SE, failed before its
-UART came up: rebuild with `--vendor-se` to tell which); SE output without AP output points at BL2 or
+UART came up: rebuild with `--vendor-se` to tell which). An open SE that
+stops in memory training, or a board whose DRAM misbehaves, gets
+`--cix-ddr`: the open SE with CIX's DDR driver; if that boots, the fault is
+in `firmware/se/ddr`. SE output without AP output points at BL2 or
 the bootloader2 signatures, or at CSU_PM: the SE starts the AP only after
 the PM's handshake (`0x5c5a`, `0x55ca`, `0x5a5c`), so an SE log that stops
 waiting for the PM, or a silent UART4, points at the open CSU_PM
