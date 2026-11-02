@@ -473,6 +473,8 @@ def release_name(cfg, manifest):
     opened = manifest.get("open") or {}
     if opened.get("bootloader3_certificates"):      # --open: pre-BL33 from source
         stem += "_open"
+        if opened.get("se_ddr") == "cix":            # --cix-ddr
+            stem += "_cixddr"
     if opened.get("ec_fw") == "source":              # --open-ec
         stem += "_openec"
     if manifest["target"] != "RELEASE":
@@ -535,12 +537,18 @@ def main():
                     help="BL1/BL2/bootloader2 source (default: boot_firmware in boards/<board>.yaml); "
                          "cix: CIX 2026Q3 for the board's signing chain")
     ap.add_argument("--open", action="store_true",
-                    help="build BL2, BL31 and OP-TEE from source (bootloader1 re-signed, bootloader2, "
-                         "bootloader3 certificates); chain-A boards only (docs/open-firmware.md); the "
-                         "image is named <board>_<version>_open.bin")
+                    help="build all firmware before BL33 from source (SE, CSU_PM, BL2 in bootloader1, "
+                         "re-signed; BL31, OP-TEE and StandaloneMM in bootloader2; SFH; bootloader3 "
+                         "certificates); chain-A boards only (docs/open-firmware.md); the image is "
+                         "named <board>_<version>_open.bin")
     ap.add_argument("--vendor-se", action="store_true",
                     help="with --open, keep CIX's SE firmware in bootloader1 instead of the one built "
                          "from firmware/se")
+    ap.add_argument("--cix-ddr", action="store_true",
+                    help="with --open, build the SE from firmware/se but link CIX's DDR driver (memory "
+                         "training) unchanged from their debug build in place of firmware/se/ddr, to "
+                         "tell a DDR port fault from one elsewhere in the SE; the image is named "
+                         "<board>_<version>_open_cixddr.bin")
     ap.add_argument("--vendor-pm", action="store_true",
                     help="with --open, keep CIX's CSU_PM firmware in bootloader1 instead of the one "
                          "built from firmware/csupm (not yet boot-tested on hardware)")
@@ -554,6 +562,8 @@ def main():
     a = ap.parse_args()
     if (a.vendor_stmm or a.vendor_se or a.vendor_pm) and not a.open:
         ap.error("--vendor-stmm, --vendor-se and --vendor-pm need --open")
+    if a.cix_ddr and (not a.open or a.vendor_se):
+        ap.error("--cix-ddr needs --open, and is about the open SE (not with --vendor-se)")
 
     all_boards = boards()
     if a.list:
@@ -598,7 +608,7 @@ def main():
             ref_bl1 = (cix_dir if boot_fw == "cix" else ROOT / cfg["package"] / "Firmwares") / "bootloader1.img"
             se = None
             if not a.vendor_se:
-                se, se_info = trusted.build_se(outdir / "open", commit)
+                se, se_info = trusted.build_se(outdir / "open", commit, a.cix_ddr)
                 open_info.update(se_info)
             pm = None
             if not a.vendor_pm:

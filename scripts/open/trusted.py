@@ -132,18 +132,29 @@ def build_ec(out):
     return path, {"ec_fw": "source", "ec_fw_sha256": sha256(path)}
 
 
-def build_se(out, version):
+def build_se(out, version, cix_ddr=False):
     """SE firmware from firmware/se, all of it from source (CIX's DDR driver
-    included: firmware/se/ddr).  The Makefile can still relink parts of
-    CIX's driver from their debug build (CIX_ELF=, for tests); the build
-    does not.  Returns (path, manifest info)."""
+    included: firmware/se/ddr).  cix_ddr: the rest from source, but CIX's
+    whole DDR driver relinked unchanged from their debug build (DDR=cix
+    CIX_ELF=, manifests/cix-debug-firmware.json), to tell on hardware a
+    fault in the DDR port from one elsewhere in the SE.  Returns (path,
+    manifest info)."""
     out = Path(out).resolve() / "se"
     out.mkdir(parents=True, exist_ok=True)
-    run(["make", "-C", str(ROOT / "firmware/se"), f"O={out}", f"MBEDTLS_DIR={ROOT / 'mbedtls'}",
-         f"SE_FW_VERSION=beta2.0-{version}"], capture=True)
+    args = ["make", "-C", str(ROOT / "firmware/se"), f"O={out}", f"MBEDTLS_DIR={ROOT / 'mbedtls'}",
+            f"SE_FW_VERSION=beta2.0-{version}"]
+    info = {"se_fw": "source"}
+    if cix_ddr:
+        import cix_debug
+        elf = cix_debug.fetch("debug/se_fw/se_fw.elf")
+        args += ["DDR=cix", f"CIX_ELF={elf}"]
+        info["se_ddr"] = "cix"
+    run(args, capture=True)
     path = out / "se_fw.bin"
-    log(f"  se_fw.bin: {path.stat().st_size} bytes from source")
-    return path, {"se_fw": "source", "se_fw_sha256": sha256(path)}
+    log(f"  se_fw.bin: {path.stat().st_size} bytes from source"
+        + (", CIX's DDR driver relinked" if cix_ddr else ""))
+    info["se_fw_sha256"] = sha256(path)
+    return path, info
 
 
 def build_pm(out, version):
