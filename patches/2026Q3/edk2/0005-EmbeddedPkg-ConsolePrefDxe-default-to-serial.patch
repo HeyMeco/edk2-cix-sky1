@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: edk2-cix <edk2-cix@users.noreply.github.com>
+Date: Mon, 9 Nov 2026 12:00:00 +0100
+Subject: [PATCH] EmbeddedPkg/ConsolePrefDxe: default to serial
+
+With the "graphical" default, ConsolePrefDxe uninstalls the ACPI SPCR
+table (and the DT stdout-path) at ReadyToBoot whenever a GOP exists,
+so SPCR was effectively off on any board with a display. Default the
+ConsolePref variable to "serial" instead: when it is missing, when it
+holds an invalid value, and as the HII default, so SPCR is published
+unless the user turns it off.
+---
+ EmbeddedPkg/Drivers/ConsolePrefDxe/ConsolePrefDxe.c   | 8 ++++----
+ EmbeddedPkg/Drivers/ConsolePrefDxe/ConsolePrefHii.vfr | 4 ++--
+ 2 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/EmbeddedPkg/Drivers/ConsolePrefDxe/ConsolePrefDxe.c b/EmbeddedPkg/Drivers/ConsolePrefDxe/ConsolePrefDxe.c
+index 07b82892eb..a550c8fe48 100644
+--- a/EmbeddedPkg/Drivers/ConsolePrefDxe/ConsolePrefDxe.c
++++ b/EmbeddedPkg/Drivers/ConsolePrefDxe/ConsolePrefDxe.c
+@@ -295,10 +295,10 @@ ConsolePrefDxeEntryPoint (
+   if (EFI_ERROR (Status)) {
+     DEBUG ((
+       DEBUG_INFO,
+-      "%a: no console preference found, defaulting to graphical\n",
++      "%a: no console preference found, defaulting to serial\n",
+       __FUNCTION__
+       ));
+-    ConsolePref.Console = CONSOLE_PREF_GRAPHICAL;
++    ConsolePref.Console = CONSOLE_PREF_SERIAL;
+   }
+ 
+   if (!EFI_ERROR (Status) &&
+@@ -307,11 +307,11 @@ ConsolePrefDxeEntryPoint (
+   {
+     DEBUG ((
+       DEBUG_WARN,
+-      "%a: invalid value for %s, defaulting to graphical\n",
++      "%a: invalid value for %s, defaulting to serial\n",
+       __FUNCTION__,
+       CONSOLE_PREF_VARIABLE_NAME
+       ));
+-    ConsolePref.Console = CONSOLE_PREF_GRAPHICAL;
++    ConsolePref.Console = CONSOLE_PREF_SERIAL;
+     Status              = EFI_INVALID_PARAMETER; // trigger setvar below
+   }
+ 
+diff --git a/EmbeddedPkg/Drivers/ConsolePrefDxe/ConsolePrefHii.vfr b/EmbeddedPkg/Drivers/ConsolePrefDxe/ConsolePrefHii.vfr
+index 0f5f3a438a..1e890d599c 100644
+--- a/EmbeddedPkg/Drivers/ConsolePrefDxe/ConsolePrefHii.vfr
++++ b/EmbeddedPkg/Drivers/ConsolePrefDxe/ConsolePrefHii.vfr
+@@ -27,8 +27,8 @@ formset
+         prompt      = STRING_TOKEN(STR_CONSOLE_PREF_SELECT_PROMPT),
+         help        = STRING_TOKEN(STR_CONSOLE_PREF_SELECT_HELP),
+         flags       = NUMERIC_SIZE_1 | INTERACTIVE,
+-        option text = STRING_TOKEN(STR_CONSOLE_PREF_GRAPHICAL), value = CONSOLE_PREF_GRAPHICAL, flags = DEFAULT;
+-        option text = STRING_TOKEN(STR_CONSOLE_PREF_SERIAL), value = CONSOLE_PREF_SERIAL, flags = 0;
++        option text = STRING_TOKEN(STR_CONSOLE_PREF_GRAPHICAL), value = CONSOLE_PREF_GRAPHICAL, flags = 0;
++        option text = STRING_TOKEN(STR_CONSOLE_PREF_SERIAL), value = CONSOLE_PREF_SERIAL, flags = DEFAULT;
+     endoneof;
+ 
+     subtitle text = STRING_TOKEN(STR_NULL_STRING);
+-- 
+2.43.0
+

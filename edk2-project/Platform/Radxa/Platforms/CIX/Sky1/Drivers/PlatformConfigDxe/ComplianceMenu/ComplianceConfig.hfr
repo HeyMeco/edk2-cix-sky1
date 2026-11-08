@@ -30,7 +30,8 @@ suppressif ideqval DtAcpiPref.Pref == DT_ACPI_SELECT_DT;
   checkbox varid = ConsolePref.Console,
     prompt = STRING_TOKEN(STR_COMPLIANCE_ACPI_SPCR),
     help   = STRING_TOKEN(STR_COMPLIANCE_ACPI_SPCR_HELP),
-    flags  = RESET_REQUIRED,
+    flags  = CHECKBOX_DEFAULT | RESET_REQUIRED,
+    default = TRUE,
   endcheckbox;
 
   checkbox varid = ComplianceVar.EnableLPI0,
