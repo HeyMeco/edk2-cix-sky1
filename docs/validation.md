@@ -6,8 +6,8 @@ checks pass), **boot** (boots an OS on hardware).
 | Board | Build | Static | Boot | Notes |
 |---|---|---|---|---|
 | Radxa Orion O6 | ✓ | ✓ | – | BL1/BL2/TZ/EC/SFH/se_config identical to Radxa release 1.3.1 |
-| Radxa Orion O6N | ✓ | ✓ | – | BL1/BL2/TZ/EC/SFH/se_config identical to Radxa release 1.3.1 |
-| Minisforum MS-R1 | ✓ | ✓ | – | rebased onto CIX 2026Q3; all regions except BL33 and the pm_config timestamp identical to the vendor 2026-04-29 image |
+| Radxa Orion O6N | ✓ | ✓ | ✓ | BL1/BL2/TZ/EC/SFH/se_config identical to Radxa release 1.3.1; boots Armbian (CIX ACPI image) on a 16 GB board (2026-11-08) |
+| Minisforum MS-R1 | ✓ | ✓ | ✓ | rebased onto CIX 2026Q3; all regions except BL33 and the pm_config timestamp identical to the vendor 2026-04-29 image; boots Windows 11 with Secure Boot and the SPI TPM ([below](#ms-r1-secure-boot-and-spi-tpm-tested-with-windows-11-linux-not-yet)) |
 | Orange Pi 6 Plus | ✓ | ✓ | ✓ | all regions except BL33 identical to vendor 1.4 image |
 | Orange Pi 6 | ✓ | ✓ | ✓ | all regions except BL33 identical to vendor v1.0 image; DSDT board deltas match |
 
