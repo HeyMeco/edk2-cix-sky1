@@ -1,0 +1,66 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: edk2-cix <edk2-cix@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 23:45:00 +0100
+Subject: [PATCH] MdeModulePkg/TerminalDxe: dark green instead of blue
+
+Match the graphics console on serial: send EFI_BLUE (non-bright foreground
+and all backgrounds) as ANSI green, followed by the 256-colour dark green
+(index 22, #005f00). Terminals without 256 colours keep the plain green.
+Bright blue stays blue.
+---
+ MdeModulePkg/Universal/Console/TerminalDxe/TerminalConOut.c | 18 ++++++++++++++++--
+ 1 file changed, 16 insertions(+), 2 deletions(-)
+
+diff --git a/MdeModulePkg/Universal/Console/TerminalDxe/TerminalConOut.c b/MdeModulePkg/Universal/Console/TerminalDxe/TerminalConOut.c
+index 7809869e7d..ee620af2a5 100644
+--- a/MdeModulePkg/Universal/Console/TerminalDxe/TerminalConOut.c
++++ b/MdeModulePkg/Universal/Console/TerminalDxe/TerminalConOut.c
+@@ -75,6 +75,12 @@ UNICODE_TO_CHAR  UnicodeToPcAnsiOrAscii[] = {
+ 
+ CHAR16  mSetModeString[]           = { ESC, '[', '=', '3', 'h', 0 };
+ CHAR16  mSetAttributeString[]      = { ESC, '[', '0', 'm', ESC, '[', '4', '0', 'm', ESC, '[', '4', '0', 'm', 0 };
++//
++// EFI_BLUE is shown as dark green: 256-colour index 22 (#005f00), sent after
++// the basic ANSI green (32/42) that terminals without 256 colours fall back to.
++//
++CHAR16  mDarkGreenForegroundString[] = { ESC, '[', '3', '8', ';', '5', ';', '2', '2', 'm', 0 };
++CHAR16  mDarkGreenBackgroundString[] = { ESC, '[', '4', '8', ';', '5', ';', '2', '2', 'm', 0 };
+ CHAR16  mClearScreenString[]       = { ESC, '[', '2', 'J', 0 };
+ CHAR16  mSetCursorPositionString[] = { ESC, '[', '0', '0', ';', '0', '0', 'H', 0 };
+ CHAR16  mCursorForwardString[]     = { ESC, '[', '0', '0', 'C', 0 };
+@@ -568,7 +574,7 @@ TerminalConOutSetAttribute (
+       break;
+ 
+     case EFI_BLUE:
+-      ForegroundControl = 34;
++      ForegroundControl = (Attribute & EFI_BRIGHT) ? 34 : 32;
+       break;
+ 
+     case EFI_GREEN:
+@@ -614,7 +620,7 @@ TerminalConOutSetAttribute (
+       break;
+ 
+     case EFI_BLUE:
+-      BackgroundControl = 44;
++      BackgroundControl = 42;
+       break;
+ 
+     case EFI_GREEN:
+@@ -662,6 +668,14 @@ TerminalConOutSetAttribute (
+ 
+   TerminalDevice->OutputEscChar = TRUE;
+   Status                        = This->OutputString (This, mSetAttributeString);
++  if (!EFI_ERROR (Status) && ((Attribute & 0x0F) == EFI_BLUE)) {
++    Status = This->OutputString (This, mDarkGreenForegroundString);
++  }
++
++  if (!EFI_ERROR (Status) && (((Attribute >> 4) & 0x07) == EFI_BLUE)) {
++    Status = This->OutputString (This, mDarkGreenBackgroundString);
++  }
++
+   TerminalDevice->OutputEscChar = FALSE;
+ 
+   if (EFI_ERROR (Status)) {
+-- 
+2.43.0
+

@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: edk2-cix <edk2-cix@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 12:00:00 +0100
+Subject: [PATCH] MdeModulePkg/GraphicsConsoleDxe: dark green instead of blue
+
+Render EFI_BLUE (palette index 1) as dark green (#006400). This recolours
+the setup browser title bar, pop-ups and blue text on the graphics console.
+---
+ MdeModulePkg/Universal/Console/GraphicsConsoleDxe/GraphicsConsole.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/MdeModulePkg/Universal/Console/GraphicsConsoleDxe/GraphicsConsole.c b/MdeModulePkg/Universal/Console/GraphicsConsoleDxe/GraphicsConsole.c
+index b895dafede..f72ecff917 100644
+--- a/MdeModulePkg/Universal/Console/GraphicsConsoleDxe/GraphicsConsole.c
++++ b/MdeModulePkg/Universal/Console/GraphicsConsoleDxe/GraphicsConsole.c
+@@ -67,7 +67,7 @@ EFI_GRAPHICS_OUTPUT_BLT_PIXEL  mGraphicsEfiColors[16] = {
+   // B    G    R   reserved
+   //
+   { 0x00, 0x00, 0x00, 0x00 },  // BLACK
+-  { 0x98, 0x00, 0x00, 0x00 },  // LIGHTBLUE
++  { 0x00, 0x64, 0x00, 0x00 },  // LIGHTBLUE (dark green on CIX boards)
+   { 0x00, 0x98, 0x00, 0x00 },  // LIGHGREEN
+   { 0x98, 0x98, 0x00, 0x00 },  // LIGHCYAN
+   { 0x00, 0x00, 0x98, 0x00 },  // LIGHRED
+-- 
+2.43.0
+
