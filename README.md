@@ -135,13 +135,15 @@ firmware version string shown in setup. Intermediate files, the build log and
 | `--skip-prepare` | do not run `scripts/prepare.py` (submodule pins, sparse checkout, patch queue) |
 | `--boot-firmware vendor\|cix` | BL1/BL2/bootloader2 from the board vendor (default, `boot_firmware` in `boards/<board>.yaml`) or CIX 2026Q3 for the board's chain; image `…_cixboot.bin` |
 | `--open` | chain A (O6, O6N) only: all firmware before UEFI from source and re-signed with CIX's published keys; image `…_open.bin` ([below](#open-boot-firmware)) |
-| `--vendor-se` | with `--open`: keep CIX's SE firmware in bootloader1 |
+| `--vendor-se` | with `--open`: keep CIX's SE firmware in bootloader1; image `…_open_cixse.bin` |
 | `--cix-ddr` | with `--open`: the open SE, but with CIX's DDR driver (memory training) linked unchanged from their debug build in place of `firmware/se/ddr`; image `…_open_cixddr.bin` |
-| `--vendor-pm` | with `--open`: keep CIX's CSU_PM firmware in bootloader1 |
-| `--vendor-stmm` | with `--open`: embed CIX's StandaloneMM instead of the one built from source |
+| `--vendor-pm` | with `--open`: keep CIX's CSU_PM firmware in bootloader1; image `…_open_cixpm.bin` |
+| `--vendor-stmm` | with `--open`: embed CIX's StandaloneMM instead of the one built from source; image `…_open_cixstmm.bin` |
 | `--open-ec` | Orion O6 only, with or without `--open`: the EC firmware from `firmware/ec` in place of Radxa's; image `…_openec.bin` |
 
-The suffixes combine, e.g. `orion-o6_2026Q3_open_cixddr_openec_debug.bin`.
+The suffixes combine, e.g. `orion-o6_2026Q3_open_cixddr_openec_debug.bin` or
+`orion-o6n_2026Q3_open_cixpm_cixstmm.bin`, so the images of a bisection sit
+side by side in `dist/`.
 `EDK2CIX_NO_DOCKER=1 ./build.sh …` runs the build directly, inside an
 environment that is already set up like the container.
 

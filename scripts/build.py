@@ -475,6 +475,14 @@ def release_name(cfg, manifest):
         stem += "_open"
         if opened.get("se_ddr") == "cix":            # --cix-ddr
             stem += "_cixddr"
+        # a CIX part put back (bisecting a failed open boot): its own name, so
+        # it does not overwrite the full open image
+        if opened.get("se_fw") != "source":          # --vendor-se
+            stem += "_cixse"
+        if opened.get("csu_pm") != "source":         # --vendor-pm
+            stem += "_cixpm"
+        if opened.get("stmm_from") != "source":      # --vendor-stmm
+            stem += "_cixstmm"
     if opened.get("ec_fw") == "source":              # --open-ec
         stem += "_openec"
     if manifest["target"] != "RELEASE":
@@ -543,7 +551,7 @@ def main():
                          "named <board>_<version>_open.bin")
     ap.add_argument("--vendor-se", action="store_true",
                     help="with --open, keep CIX's SE firmware in bootloader1 instead of the one built "
-                         "from firmware/se")
+                         "from firmware/se; the image is named <board>_<version>_open_cixse.bin")
     ap.add_argument("--cix-ddr", action="store_true",
                     help="with --open, build the SE from firmware/se but link CIX's DDR driver (memory "
                          "training) unchanged from their debug build in place of firmware/se/ddr, to "
@@ -551,14 +559,16 @@ def main():
                          "<board>_<version>_open_cixddr.bin")
     ap.add_argument("--vendor-pm", action="store_true",
                     help="with --open, keep CIX's CSU_PM firmware in bootloader1 instead of the one "
-                         "built from firmware/csupm (not yet boot-tested on hardware)")
+                         "built from firmware/csupm (not yet boot-tested on hardware); the image is named "
+                         "<board>_<version>_open_cixpm.bin")
     ap.add_argument("--open-ec", action="store_true",
                     help="Orion O6 only: put the EC firmware built from firmware/ec in place of Radxa's "
                          "ec_fw.bin (not yet tested on hardware; the EC takes it at UEFI's platform "
                          "reset, see docs/open-firmware.md)")
     ap.add_argument("--vendor-stmm", action="store_true",
                     help="with --open, embed CIX's StandaloneMM image from the reference bootloader2 "
-                         "instead of the one built from source")
+                         "instead of the one built from source; the image is named "
+                         "<board>_<version>_open_cixstmm.bin")
     a = ap.parse_args()
     if (a.vendor_stmm or a.vendor_se or a.vendor_pm) and not a.open:
         ap.error("--vendor-stmm, --vendor-se and --vendor-pm need --open")

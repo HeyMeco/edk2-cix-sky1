@@ -132,7 +132,8 @@ built from [firmware/ec](../firmware/ec) (SDCC, in the container) at
    patch queue).
 2. StandaloneMM: `build -p Platform/CIX/Sky1/StandaloneMm/Sky1StandaloneMm.dsc`
    (see [below](#standalonemm)). With `--vendor-stmm` the build instead
-   decompresses CIX's image from the OP-TEE in the reference bootloader2.
+   decompresses CIX's image from the OP-TEE in the reference bootloader2
+   (image `…_open_cixstmm.bin`).
 3. OP-TEE: `make PLATFORM=cix-sky1 CFG_ARM64_core=y ta-targets=ta_arm64
    CFG_STMM_PATH=<StMM FV>` in `optee_os` (CIX OP-TEE 3.17 + `plat-cix`);
    the build checks that OP-TEE carries exactly that StMM image.
@@ -147,14 +148,14 @@ built from [firmware/ec](../firmware/ec) (SDCC, in the container) at
    SHA-256 of that key's public half, built into BL2.
 6. SE firmware: `make -C firmware/se` builds `se_fw.bin` (arm-none-eabi
    GCC, Mbed TLS), DDR driver included; the build no longer needs CIX's
-   debug build. `--vendor-se` skips this. `--cix-ddr` builds it with CIX's
+   debug build. `--vendor-se` skips this (image `…_open_cixse.bin`). `--cix-ddr` builds it with CIX's
    DDR driver relinked unchanged from their debug build
    (`make DDR=cix CIX_ELF=…`, fetched by `scripts/open/cix_debug.py`) in
    place of `firmware/se/ddr`; the image is `…_open_cixddr.bin`.
 7. CSU_PM: `make -C firmware/csupm all check` (Espressif's Xtensa GCC with
    the pm_core_v1 description, every instruction checked against the
    core's) builds `csupm.xbin`, the XBIN image the SE loads.
-   `--vendor-pm` skips this.
+   `--vendor-pm` skips this (image `…_open_cixpm.bin`).
 8. bootloader1: the reference bootloader1 (the board's, or CIX's with
    `--boot-firmware cix`) with its AP image replaced by BL2, its SE image
    by the open SE firmware and its CSU_PM image by the open one, and the
