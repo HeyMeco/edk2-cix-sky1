@@ -231,7 +231,7 @@ LPDDR5 on four channels.
 | Board | Format | Board ID | Data rate (MT/s) |
 |---|---|---|---|
 | Orion O6 | v2.0, 24 blocks | PCB ID map | 5500 default; 4800 for 16 GB HS and 32 GB Lo; 6000 for 32 GB Hynix |
-| Orion O6N | v2.0, 21 blocks | GPIO 49, 50, 57, 60 | 5500 default; 6000 for Hynix 16/32/48 GB; 5000 for HS 16/24/48 GB and 32 GB x8; 4800 for 64 GB Rayson |
+| Orion O6N | v2.0, 22 blocks | GPIO 49, 50, 57, 60 | 5500 default; 6000 for Hynix 16/32/48 GB; 5000 for HS 16/24/48 GB, 32 GB x8 and CXMT 24 GB; 4800 for 64 GB Rayson |
 | MS-R1 | v1.6, 16 blocks | GPIO 82, 83 | 5500 for all four variants |
 | Orange Pi 6 | v2.0, 14 blocks | GPIO 86–89 | 6000 for board IDs 0, 1, 2; 5500 for ID 15 and the default |
 | Orange Pi 6 Plus | v2.0, 14 blocks | PCB ID map | 6400 for every variant |
@@ -243,7 +243,7 @@ describes for the vendor binaries):
 | Board | Variants |
 |---|---|
 | Orion O6 | 0: 8 GB (8 Gb x16 1R); 1: 12 GB (12 Gb x16 1R); 2: 16 GB (16 Gb x16 1R); 4: 32 GB (16 Gb x16 2R); 5: 48 GB HS (12 Gb x8 2R); 6: 64 GB (16 Gb x8 2R); 7: 32 GB Lo (16 Gb x16 2R, 4800); 8: 64 GB Rayson (16 Gb x8 2R); 9: 32 GB x8 HS (8 Gb x8 2R); 10: 24 GB HS (12 Gb x16 2R); 11: 16 GB HS (8 Gb x16 2R, 4800); 12: 32 GB Hynix (16 Gb x16 2R, 6000) |
-| Orion O6N | 1: 16 GB Hynix (8 Gb x16 2R, 6000); 3: 48 GB Hynix (12 Gb x8 2R, 6000); 6: 32 GB x8 HS (8 Gb x8 2R, 5000); 7: 24 GB HS (12 Gb x16 2R, 5000); 9: 48 GB HS (12 Gb x8 2R, 5000); 12: 64 GB Rayson (16 Gb x8 2R, 4800); 13: 16 GB HS (8 Gb x16 2R, 5000); 14: 32 GB Hynix (16 Gb x16 2R, 6000) |
+| Orion O6N | 1: 16 GB Hynix (8 Gb x16 2R, 6000); 3: 48 GB Hynix (12 Gb x8 2R, 6000); 4: 24 GB CXMT (12 Gb x16 2R, 5000); 6: 32 GB x8 HS (8 Gb x8 2R, 5000); 7: 24 GB HS (12 Gb x16 2R, 5000); 9: 48 GB HS (12 Gb x8 2R, 5000); 12: 64 GB Rayson (16 Gb x8 2R, 4800); 13: 16 GB HS (8 Gb x16 2R, 5000); 14: 32 GB Hynix (16 Gb x16 2R, 6000) |
 | MS-R1 | 0: `4g` (16 Gb x16 1R); 1: `8g` (16 Gb x16 2R); 2: `16g` (16 Gb x8 2R); 3: `32g` (16 Gb x8 2R) |
 | Orange Pi 6 | 0, 1, 2: 6000, geometry auto-detected; 15: 5500, auto |
 | Orange Pi 6 Plus | Micron DRAM (known from the board; the firmware does not name a vendor). 0: 16 Gb x16 1R; 1: 16 Gb x16 2R; 2: 16 Gb x16 1R; 3: 16 Gb x16 2R; 4: auto |

@@ -11,7 +11,7 @@
     "edk2-non-osi": "e725a1d3fed47cdc7656d1cb4d77120951ce2eb5"
   },
   "imports": {
-    "radxa-edk2-platforms": "14cf7bdcfe1d0e8635a16a25d4209b6e28b18fca",
+    "radxa-edk2-platforms": "352108383b2ceb3f88673f2f60a550ac35db181d",
     "radxa-edk2-non-osi": "4e99786e4caaf531bb9b04f097a018917463ae81",
     "minisforum-edk2-platforms": "119ae9cc84abade22a48081ec3aa11eb8ee6e74a",
     "minisforum-edk2-non-osi": "c22fb43e6b8385c4b43f51ca1de3111fd2990db1"

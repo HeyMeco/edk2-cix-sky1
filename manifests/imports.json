@@ -3,7 +3,7 @@
     "name": "radxa",
     "repo": "https://github.com/radxa/edk2-platforms",
     "branch": "cix_p1_dev_2026q2",
-    "commit": "14cf7bdcfe1d0e8635a16a25d4209b6e28b18fca",
+    "commit": "352108383b2ceb3f88673f2f60a550ac35db181d",
     "upstream": "Platform/Radxa",
     "local": "edk2-project/Platform/Radxa",
     "summary": {
@@ -498,7 +498,7 @@
         "status": "same"
       },
       "Orion/O6N/mem_config/MemConfigBinLayout.h": {
-        "upstream_blob": "02f9287d7bc3bcfac29aca6a0b03de7986c81402",
+        "upstream_blob": "99c787ce24b392c3d35b2d23c8e8e3afc25f1611",
         "status": "same"
       },
       "Orion/O6N/mem_config/MemConfigBinTool.c": {
@@ -506,7 +506,7 @@
         "status": "same"
       },
       "Orion/O6N/mem_config/RS600/GlobalConfig.c": {
-        "upstream_blob": "c9d61acd06e8156233eec6b92698828236c50f6d",
+        "upstream_blob": "441f2aad2faca3fd1172970d4f8aa63fd49ed413",
         "status": "same"
       },
       "Orion/O6N/mem_config/default/BoardIdGetMethod.c": {
@@ -550,7 +550,7 @@
         "status": "same"
       },
       "Orion/O6N/mem_config/include/BoardConfig.h": {
-        "upstream_blob": "55f10f4df4462535d92be429804b3f5105201a2c",
+        "upstream_blob": "327f632a789b82bfa6cc0689025759fde46d731a",
         "status": "same"
       },
       "Orion/O6N/mem_config/include/MemConfigBinTool.h": {
@@ -682,7 +682,7 @@
         "status": "same"
       },
       "Platforms/CIX/Sky1/Drivers/SystemInfoDxe/SystemInfoDxe.c": {
-        "upstream_blob": "93786ca16ea191b6ae0a2030411cadf70fc66692",
+        "upstream_blob": "ffdc866f82111887b86484eb32e6167dc90b98f9",
         "status": "same"
       },
       "Platforms/CIX/Sky1/Drivers/SystemInfoDxe/SystemInfoDxe.h": {

@@ -27,9 +27,9 @@ with a sparse checkout of `edk2-platforms` (`!Platform/Radxa`) so that every
 ### Radxa Orion O6 / O6N
 
 `edk2-project/Platform/Radxa` is a snapshot of `Platform/Radxa` from
-`radxa/edk2-platforms` at `14cf7bdc` (`cix_p1_dev_2026q2`), which builds
-against the CIX 2026Q3 shared code unchanged. Local changes (all listed in
-`manifests/imports.json`):
+`radxa/edk2-platforms` at `35210838` (`cix_p1_dev_2026q2`, Radxa release
+1.3.2), which builds against the CIX 2026Q3 shared code unchanged. Local
+changes (all listed in `manifests/imports.json`):
 
 * DSC include path for `LinuxAcpiConfig.h` (Radxa used `$(WORKSPACE)/..`)
 * flash layouts copied from `radxa/edk2-non-osi` `4e99786e` into the packages

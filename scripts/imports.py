@@ -26,7 +26,7 @@ IMPORTS = [
         "name": "radxa",
         "repo": "https://github.com/radxa/edk2-platforms",
         "branch": "cix_p1_dev_2026q2",
-        "commit": "14cf7bdcfe1d0e8635a16a25d4209b6e28b18fca",
+        "commit": "352108383b2ceb3f88673f2f60a550ac35db181d",
         "upstream": "Platform/Radxa",
         "local": "edk2-project/Platform/Radxa",
     },
