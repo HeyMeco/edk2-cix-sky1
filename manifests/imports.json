@@ -7,9 +7,9 @@
     "upstream": "Platform/Radxa",
     "local": "edk2-project/Platform/Radxa",
     "summary": {
-      "same": 170,
+      "same": 169,
       "removed": 1,
-      "modified": 5,
+      "modified": 6,
       "added": 4
     },
     "files": {
@@ -615,7 +615,7 @@
       },
       "Platforms/CIX/Sky1/Drivers/PlatformConfigDxe/ComplianceMenu/ComplianceConfig.hfr": {
         "upstream_blob": "d0a2ff6307dad3fa969b88508573894c7517ca2a",
-        "status": "same"
+        "status": "modified"
       },
       "Platforms/CIX/Sky1/Drivers/PlatformConfigDxe/ComplianceMenu/ComplianceConfig.uni": {
         "upstream_blob": "964dfe71b760cd04f4c8242cc4199e96aed82ada",
