@@ -602,11 +602,25 @@ static int sky1soc_perf_update(struct perf_plugins_perf_update *data)
 	return FWK_PENDING;
 }
 
-/* A cluster's clock is at its new rate: its level to scmi_perf */
+/* A cluster's clock is at its new rate: its level to scmi_perf (which
+ * knows the agent that asked, if one did by message) */
 static void sky1soc_report_level(uint8_t idx)
 {
 	g_ctx.scmi_perf_updated_api->notify_level_updated(
 		dvfs_element(g_ctx.ap_dom_begin + idx), 0, g_ctx.ctx[idx].curr_level);
+}
+
+/* the DSU's level was asked by message: the pass that takes the request
+ * reports the level if it is another than it was */
+static bool g_dsu_asked;
+static uint32_t g_dsu_level_before;
+
+void sky1soc_perf_level_asked(unsigned int dvfs_idx)
+{
+	if (dvfs_idx == (unsigned int)g_ctx.ap_dom_begin + g_ctx.ap_dom_count && !g_dsu_asked) {
+		g_dsu_asked = true;
+		g_dsu_level_before = g_ctx.ctx[g_ctx.ap_dom_count].curr_level;
+	}
 }
 
 /* Run one queued change: FWK_SUCCESS, or FWK_PENDING for an answer to come */
@@ -825,6 +839,13 @@ static void sky1soc_perf_op_fsm(const struct fwk_event *event)
 done:
 	if (g_ctx.lost_mask)
 		sky1soc_apply_lost();
+	if (g_dsu_asked) {
+		/* the DSU's level asked by message (whether or not its divider
+		 * had to change): the agent's PERFORMANCE_LEVEL_CHANGED */
+		g_dsu_asked = false;
+		if (g_ctx.ctx[g_ctx.ap_dom_count].curr_level != g_dsu_level_before)
+			sky1soc_report_level(g_ctx.ap_dom_count);
+	}
 	g_ctx.state = SKY1SOC_STATE_IDLE;
 	if (g_ctx.fc_sched) {
 		on_fast_channel_interrupt(false);

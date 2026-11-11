@@ -5,3 +5,8 @@ sequence (src/hsm: trigger_SD, trigger_RST, trigger_STR) and answer
 success; the sequence runs once the answer is out.  No policy handler is
 called and no notification is sent for them (CIX's neither).  Power-up
 and other states take upstream's path.
+
+And one fix: SYSTEM_POWER_STATE_NOTIFY answers NOT_SUPPORTED (as CIX's
+does) when the module has no table of subscribers, which is the case
+without an alarm for graceful requests; upstream wrote the agent's entry
+through the null pointer.

@@ -608,6 +608,15 @@ static int transport_message_handler(struct transport_channel_ctx *channel_ctx)
                 channel_ctx->transport_signal.firmware_signal_api->signal_error(
                     channel_ctx->service_id);
         }
+
+        /*
+         * The message is refused: its payload is not copied (upstream goes
+         * on to copy length - 4 bytes, which for a length under 4 or over
+         * the buffer's overwrites what follows the read buffer) and no
+         * service is told of it.  CIX's ipc_arbiter answers with the
+         * channel's error bit alike.
+         */
+        return status;
     }
 
     if (transport_type == MOD_TRANSPORT_CHANNEL_TRANSPORT_TYPE_OUT_BAND) {

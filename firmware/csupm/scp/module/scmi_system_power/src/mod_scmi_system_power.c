@@ -530,6 +530,17 @@ static int scmi_sys_power_state_notify_handler(fwk_id_t service_id,
         goto exit;
     }
 
+    /*
+     * CSU_PM (open): without an alarm for graceful requests the table of
+     * subscribers is never allocated (scmi_sys_power_bind), and upstream
+     * writes the agent's entry through the null pointer all the same.  No
+     * notification is ever sent here: not supported, as CIX's answers.
+     */
+    if (scmi_sys_power_ctx.system_power_notifications == NULL) {
+        return_values.status = (int32_t)SCMI_NOT_SUPPORTED;
+        goto exit;
+    }
+
     parameters = (const struct scmi_sys_power_state_notify_a2p *)payload;
 
     if (parameters->flags & (~STATE_NOTIFY_FLAGS_MASK)) {

@@ -60,6 +60,11 @@ bool sky1soc_notify_ap_core_change(uint8_t ap_core_idx, bool online);
  */
 bool sky1soc_perf_owns(unsigned int dvfs_idx);
 bool sky1soc_perf_get_level(unsigned int dvfs_idx, uint32_t *level);
+/* Not CIX's: an agent asked for a DVFS element's level by message.  For
+ * the DSU the pass that sets it then reports the level (CIX's dvfs did:
+ * the agent's PERFORMANCE_LEVEL_CHANGED); the DSU following the clusters
+ * reports none */
+void sky1soc_perf_level_asked(unsigned int dvfs_idx);
 /* Not CIX's: after a resume, the domains whose rail could not be set (a
  * bit per DVFS element) to their lowest OPP */
 void sky1soc_perf_rails_lost(uint32_t dvfs_mask);

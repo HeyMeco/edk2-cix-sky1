@@ -180,6 +180,9 @@ struct scmi_perf_domain_ctx {
      */
     uint32_t owned_level;
     uint32_t owned_fc_seen;
+    /* the agent whose message asked for owned_level (0: the fast channel),
+     * for the PERFORMANCE_LEVEL_CHANGED notification, as CIX's dvfs has it */
+    uint32_t owned_agent;
 
     /* Tables of OPPs */
     struct perf_opp_table *opp_table;
@@ -322,9 +325,15 @@ static bool owned_domain(unsigned int idx)
 #endif
 }
 
-static void owned_request(unsigned int idx, uint32_t level)
+static void owned_request(unsigned int idx, uint32_t level, unsigned int agent_id)
 {
     scmi_perf_ctx.domain_ctx_table[idx].owned_level = level;
+    scmi_perf_ctx.domain_ctx_table[idx].owned_agent = agent_id;
+#ifdef BUILD_HAS_MOD_SKY1SOC_PERF
+    if (agent_id != 0) {
+        sky1soc_perf_level_asked(idx);
+    }
+#endif
     fast_channel_callback(0);
 }
 
@@ -487,7 +496,7 @@ static int perf_set_level(
     }
 
     if (owned_domain(idx)) {
-        owned_request(idx, perf_level);
+        owned_request(idx, perf_level, agent_id);
         status = FWK_SUCCESS;
     } else {
         status = scmi_perf_ctx.dvfs_api->set_level(
@@ -582,7 +591,7 @@ int perf_set_limits(
     }
 
     if (owned_domain(fwk_id_get_element_idx(domain_id))) {
-        owned_request(fwk_id_get_element_idx(domain_id), needle);
+        owned_request(fwk_id_get_element_idx(domain_id), needle, agent_id);
         return FWK_SUCCESS;
     }
     return scmi_perf_ctx.dvfs_api->set_level(domain_id, agent_id, needle);
@@ -1661,6 +1670,7 @@ static void fast_channel_read(unsigned int i, struct fc_perf_update *update)
         if ((set_level != NULL) && (*set_level != domain_ctx->owned_fc_seen)) {
             domain_ctx->owned_fc_seen = *set_level;
             domain_ctx->owned_level = *set_level;
+            domain_ctx->owned_agent = 0;
         }
         if (domain_ctx->owned_level != 0) {
             level = domain_ctx->owned_level;
@@ -2005,6 +2015,10 @@ static void scmi_perf_notify_level_updated(
 #endif
 
 #ifdef BUILD_HAS_SCMI_NOTIFICATIONS
+    if (owned_domain((unsigned int)idx)) {
+        /* sky1soc_perf's pass: the agent that asked by message, if one did */
+        cookie = scmi_perf_ctx.domain_ctx_table[idx].owned_agent;
+    }
     level_changed.agent_id = (uint32_t)cookie;
     level_changed.domain_id = (uint32_t)idx;
     level_changed.performance_level = level;

@@ -9,5 +9,11 @@ with the mailbox driver in its ipc_arbiter module):
   length the AP's shared-memory driver reads (0x7f, CIX's
   ipc_arbiter_respond and ipc_arbiter_transmit).
 
+And one fix: a message whose length is under the header's or over the
+buffer's is refused (the channel's error bit, SCMI PROTOCOL_ERROR) before
+anything is copied.  Upstream sets the error and then copies length - 4
+bytes all the same, over whatever follows the read buffer; CIX's
+ipc_arbiter refuses such a message too.
+
 The PM's own messages, which share the channels (src/msg), never reach it:
 the mailbox driver (cix_mbox) hands a doorbell to them first.

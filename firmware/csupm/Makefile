@@ -31,7 +31,11 @@ SCP_MODULES	:= xt_timer timer cix_mbox transport scmi rcsu power_domain scmi_pow
 SCP_FWK		:= fwk_arch fwk_core fwk_delayed_resp fwk_dlist fwk_id fwk_interrupt \
 		   fwk_io fwk_log fwk_mm fwk_module fwk_notification fwk_ring fwk_slist \
 		   fwk_status fwk_string fwk_time assert
+# (BUILD_HAS_SCMI_SENSOR_EVENTS: the sensors' trip points, SENSOR_TRIP_POINT_
+# NOTIFY and _CONFIG, which CIX's firmware answers; without it scmi_sensor
+# also calls a null handler for either message sent without a payload)
 SCP_DEFS	:= -DBUILD_HAS_SUB_SYSTEM_MODE -DBUILD_HAS_NOTIFICATION -DBUILD_HAS_SCMI_NOTIFICATIONS \
+		   -DBUILD_HAS_SCMI_SENSOR_EVENTS \
 		   -DBUILD_HAS_BASE_PROTOCOL -DBUILD_HAS_SCMI_PERF_FAST_CHANNELS \
 		   -DBUILD_HAS_SCMI_PERF_PLUGIN_HANDLER -DFWK_LOG_LEVEL=FWK_LOG_LEVEL_CRIT \
 		   '-DBUILD_VERSION_DESCRIBE_STRING="SCP-firmware v2.11.0"' \
@@ -68,6 +72,7 @@ $(O)/scp/module/psu/%: FW_CFLAGS = $(SCP_CFLAGS)
 $(O)/scp/module/scmi_perf/%: FW_CFLAGS = $(SCP_CFLAGS)
 $(O)/scp/module/transport/%: FW_CFLAGS = $(SCP_CFLAGS)
 $(O)/scp/module/scmi_system_power/%: FW_CFLAGS = $(SCP_CFLAGS)
+$(O)/scp/module/scmi_power_domain/%: FW_CFLAGS = $(SCP_CFLAGS)
 
 SRCS	:= arch/vectors.S src/main.c src/lcru.c src/uart.c src/i2c.c src/pmic.c src/soc.c \
 	   src/mbox.c src/power.c src/pvt.c src/plat.c $(wildcard src/clk/*.c) $(wildcard src/dpm/*.c) \

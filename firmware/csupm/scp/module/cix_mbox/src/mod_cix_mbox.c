@@ -74,12 +74,17 @@ static void mbox_isr(void)
 	}
 }
 
-/* Completion (a2p, when the agent asked for it) or a notification (p2a) */
+/*
+ * Completion (a2p, when the agent asked for it): the agent's doorbell is
+ * acknowledged, bit 1 of the mailbox's doorbell register.  A notification
+ * (p2a): the PM is the sender and rings the doorbell itself, bit 0, as
+ * CIX's does (the AP's driver takes a message on bit 0 only).
+ */
 static int trigger_event(fwk_id_t device_id)
 {
 	struct mbox_ctx *c = &cix_mbox.ctx[fwk_id_get_element_idx(device_id)];
 
-	mbox_ring(c->config->mailbox, MBOX_TO_AP_BIT);
+	mbox_ring(c->config->mailbox, c->config->from_ap ? MBOX_TO_AP_BIT : MBOX_DOORBELL_BIT);
 	return FWK_SUCCESS;
 }
 

@@ -1,0 +1,10 @@
+SCP-firmware v2.11.0's scmi_power_domain module with one change: the
+default POWER_STATE_SET policy keeps the state's type bit when it looks a
+device's state up (upstream masks the bit off first, so an agent's "off",
+identifier 0 with the type bit, matched the table's "on" entry, identifier
+0 without it: a power-off was carried out as a power-on).  CIX's firmware
+answers success to a power-off of a domain that is off; so does this.
+
+The transport module's README has the other fix to upstream found the same
+way (emu's `pm-test --full`): a message with a bad length is refused before
+its payload is copied.

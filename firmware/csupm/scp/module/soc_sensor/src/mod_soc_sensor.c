@@ -34,7 +34,9 @@ static int get_value(fwk_id_t id, mod_sensor_value_t *value)
 	} else {
 		t = soc_sensor_board_temp[c->board];
 	}
-	*value = t > 0 ? (mod_sensor_value_t)(uint32_t)(int32_t)t : 0;
+	/* whole degrees, below zero too: CIX's reads a cold sensor as a
+	 * negative 64-bit value, which is what SENSOR_READING_GET carries */
+	*value = (mod_sensor_value_t)(int64_t)(int32_t)t;
 	return FWK_SUCCESS;
 }
 
