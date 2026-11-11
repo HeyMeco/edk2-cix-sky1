@@ -62,6 +62,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Xtensa (CSU_PM, Cadence LX7 core "pm_core_v1"): Espressif's GCC, which
 # loads the core description at run time (xtensa-dynconfig), and the
 # overlay sources scripts/open/xtensa_core.py builds that description from.
+# Espressif removes older releases from GitHub; its own mirror keeps them
+# (the checksum is the same either way).
 ARG XTENSA_GCC=esp-14.4.0_20260914
 ARG XTENSA_GCC_SHA256_AMD64=972c6bd7925691f5dcbe8aa41616a570a66b9a7003b5b5bc2069c3837b9a6cfd
 ARG XTENSA_GCC_SHA256_ARM64=d796a6dc3ff325165d8bbe194b8c11312092c0e8bf075f15fe00400578740985
@@ -73,8 +75,10 @@ RUN set -eux; \
       arm64) host=aarch64; sha="${XTENSA_GCC_SHA256_ARM64}" ;; \
     esac; \
     ver="${XTENSA_GCC#esp-}"; \
-    curl -fsSL -o /tmp/xt.tar.xz \
-      "https://github.com/espressif/crosstool-NG/releases/download/${XTENSA_GCC}/xtensa-esp-elf-${ver}-${host}-linux-gnu.tar.xz"; \
+    file="${XTENSA_GCC}/xtensa-esp-elf-${ver}-${host}-linux-gnu.tar.xz"; \
+    curl -fsSL -o /tmp/xt.tar.xz "https://github.com/espressif/crosstool-NG/releases/download/${file}" || \
+      curl -fsSL -o /tmp/xt.tar.xz \
+        "https://dl.espressif.com/github_assets/espressif/crosstool-NG/releases/download/${file}"; \
     echo "${sha}  /tmp/xt.tar.xz" | sha256sum -c -; \
     mkdir -p /opt/xtensa; \
     tar -xf /tmp/xt.tar.xz -C /opt/xtensa; \
