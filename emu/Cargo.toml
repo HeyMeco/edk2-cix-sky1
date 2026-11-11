@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+[package]
+name = "sky1emu"
+version = "0.1.0"
+edition = "2021"
+description = "Emulators for the Sky1 boot firmware (SE, CSU_PM, EC, SFH) and the tests that compare the open firmware with the vendors'"
+license = "BSD-2-Clause-Patent"
+publish = false
+
+[[bin]]
+name = "sky1emu"
+path = "src/main.rs"
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+debug = 1
+overflow-checks = false
+
+[profile.dev]
+opt-level = 1
