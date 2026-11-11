@@ -279,6 +279,7 @@ pub const VOUT_LEN: usize = 3;
 pub struct Transfer {
     /// bus writes the firmware had made before it
     pub writes: usize,
+    #[allow(dead_code)]
     pub addr: u8,
     pub write: bool,
     pub tx: Vec<u8>,
@@ -308,6 +309,7 @@ pub struct I2cLog {
     pub bus: String,
     pub what: String,
     /// where the firmware was
+    #[allow(dead_code)]
     pub pc: u32,
 }
 
@@ -326,6 +328,7 @@ pub struct I2cLog {
 /// then writes to DATA and ends with COMP (PmSoc::slave_write, slave_read).
 #[derive(Clone)]
 pub struct CadenceI2c {
+    #[allow(dead_code)]
     pub base: u32,
     pub name: String,
     pub devices: BTreeMap<u8, I2cDevice>,
@@ -1304,6 +1307,28 @@ pub fn poll() -> u64 {
     POLL.with(|p| p.get())
 }
 
+/// Simulated time an agent waits for an answer before it gives up.
+pub const ANSWER_MS: u64 = 2_000;
+
+/// One look-to-look interval of an agent waiting on a channel: POLL
+/// instructions, or as many cycles asleep.  A PM that answers and goes to
+/// sleep inside the interval stays asleep to its end: without the limit
+/// WAITI's jump to the next timer (100 ms away once the 1 ms streams are
+/// off) was counted as the time the answer took, and every question moved
+/// the image's clock that far.
+pub fn poll_run(cpu: &mut Cpu) -> Option<String> {
+    let n = poll();
+    let before = cpu.until;
+    let limit = cpu.io.ccount + n;
+    cpu.until = Some(before.map_or(limit, |b| b.min(limit)));
+    let why = cpu.run(n);
+    cpu.until = before;
+    match why.as_deref() {
+        Some("until") => None,
+        _ => why,
+    }
+}
+
 /// scmi() with the message length as the caller gives it (a malformed
 /// request when it does not match the arguments) and the channel flags
 /// (bit 0: the agent wants an interrupt when the answer is there, as
@@ -1311,13 +1336,13 @@ pub fn poll() -> u64 {
 #[allow(clippy::too_many_arguments)]
 pub fn scmi_raw(cpu: &mut Cpu, protocol: u32, msg: u32, args: &[u32], mbox: usize, budget: u64, len: Option<u32>, flags: u32) -> Answer {
     let base = MBOX + mbox as u32 * 0x10000;
-    let chunk = poll();
     let end = cpu.insns + budget;
+    let late = cpu.io.ccount + ANSWER_MS * CORE_HZ / 1000;
     while cpu.bus.mem.read32(base + SMT_STATUS) & SMT_FREE == 0 {
-        if cpu.insns >= end {
+        if cpu.insns >= end || cpu.io.ccount >= late {
             return Err(format!("channel {mbox} never free"));
         }
-        let why = cpu.run(chunk);
+        let why = poll_run(cpu);
         if asleep(&why) {
             return Err(format!("channel {mbox} never free"));
         }
@@ -1337,10 +1362,10 @@ pub fn scmi_raw(cpu: &mut Cpu, protocol: u32, msg: u32, args: &[u32], mbox: usiz
     m.write32(base + SMT_FLAGS, flags);
     cpu.bus.ring(&mut cpu.io, mbox, 1);
     while cpu.bus.mem.read32(base + SMT_STATUS) & SMT_FREE == 0 {
-        if cpu.insns >= end {
+        if cpu.insns >= end || cpu.io.ccount >= late {
             return Err(format!("no answer to protocol {protocol:#x} message {msg}"));
         }
-        let why = cpu.run(chunk);
+        let why = poll_run(cpu);
         let free = cpu.bus.mem.read32(base + SMT_STATUS) & SMT_FREE != 0;
         if asleep(&why) && !free {
             return Err(format!("no answer to protocol {protocol:#x} message {msg} (the PM sleeps)"));
@@ -1366,8 +1391,13 @@ pub fn scmi_raw(cpu: &mut Cpu, protocol: u32, msg: u32, args: &[u32], mbox: usiz
 /// the rest.  Deterministic: the same image and inputs give the same run.
 /// Returns None, or why the PM stopped (an assertion...).
 pub fn run_for(cpu: &mut Cpu, ms: f64) -> Option<String> {
+    run_cycles(cpu, (ms * CORE_HZ as f64 / 1000.0).floor() as u64)
+}
+
+/// run_for, in cycles of the core's clock.
+pub fn run_cycles(cpu: &mut Cpu, cycles: u64) -> Option<String> {
     let chunk = 50_000;
-    let end = cpu.io.ccount + (ms * CORE_HZ as f64 / 1000.0).floor() as u64;
+    let end = cpu.io.ccount + cycles;
     cpu.until = Some(end);
     let mut out = None;
     while cpu.io.ccount < end {

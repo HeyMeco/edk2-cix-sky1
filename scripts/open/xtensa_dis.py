@@ -9,7 +9,7 @@ instruction stream at each.  This runs objdump on a copy of the ELF in
 which every bundle (found by walking the .xt.prop instruction ranges) is
 replaced by "nop; nop; nop.n" of the same size, so the rest stays in
 step (and so is each 24-bit instruction objdump does not know: the
-double-precision FPU, GETEX, CLREX, named by xt_emu.py), then on copies with one slot's operation (xtensa_flix.py) at the
+double-precision FPU, GETEX, CLREX, named by fp_name), then on copies with one slot's operation (xtensa_flix.py) at the
 bundle's address, so PC-relative operands come out right (a slot's
 branch, jump, L32R and LOOP use the bundle's address as the core
 encodings do), and prints the listing with each bundle as
@@ -101,16 +101,58 @@ def fmt_branch(op, pc):
     return f"{mn} a{s}, a{operand}, {tgt:x}"
 
 
+# pm_core_v1's instructions GNU's description of the core has not got: the
+# double-precision FPU (and the single-precision one, for a build without
+# it), GETEX and CLREX.  Their names by the encoding's fields.
+FP_BY_OP = {
+    (8, 0): "lsx", (8, 1): "lsx", (8, 2): "lsx", (8, 3): "lsx", (8, 4): "lsx", (8, 5): "lsx", (8, 6): "lsx",
+    (8, 7): "lsx",
+    (10, 0): "add.s", (10, 1): "sub.s", (10, 2): "mul.s", (10, 4): "madd.s", (10, 5): "msub.s",
+    (10, 6): "maddn.s", (10, 7): "divn.s", (10, 8): "cvt.s", (10, 9): "cvt.s", (10, 10): "cvt.s",
+    (10, 11): "cvt.s", (10, 12): "float.s", (10, 13): "ufloat.s", (10, 14): "cvt.s",
+    (11, 1): "fcmp", (11, 2): "fcmp", (11, 3): "fcmp", (11, 4): "fcmp", (11, 5): "fcmp", (11, 6): "fcmp",
+    (11, 7): "fcmp", (11, 8): "movxz.s", (11, 9): "movxz.s", (11, 10): "movxz.s", (11, 11): "movxz.s",
+    (11, 12): "movb.s", (11, 13): "movb.s",
+    (14, 1): "dcmp", (14, 2): "dcmp", (14, 3): "dcmp", (14, 4): "dcmp", (14, 5): "dcmp", (14, 6): "dcmp",
+    (14, 7): "dcmp",
+    (15, 0): "add.d", (15, 1): "sub.d", (15, 2): "mul.d", (15, 4): "madd.d", (15, 5): "msub.d",
+    (15, 6): "maddn.d", (15, 7): "divn.d", (15, 8): "cvt.d", (15, 9): "cvt.d", (15, 10): "cvt.d",
+    (15, 11): "cvt.d", (15, 12): "float.d", (15, 13): "ufloat.d", (15, 14): "cvt.d",
+}
+# op2 15 of the two groups: one operand, the operation in t
+FP_1OP = {
+    10: {0: "mov.s", 1: "abs.s", 2: "cvtd.s", 3: "const.s", 4: "rfr", 5: "wfr", 6: "neg.s", 7: "div0.s",
+         11: "nexp01.s", 12: "fpadj", 13: "fpadj", 14: "fpadj", 15: "fpadj"},
+    15: {0: "mov.d", 1: "abs.d", 2: "cvts.d", 3: "const.d", 4: "rfrd", 6: "neg.d", 7: "div0.d",
+         11: "nexp01.d", 12: "dfpadj", 13: "dfpadj", 14: "dfpadj", 15: "dfpadj"},
+}
+# op0 3: loads and stores of the FP registers, by r
+FP_LSCI = {0: "lsi", 1: "ldi", 4: "ssi", 5: "sdi", 8: "lsip", 9: "ldip", 12: "ssip", 13: "sdip"}
+
+
+def fp_name(word):
+    op0, t, s, r = word & 15, (word >> 4) & 15, (word >> 8) & 15, (word >> 12) & 15
+    op1, op2 = (word >> 16) & 15, (word >> 20) & 15
+    if op0 == 3:
+        return FP_LSCI.get(r, "?")
+    if op0 != 0:
+        return "?"
+    if (op1, op2, r, s, t) == (0, 0, 3, 1, 2):
+        return "clrex"
+    if (op1, op2, r) == (0, 4, 10):
+        return f"getex a{t}"
+    if (op1, op2) == (14, 8):
+        return f"wfrd f{r},a{s},a{t}"
+    if op2 == 15 and op1 in FP_1OP:
+        return FP_1OP[op1].get(t, "?")
+    return FP_BY_OP.get((op1, op2), "?")
+
+
 def emu_text(word):
-    """The interpreter's name for a 24-bit instruction objdump does not know
-    (pm_core_v1's double-precision FPU, exclusive access)."""
-    from xt_emu import decode24
+    """The name of a 24-bit instruction objdump does not know (pm_core_v1's
+    double-precision FPU, exclusive access)."""
     r, s, t = (word >> 12) & 15, (word >> 8) & 15, (word >> 4) & 15
-    try:
-        name = decode24(word).text
-    except Exception:                                   # noqa: BLE001
-        name = "?"
-    return f"{name}\t; r {r} s {s} t {t} (not in GNU's description)"
+    return f"{fp_name(word)}\t; r {r} s {s} t {t} (not in GNU's description)"
 
 
 NOP3, NOP2 = bytes.fromhex("f02000"), bytes.fromhex("3df0")

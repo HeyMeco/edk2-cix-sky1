@@ -2,6 +2,9 @@
 //! A reader for the 32-bit little-endian ELF files the firmware builds
 //! produce: loadable segments, sections and the symbol table.
 
+// (the section and symbol readers are for the emulators that follow the PM's)
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::path::Path;
 

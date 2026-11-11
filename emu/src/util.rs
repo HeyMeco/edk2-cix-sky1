@@ -2,6 +2,9 @@
 //! Small things the emulators and tests share: SHA-256, the repository's
 //! root and CIX's debug builds, command-line arguments, a sequence diff.
 
+// (HMAC, HKDF and the diff are for the emulators that follow the PM's)
+#![allow(dead_code)]
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 

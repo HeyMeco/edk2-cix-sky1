@@ -9,11 +9,20 @@
 //!   scmi CH PROTO MSG [ARGS...]   an SCMI command, its answer
 //!   scmi-len LEN CH PROTO MSG [ARGS...]   with a length of its own
 //!   msg CH ID [ARGS...]     one of CIX's PM messages
+//!   post CH ID [ARGS...]    a PM message sent, not waited for
+//!   cpu                     pc, PS, interrupt enables and lines, timers
 //!   fc OFF VALUE            write a fast channel of mailbox 0
 //!   temp T                  every temperature sensor at T
+//!   pvt I T                 PVT sensor I at T
+//!   pvtcode CODE            every PVT sensor's raw code
+//!   unmask LINE BITS        unmask sources of an interrupt aggregator line
 //!   send CH PROTO MSG [ARGS...]   an SCMI command sent, not waited for
 //!   until-sp LO HI          run until the stack pointer enters [LO, HI)
-//!   watch LO HI             stop at the next write into [LO, HI) of RAM
+//!   audit                   from now on, check at every windowed return that the caller's
+//!                           registers are what they were at the call, and after every
+//!                           interrupt that the interrupted code's are
+//!   until-arg SYMBOL IDX MIN  run until SYMBOL is entered with argument IDX >= MIN
+//!   watch LO HI [BYTE]      stop at the next write into [LO, HI) of RAM (of that byte only)
 //!   stop SYMBOL             stop when SYMBOL is reached (then: regs, bt...)
 //!   nostop SYMBOL
 //!   regs                    pc and a0..a15
@@ -22,6 +31,7 @@
 //!   trail                   the last instructions run, by function
 //!   mem ADDR [WORDS]        memory or registers, as words
 //!   str ADDR                a string
+//!   save LO HI FILE         memory to a file (for dwarf_dump.py --ram LO:FILE)
 //!   sym NAME                a symbol's address
 //!   writes [N]              the last N register writes
 //!   wrote LO [HI]           every write so far to an address or range
@@ -68,8 +78,9 @@ fn command(cpu: &mut Cpu, line: &str) -> Result<(), String> {
         }
         "scmi" => {
             let (ch, p, m, args) = (n(1, cpu)?, n(2, cpu)?, n(3, cpu)?, rest(4, cpu)?);
+            let t0 = cpu.io.ccount;
             let v = test::to_val(soc::scmi(cpu, p, m, &args, ch as usize, 3_000_000));
-            println!("ch{ch} {p:#04x}/{m}{args:x?}: {v}");
+            println!("ch{ch} {p:#04x}/{m}{args:x?}: {v}  ({:.2} ms)", (cpu.io.ccount - t0) as f64 * 1000.0 / soc::CORE_HZ as f64);
         }
         "scmi-len" => {
             let (len, ch, p, m, args) = (n(1, cpu)?, n(2, cpu)?, n(3, cpu)?, n(4, cpu)?, rest(5, cpu)?);
@@ -78,7 +89,30 @@ fn command(cpu: &mut Cpu, line: &str) -> Result<(), String> {
         }
         "msg" => {
             let (ch, id, args) = (n(1, cpu)?, n(2, cpu)?, rest(3, cpu)?);
-            println!("ch{ch} message {id:#x}{args:x?}: {}", test::pm_msg(cpu, ch as usize, id, &args));
+            let t0 = cpu.io.ccount;
+            let v = test::pm_msg(cpu, ch as usize, id, &args);
+            println!("ch{ch} message {id:#x}{args:x?}: {v}  ({:.2} ms)", (cpu.io.ccount - t0) as f64 * 1000.0 / soc::CORE_HZ as f64);
+        }
+        "post" => {
+            // a PM message put in the channel and its doorbell rung, not waited for
+            let (ch, id, args) = (n(1, cpu)?, n(2, cpu)?, rest(3, cpu)?);
+            let base = soc::MBOX + ch * 0x10000;
+            let m = &mut cpu.bus.mem;
+            m.write32(base + 4, m.read32(base + 4) & !1);
+            m.write32(base + 0x18, (m.read32(base + 0x18) & !0xffff) | id);
+            m.write32(base, 0x3f | 0x0c << 8);
+            m.write32(base + 0x10, 0);
+            m.write32(base + 0x14, 4 + 4 * args.len() as u32);
+            for (i, a) in args.iter().enumerate() {
+                m.write32(base + 0x1c + 4 * i as u32, *a);
+            }
+            cpu.bus.ring(&mut cpu.io, ch as usize, 1);
+        }
+        "cpu" => {
+            println!(
+                "pc {:#010x} {}; waiting {}; ps {:#x}; intenable {:#010x}; lines {:#010x}; latched {:#010x}; ccount {}; ccompare {:x?}",
+                cpu.pc, cpu.func(cpu.pc), cpu.waiting, cpu.ps(), cpu.intenable, cpu.io.int_lines, cpu.int_latched, cpu.io.ccount, cpu.ccompare
+            );
         }
         "fc" => {
             let (off, v) = (n(1, cpu)?, n(2, cpu)?);
@@ -87,6 +121,25 @@ fn command(cpu: &mut Cpu, line: &str) -> Result<(), String> {
         "temp" => {
             let t: f64 = f.get(1).and_then(|x| x.parse().ok()).ok_or("temp T")?;
             test::temps(cpu, t);
+        }
+        "unmask" => {
+            // an aggregator line's sources unmasked: unmask LINE BITS
+            test::unmask(cpu, n(1, cpu)?, n(2, cpu)?);
+        }
+        "pvt" => {
+            // one PVT sensor's temperature: pvt I T
+            let i = n(1, cpu)? as usize;
+            let t: f64 = f.get(2).and_then(|x| x.parse().ok()).ok_or("pvt I T")?;
+            cpu.bus.pvt_temp[i] = Some(t);
+            cpu.bus.pvt_update(&mut cpu.io);
+        }
+        "pvtcode" => {
+            // every PVT sensor's raw code, as the hardware could give it
+            let code = n(1, cpu)?;
+            cpu.bus.pvt_temp = [None; soc::PVT_N];
+            for i in 0..soc::PVT_N as u32 {
+                cpu.bus.mem.write32(soc::PVT_BASE + 0x1000 * (i + 1) + 4, code | code << 10 | code << 20);
+            }
         }
         "stop" => {
             let a = n(1, cpu)?;
@@ -113,9 +166,42 @@ fn command(cpu: &mut Cpu, line: &str) -> Result<(), String> {
             }
             println!("until-sp: {last}");
         }
+        "audit" => {
+            cpu.audit = Some(std::collections::HashMap::new());
+        }
+        "until-arg" => {
+            // run until SYMBOL is entered with argument IDX at least MIN
+            let (a, idx, min) = (n(1, cpu)?, n(2, cpu)?, n(3, cpu)?);
+            let had = cpu.has_stop(a);
+            cpu.set_stop(a, f[1]);
+            let mut hit = false;
+            for _ in 0..200_000 {
+                if cpu.pc == a {
+                    if cpu.arg(idx) >= min {
+                        hit = true;
+                        break;
+                    }
+                    cpu.del_stop(a);
+                    let _ = cpu.step();
+                    cpu.set_stop(a, f[1]);
+                }
+                match cpu.run(5_000_000) {
+                    Some(w) if w == f[1] => {}
+                    other => {
+                        println!("until-arg: {}", other.unwrap_or_else(|| "ran".into()));
+                        break;
+                    }
+                }
+            }
+            if !had {
+                cpu.del_stop(a);
+            }
+            println!("until-arg: {}", if hit { format!("{} with argument {idx} = {:#x}", f[1], cpu.arg(idx)) } else { "not seen".into() });
+        }
         "watch" => {
-            // stop at the next write into [LO, HI) of RAM
+            // stop at the next write into [LO, HI) of RAM (of bytes BYTE only, when given)
             cpu.watch = Some((n(1, cpu)?, n(2, cpu)?));
+            cpu.watch_byte = if f.len() > 3 { Some(n(3, cpu)? as u8) } else { None };
         }
         "send" => {
             // an SCMI command sent, not waited for
@@ -155,6 +241,13 @@ fn command(cpu: &mut Cpu, line: &str) -> Result<(), String> {
                 print!(" {v:08x}");
             }
             println!();
+        }
+        "save" => {
+            // memory to a file (dwarf_dump.py --ram LO:FILE): save LO HI FILE
+            let (lo, hi) = (n(1, cpu)?, n(2, cpu)?);
+            let path = f.get(3).ok_or("save LO HI FILE")?;
+            let data: Vec<u8> = (lo..hi).map(|a| cpu.read(a, 1) as u8).collect();
+            std::fs::write(path, data).map_err(|e| format!("{path}: {e}"))?;
         }
         "str" => {
             let a = n(1, cpu)?;
@@ -199,6 +292,7 @@ pub fn main(args: &[String]) -> i32 {
         if let Some(b) = a.opt("--board") {
             opts.board = Some(test::board_config(b, &[])?);
         }
+        soc::POLL.with(|p| p.set(2_000));
         let (pm, why, _) = test::boot(elf, &opts)?;
         let mut cpu = pm.cpu;
         println!("boot: {}", why.unwrap_or_else(|| "None".into()));

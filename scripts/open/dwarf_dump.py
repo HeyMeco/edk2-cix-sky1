@@ -7,7 +7,8 @@
 
 The value comes from the ELF's loaded sections (initialised data; .bss
 reads as zeros), or from a memory image (--ram, e.g. the PM's RAM saved
-by pm_emu after boot, for tables built at run time).  An address needs
+after boot, for tables built at run time: sky1emu pm-script ELF
+'save 0x20000000 0x20110000 ram.bin').  An address needs
 --type (a struct, union, enum or typedef name, "struct x" or "x"); --type
 also overrides a variable's type (for void pointers' targets).  Pointers print as the symbol they point to (plus an
 offset); with --follow N, pointers to data objects are followed N levels

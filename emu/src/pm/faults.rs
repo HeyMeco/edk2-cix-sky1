@@ -49,7 +49,7 @@
 //! FAIL; the exit status is the number of them.
 
 use super::soc::{self, BusFault, Cpu, Fault, FaultMode, VOUT_LEN};
-use super::test::{self, Ask, Opts, Val};
+use super::test::{self, Ask, Opts};
 use crate::util::{self, Args};
 use std::collections::BTreeMap;
 

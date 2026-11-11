@@ -159,6 +159,9 @@ pub struct Opts {
     pub prepare: Option<fn(&mut Cpu)>,
     /// --only TEXT: the --full phases whose name has TEXT
     pub only: Option<String>,
+    /// --audit: the interpreter's window and interrupt audit on (a check
+    /// of the interpreter itself: an image it stops was run wrongly)
+    pub audit: bool,
 }
 
 /// A booted image.
@@ -172,6 +175,9 @@ pub struct Pm {
 pub fn boot(elf: &str, opts: &Opts) -> Result<(Pm, Option<String>, Regs), String> {
     let mut cpu = soc::boot(elf, None)?;
     cpu.bus.count_reads = true;
+    if opts.audit {
+        cpu.audit = Some(std::collections::HashMap::new());
+    }
     if let Some(b) = &opts.board {
         cpu.write_bytes(BIOS_CFG, b);
     }
@@ -313,7 +319,7 @@ pub fn levels_of(w: &[u32]) -> Vec<u32> {
 /// (question, answer) pairs, the questions chosen from the answers.
 fn scmi_suite(cpu: &mut Cpu) -> Asked {
     let mut out: Asked = Vec::new();
-    let mut q = |cpu: &mut Cpu, out: &mut Asked, chan: usize, a: Ask| -> Val {
+    let q = |cpu: &mut Cpu, out: &mut Asked, chan: usize, a: Ask| -> Val {
         let v = ask(cpu, chan, &a);
         out.push(((chan, a), v.clone()));
         v
@@ -421,6 +427,7 @@ pub struct Phase {
     pub doorbells: Vec<(usize, u32)>,
     pub answers: Vec<(String, Val)>,
     /// the registers' writes in the order they were made
+    #[allow(dead_code)]
     pub order: Vec<(u32, u64)>,
     /// what happened to an image a question killed (not compared)
     pub notes: Vec<String>,
@@ -575,11 +582,12 @@ fn s3script_table() -> Vec<u8> {
 pub fn pm_msg(cpu: &mut Cpu, chan: usize, msg_id: u32, args: &[u32]) -> Val {
     let base = soc::MBOX + chan as u32 * 0x10000;
     let end = cpu.insns + 3_000_000;
+    let late = cpu.io.ccount + soc::ANSWER_MS * soc::CORE_HZ / 1000;
     while cpu.bus.mem.read32(base + 4) & 1 == 0 {
-        if cpu.insns >= end {
+        if cpu.insns >= end || cpu.io.ccount >= late {
             return Val::Error("channel never free".into());
         }
-        if cpu.run(soc::poll()).is_some() {
+        if soc::poll_run(cpu).is_some() {
             return Val::Error("stopped".into());
         }
     }
@@ -594,10 +602,10 @@ pub fn pm_msg(cpu: &mut Cpu, chan: usize, msg_id: u32, args: &[u32]) -> Val {
     }
     cpu.bus.ring(&mut cpu.io, chan, 1);
     while cpu.bus.mem.read32(base + 4) & 1 == 0 {
-        if cpu.insns >= end {
+        if cpu.insns >= end || cpu.io.ccount >= late {
             return Val::Error("no answer".into());
         }
-        let why = cpu.run(soc::poll());
+        let why = soc::poll_run(cpu);
         let free = cpu.bus.mem.read32(base + 4) & 1 != 0;
         if let Some(w) = &why {
             if !w.starts_with("waiti with nothing") {
@@ -859,7 +867,11 @@ fn services_suite(pm: &mut Pm) -> Vec<Phase> {
         (end, ans)
     }));
 
-    out.push(phase(pm, "PVT sensor 3 over its threshold", None, |pm| {
+    // The two alarm phases each run on a copy that is dropped after it:
+    // CIX's firmware leaves these lines masked, and does not survive them
+    // (full.rs, ALARM_LINES); the phases after find every image as it was.
+    let mut copy = pm.clone();
+    out.push(phase(&mut copy, "PVT sensor 3 over its threshold (line 29 unmasked)", None, |pm| {
         let cpu = &mut pm.cpu;
         unmask(cpu, 29, 0x1fff);
         cpu.bus.pvt_temp[3] = Some(110.0);
@@ -870,8 +882,10 @@ fn services_suite(pm: &mut Pm) -> Vec<Phase> {
         (if end == "ran" { ms(cpu, 5.0) } else { end }, Vec::new())
     }));
 
-    out.push(phase(pm, "PROCHOT asserted 3 ms (lines 29, 30 unmasked)", None, |pm| {
+    let mut copy = pm.clone();
+    out.push(phase(&mut copy, "PROCHOT asserted 3 ms (lines 29, 30 unmasked)", None, |pm| {
         let cpu = &mut pm.cpu;
+        unmask(cpu, 29, 0x1fff);
         unmask(cpu, 30, 1);
         set_raw(cpu, 30, 1);
         let end = ms(cpu, 3.0);
@@ -1115,7 +1129,7 @@ fn expected<'a>(table: &'a [Expected], phase: &str, what: &str, cix: &str, open:
 
 /// Two views of one sequence: after leaving out up to delta writes at the
 /// start of either, one is the other's beginning, and at most delta longer.
-fn windows(a: &[u64], b: &[u64], delta: usize) -> bool {
+fn windows<T: PartialEq>(a: &[T], b: &[T], delta: usize) -> bool {
     (0..=delta.min(a.len())).any(|da| {
         (0..=delta.min(b.len())).any(|db| {
             let (x, y) = (&a[da..], &b[db..]);
@@ -1127,6 +1141,25 @@ fn windows(a: &[u64], b: &[u64], delta: usize) -> bool {
 
 fn periodic(table: &[Periodic], addr: u32, a: &[u64], b: &[u64]) -> bool {
     table.iter().any(|p| p.lo <= addr && addr < p.hi && windows(a, b, p.delta))
+}
+
+/// A device the PM reads on a timer of its own (MS-R1's TMP75, every
+/// 200 ms): the two images' timers do not start at the same instant after
+/// boot, so a phase may hold one read more or less at either end in one
+/// image; `delta` transfers (one read's) are allowed for.
+const POLLED: &[(&str, usize)] = &[("i2c3:0x4d", 6)];
+
+/// The transfers differ only by a polled device's reads at the phase's ends.
+fn polled_only(a: &[String], b: &[String]) -> bool {
+    let is = |l: &&String| POLLED.iter().any(|(d, _)| l.starts_with(d));
+    let rest = |log: &[String]| log.iter().filter(|l| !is(l)).cloned().collect::<Vec<_>>();
+    if by_bus(&rest(a)) != by_bus(&rest(b)) {
+        return false;
+    }
+    POLLED.iter().all(|(d, delta)| {
+        let of = |log: &[String]| log.iter().filter(|l| l.starts_with(d)).cloned().collect::<Vec<_>>();
+        windows(&of(a), &of(b), *delta)
+    })
 }
 
 /// I2C transfers by bus ("i2c1:0x60 W ..." is bus i2c1; a refused address
@@ -1220,6 +1253,10 @@ pub fn report_phases_expecting(key: &str, phases: &[Option<&Vec<Phase>>], verbos
             ("events", fmt_events(&pa.events), fmt_events(&pb.events)),
             ("doorbells", format!("{:?}", pa.doorbells), format!("{:?}", pb.doorbells)),
         ];
+        if !same[1] && polled_only(&pa.i2c, &pb.i2c) {
+            *known.entry("read on a timer: as often within a period").or_insert(0) += 1;
+            same[1] = true;
+        }
         for (k, (what, x, y)) in parts.iter().enumerate() {
             if !same[k] {
                 if let Some(e) = expected(table, &pa.name, what, x, y) {
@@ -1363,7 +1400,7 @@ pub fn main(args: &[String]) -> i32 {
             return 2;
         }
     };
-    if let Err(e) = a.check(&["--scmi", "--power", "--services", "--full", "-v", "--no-cache", "--order"]) {
+    if let Err(e) = a.check(&["--scmi", "--power", "--services", "--full", "-v", "--no-cache", "--order", "--audit"]) {
         eprintln!("{e}");
         return 2;
     }
@@ -1384,6 +1421,7 @@ fn main_run(a: &Args) -> Result<usize, String> {
     opts.services = a.flag("--services");
     opts.runtime = a.int("--runtime").unwrap_or(0) as u32;
     opts.full = a.flag("--full");
+    opts.audit = a.flag("--audit");
     opts.only = a.opt("--only").map(|s| s.to_string());
     let (scmi, power, verbose) = (a.flag("--scmi"), a.flag("--power"), a.flag("-v"));
     let cix_elf = match a.opt("--cix") {
@@ -1444,7 +1482,7 @@ fn main_run(a: &Args) -> Result<usize, String> {
                 let d: Vec<usize> = (0..0x1000).filter(|i| pa[*i] != pb[*i]).collect();
                 let own = OWN_PAGES.iter().find(|p| p.0 == *page);
                 match own {
-                    Some(p) => by_design += 1,
+                    Some(_) => by_design += 1,
                     None => mdiff += 1,
                 }
                 if verbose || mdiff <= 20 {

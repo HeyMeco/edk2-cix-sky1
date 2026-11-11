@@ -37,28 +37,22 @@ const DSU_PLL: &str = "the DSU's level by message: sky1soc_perf sets the PLL's p
 const UNKNOWN_PROTOCOL: &str = "CIX's firmware dies on a message of a protocol it does not have (its response logger calls through a table of six); ours answers NOT_SUPPORTED";
 const CLOCK_V2: &str = "CIX's clock protocol answers CLOCK_NAME_GET and the rate notifications; ours has not got them (no clock's attributes offer either, so an OS does not ask)";
 const BAD_STATE: &str = "CIX's firmware asserts on a system power state that does not exist; ours answers INVALID_PARAMETERS";
-const NO_ANSWER: &str = "CIX's firmware does not answer in the model (cause not established); ours does";
-const ALARM_LINES: &str = "CIX's firmware panics when the PVT alarm and PROCHOT lines it leaves masked are unmasked and fire; ours takes them";
+const ALARM_LINES: &str = "CIX's PVT warning handler computes in floating point (dev_pvt_ht_warning_isr, convert_temperature_to_data): taken in a task that has no coprocessor state (the idle task) FreeRTOS panics, taken in one that has, that task's registers are used. CIX leaves the PVT alarm and PROCHOT lines masked, so it does not happen as shipped; ours takes them";
 
 const LEVEL_GET: &str = "PERFORMANCE_LEVEL_GET of a cluster set by its fast channel: ours answers the level set (one owner, README), CIX's the level its DVFS last had by message";
 
 const FAN_TIMING: &str = "the fans' loop runs on its own period (boards whose fans the PM drives): between questions the two images are not at the same point of it; compared in the phases by time (fans: ...)";
-const PID_SAMPLE: &str = "the die arbiter's PID feedback term is the value at the instant the phase ends, which is not the same point of the DPM's period in both images (boards whose fans the PM drives)";
-const LATE_ASSERT: &str = "CIX's firmware asserts some time after this phase's messages on boards whose fans it drives (cause not established); ours runs on";
-const NEVER_QUIET: &str = "a phase that ends when no register is written: with fans on a timer one image may still be writing";
-const FAN_INDEX: &str = "CIX's firmware asserts on a fan that does not exist; ours answers that the message is invalid";
+const PID_SAMPLE: &str = "the die arbiter's PID feedback term is the value at the instant the phase ends, which is not the same point of the DPM's period in both images";
+const BAD_TABLE: &str = "CIX's fan message 0x802 refuses a user table of nine points, but has already set the table's count to 0: with the fan in the user's mode its fans' loop asserts at the next pass (adjust_fan_rpm: the point in use is not below the count). Ours refuses the message and keeps the table";
 
 /// What differs between the images and is not counted (see Expected).
 pub const EXPECTED: &[Expected] = &[
     Expected { except: "fan", phase: "", what: "message 0x801[", cix: "0 [0xc000 0x801", open: "0 [0xc000 0x801", why: FAN_TIMING },
     Expected { except: "fan", phase: "", what: "'0x801'", cix: "0 [0xc000 0x801", open: "0 [0xc000 0x801", why: FAN_TIMING },
     Expected { except: "fan", phase: "thermal sweep", what: " C: fans", cix: "", open: "", why: FAN_TIMING },
+    Expected { except: "", phase: "SCMI sensors", what: "register 0x4411", cix: "", open: "", why: FAN_TIMING },
     Expected { except: "", phase: "die at 100 C", what: "spt_pids[3]", cix: "", open: "", why: PID_SAMPLE },
-    Expected { except: "", phase: "PM messages: arguments", what: "end", cix: "vAssertCalledWithTRC", open: "", why: LATE_ASSERT },
-    Expected { except: "", phase: "PM messages: every id", what: "end", cix: "", open: "budget", why: NEVER_QUIET },
-    Expected { except: "", phase: "PM messages: every id", what: "end", cix: "budget", open: "", why: NEVER_QUIET },
-    Expected { except: "", phase: "", what: "message 0x802[", cix: "asserted", open: "2 [", why: FAN_INDEX },
-    Expected { except: "", phase: "", what: "message 0x801[", cix: "asserted", open: "2 [", why: FAN_INDEX },
+    Expected { except: "", phase: "", what: "], then 600 ms", cix: "asserted", open: "2 [", why: BAD_TABLE },
     Expected { except: "", phase: "by its fast channel", what: " 0x13/8[3]", cix: "0 [", open: "0 [", why: LEVEL_GET },
     Expected { except: "", phase: "DSU stepped", what: " 0x13/8[3]", cix: "0 [", open: "0 [", why: LEVEL_GET },
     Expected { except: "", phase: "by message", what: "register 0xa00605", cix: "", open: "", why: DSU_PLL },
@@ -77,9 +71,6 @@ pub const EXPECTED: &[Expected] = &[
     Expected { except: "", phase: "every clock read", what: " 0x14/9[", cix: "0 []", open: "-4 []", why: CLOCK_V2 },
     Expected { except: "", phase: "every clock read", what: " 0x14/10[", cix: "0 []", open: "-4 []", why: CLOCK_V2 },
     Expected { except: "", phase: "system power", what: "ch2 0x12/3[0, 80000000]", cix: "asserted", open: "-2 []", why: BAD_STATE },
-    Expected { except: "", phase: "rates set", what: " 0x14/5[", cix: "no answer", open: "", why: NO_ANSWER },
-    Expected { except: "", phase: "every clock read", what: " 0x14/4[", cix: "error", open: "0 [", why: NO_ANSWER },
-    Expected { except: "", phase: "malformed", what: " 0x14/4[", cix: "error", open: "0 [", why: NO_ANSWER },
     Expected { except: "", phase: "unmasked", what: "end", cix: "_xt_panic", open: "ran", why: ALARM_LINES },
     Expected { except: "", phase: "unmasked", what: "register 0xa00005c", cix: "", open: "", why: ALARM_LINES },
     Expected { except: "", phase: "unmasked", what: "register 0xa0070008", cix: "", open: "", why: ALARM_LINES },
@@ -102,6 +93,11 @@ const PROTOCOLS: [u32; 6] = [0x10, 0x11, 0x12, 0x13, 0x14, 0x15];
 const SLOT_MS: f64 = 2.0;
 /// instructions between two looks at a channel, in these phases
 const POLL: u64 = 2_000;
+/// The period of the fans' loop in both images.
+const FAN_PERIOD_MS: f64 = 500.0;
+/// the grid the images' clocks are brought back to before the model
+/// changes or time is let pass
+const GRID_MS: f64 = 20.0;
 
 fn label(chan: usize, a: &Ask) -> String {
     match a {
@@ -121,6 +117,8 @@ struct Q<'a> {
     outs: Vec<Vec<(String, Val)>>,
     /// what happened to an image a question killed
     notes: Vec<String>,
+    /// each image's clock when the phase began
+    t0: Vec<u64>,
 }
 
 /// A copy of the machine to go back to (the write log is kept apart: it
@@ -170,6 +168,7 @@ impl Q<'_> {
     fn guarded(&mut self, name: String, f: impl Fn(&mut Cpu) -> Val) -> Val {
         let snaps: Vec<Snapshot> = self.cpus.iter_mut().map(|c| snapshot(c)).collect();
         let mut vals: Vec<Val> = Vec::new();
+        let starts: Vec<u64> = self.cpus.iter().map(|c| c.io.ccount).collect();
         for c in self.cpus.iter_mut() {
             // each question takes a whole number of SLOT_MS of simulated
             // time, so that the images' clocks stay together and what they
@@ -178,9 +177,22 @@ impl Q<'_> {
             vals.push(f(c));
             let slot = (SLOT_MS * soc::CORE_HZ as f64 / 1000.0) as u64;
             let used = c.io.ccount - t0;
+            if used > 10 * slot {
+                self.notes.push(format!("{}: {name}: took {:.1} ms", image_name(c), used as f64 * 1000.0 / soc::CORE_HZ as f64));
+            }
             let pad = (slot - used % slot) % slot;
             if pad != 0 && !matches!(vals.last(), Some(Val::Error(_))) {
-                soc::run_for(c, pad as f64 * 1000.0 / soc::CORE_HZ as f64);
+                soc::run_cycles(c, pad);
+            }
+        }
+        // ... and as many slots in every image as in the slowest
+        if !vals.iter().any(|v| matches!(v, Val::Error(_))) {
+            let most = self.cpus.iter().zip(&starts).map(|(c, t)| c.io.ccount - t).max().unwrap_or(0);
+            for (c, t) in self.cpus.iter_mut().zip(&starts) {
+                let pad = most - (c.io.ccount - t);
+                if pad != 0 {
+                    soc::run_cycles(c, pad);
+                }
             }
         }
         // a refusal (the channel's error bit) must leave the image alive:
@@ -235,11 +247,40 @@ impl Q<'_> {
         }
     }
 
-    /// Something done to every image's model.
+    /// Every image run on to the same multiple of GRID_MS since the phase
+    /// began (the next one of the image that is furthest): after questions,
+    /// which do not take the two images the same time to the microsecond,
+    /// their clocks read the same again.
+    fn align(&mut self) {
+        self.align_to(GRID_MS);
+    }
+
+    fn align_to(&mut self, ms: f64) {
+        let grid = (ms * soc::CORE_HZ as f64 / 1000.0) as u64;
+        let most = self.cpus.iter().zip(self.t0.iter()).map(|(c, t0)| (c.io.ccount - t0).div_ceil(grid) * grid).max().unwrap_or(0);
+        for (c, t0) in self.cpus.iter_mut().zip(self.t0.iter()) {
+            let pad = most - (c.io.ccount - t0);
+            if pad != 0 {
+                soc::run_cycles(c, pad);
+            }
+        }
+    }
+
+    /// Something done to every image's model, at the same time in both.
     fn each(&mut self, f: impl Fn(&mut Cpu)) {
+        self.align();
         for c in self.cpus.iter_mut() {
             f(c);
         }
+    }
+
+    /// each(), at a multiple of the fans' loop's period since the phase
+    /// began: the loop is then at the same point of its period at every
+    /// change (the questions between two changes take a few milliseconds,
+    /// which would otherwise move each change against the loop).
+    fn each_fan_period(&mut self, f: impl Fn(&mut Cpu)) {
+        self.align_to(FAN_PERIOD_MS);
+        self.each(f);
     }
 
     /// A value read from every image, among the answers.
@@ -249,8 +290,9 @@ impl Q<'_> {
         }
     }
 
-    /// Every image run for t ms; how that ended, per image.
+    /// Every image run for t ms (from the same time); how that ended, per image.
     fn settle(&mut self, t: f64) -> Vec<String> {
+        self.align();
         self.cpus.iter_mut().map(|c| ms(c, t)).collect()
     }
 
@@ -265,8 +307,13 @@ fn image_name(cpu: &Cpu) -> String {
 
 type Step = fn(&mut Q) -> Vec<String>;
 
+/// The end of a phase: time for what the questions started to finish.
+/// (By time, not until no register is written: an image that idles in
+/// WAITI and one whose idle task spins do not run the same time for the
+/// same number of instructions, and fans on a timer never leave an image
+/// quiet.)
 fn quiet(q: &mut Q) -> Vec<String> {
-    q.until("quiet", Some(4 * test::CHUNK))
+    q.settle(40.0)
 }
 
 fn message_attributes(q: &mut Q) -> Vec<String> {
@@ -664,12 +711,7 @@ fn sensors(q: &mut Q) -> Vec<String> {
     // the sensors' codes as the hardware could give them, not only those of
     // a temperature: every sensor's reading for codes over the whole range
     for code in [0u32, 1, 100, 222, 223, 224, 400, 600, 800, 1022, 1023] {
-        q.each(|c| {
-            c.bus.pvt_temp = [None; soc::PVT_N];
-            for i in 0..soc::PVT_N as u32 {
-                c.bus.mem.write32(soc::PVT_BASE + 0x1000 * (i + 1) + 4, code | code << 10 | code << 20);
-            }
-        });
+        q.each(|c| pvt_codes(c, code));
         q.settle(250.0);
         for s in 0..n {
             q.scmi(0, 0x15, 6, &[s, 0]);
@@ -809,7 +851,15 @@ fn pm_message_arguments(q: &mut Q) -> Vec<String> {
             q.msg(0, 0x802, &[mode, fan, 3000, 50]);
         }
         q.msg(0, 0x802, &[3, fan, 0, 3, 0x00000a05, 0x0bb82823, 0x13883c37]);
-        q.msg(0, 0x802, &[3, fan, 1, 9, 0, 0, 0]);
+        // a table that is refused, with the fan in the user's mode: the
+        // fans' loop (500 ms) has to get past it
+        q.guarded(format!("ch0 message 0x802[3, {fan}, 1, 9, 0, 0, 0], then 600 ms"), |cpu| {
+            let v = pm_msg(cpu, 0, 0x802, &[3, fan, 1, 9, 0, 0, 0]);
+            match (&v, soc::run_for(cpu, 600.0)) {
+                (Val::Error(_), _) | (_, None) => v,
+                (_, Some(why)) => Val::Error(format!("stopped: {why}")),
+            }
+        });
         q.msg(0, 0x801, &[fan]);
     }
     for (a, b) in [(1u32, 1u32), (2, 2), (3, 0), (3, 3), (0xffffffff, 0xffffffff), (0, 0)] {
@@ -938,16 +988,18 @@ fn fan_state(q: &mut Q, what: &str, fan: u32) {
 /// simulated time, so both images are at the same point of the loop.
 fn fan_modes_by_time(q: &mut Q) -> Vec<String> {
     let n = fan_count(q);
-    q.each(|c| test::temps(c, 55.0));
+    q.each_fan_period(|c| test::temps(c, 55.0));
     let mut end = q.settle(1500.0);
     // (and the fan after the last, which does not exist)
     for fan in 0..n + 1 {
         for mode in 0..8u32 {
+            q.align_to(FAN_PERIOD_MS);
             q.msg(0, 0x802, &[mode, fan, 2000, 40]);
-            end = q.settle(1500.0);
+            q.settle(1500.0);
             fan_state(q, &format!("fan {fan} mode {mode}"), fan);
         }
         // a table of the user's (mode 3), then back to automatic
+        q.align_to(FAN_PERIOD_MS);
         q.msg(0, 0x802, &[3, fan, 1, 3, 0x00000a05, 0x0bb82823, 0x13883c37]);
         end = q.settle(1500.0);
         fan_state(q, &format!("fan {fan} user table"), fan);
@@ -957,18 +1009,37 @@ fn fan_modes_by_time(q: &mut Q) -> Vec<String> {
 }
 
 /// Fans by time: the automatic loop from 30 to 100 C and back, three
-/// seconds at each temperature.
+/// seconds at each temperature, then at the sensors' raw codes.
 fn fan_curve_by_time(q: &mut Q) -> Vec<String> {
     let n = fan_count(q);
     let mut end = vec!["ran".to_string()];
     for t in [30.0, 45.0, 55.0, 65.0, 75.0, 85.0, 100.0, 80.0, 60.0, 40.0] {
-        q.each(|c| test::temps(c, t));
+        q.each_fan_period(|c| test::temps(c, t));
         end = q.settle(3000.0);
         for fan in 0..n.max(1) {
             fan_state(q, &format!("{t} C"), fan);
         }
     }
+    // ... and the sensors' codes as the hardware could give them (what the
+    // sensors phase asks about between questions), a second and a half each
+    for code in [0u32, 1, 100, 222, 223, 224, 400, 600, 800, 1022, 1023] {
+        q.each_fan_period(|c| pvt_codes(c, code));
+        end = q.settle(1500.0);
+        for fan in 0..n.max(1) {
+            fan_state(q, &format!("code {code}"), fan);
+        }
+    }
+    q.each_fan_period(|c| test::temps(c, 40.0));
+    q.settle(1500.0);
     end
+}
+
+/// Every PVT sensor's three codes set as the hardware could give them.
+fn pvt_codes(c: &mut Cpu, code: u32) {
+    c.bus.pvt_temp = [None; soc::PVT_N];
+    for i in 0..soc::PVT_N as u32 {
+        c.bus.mem.write32(soc::PVT_BASE + 0x1000 * (i + 1) + 4, code | code << 10 | code << 20);
+    }
 }
 
 /// Six seconds with the watchdog's count running: the PM must feed it.
@@ -1032,7 +1103,7 @@ const STEPS: [(&str, Step); 24] = [
     ("PM messages: arguments (SMN, streams, locked levels, cores, modes)", pm_message_arguments),
     ("I2C slave: the EC's reads and writes", i2c_slave),
     ("fans: every mode on each fan, by time", fan_modes_by_time),
-    ("fans: the automatic loop from 30 to 100 C and back, by time", fan_curve_by_time),
+    ("fans: the automatic loop from 30 to 100 C and back and at raw codes, by time", fan_curve_by_time),
     ("thermal sweep 30 to 130 C and back", thermal_sweep),
     ("thermal sweep with the PVT warning line and PROCHOT unmasked", thermal_sweep_lines),
     ("thermal sweep with the PVT safe line unmasked too", thermal_sweep_safe_line),
@@ -1057,7 +1128,8 @@ pub fn suite(pms: &mut [Pm], opts: &Opts, covered: &mut [Vec<(u32, u32)>]) -> Ve
         let mut forks: Vec<Pm> = pms.to_vec();
         let starts: Vec<PhaseStart> = forks.iter().map(|f| PhaseStart::new(f, None)).collect();
         let (ends, outs, notes) = {
-            let mut q = Q { cpus: forks.iter_mut().map(|f| &mut f.cpu).collect(), outs: pms.iter().map(|_| Vec::new()).collect(), notes: Vec::new() };
+            let t0 = forks.iter().map(|f| f.cpu.io.ccount).collect();
+            let mut q = Q { cpus: forks.iter_mut().map(|f| &mut f.cpu).collect(), outs: pms.iter().map(|_| Vec::new()).collect(), notes: Vec::new(), t0 };
             let ends = step(&mut q);
             (ends, q.outs, q.notes)
         };

@@ -39,6 +39,7 @@ pub const PS: u32 = 230;
 pub const VECBASE: u32 = 231;
 pub const EXCCAUSE: u32 = 232;
 pub const CCOUNT: u32 = 234;
+#[allow(dead_code)]
 pub const PRID: u32 = 235;
 pub const EXCVADDR: u32 = 238;
 use decode::{LBEG, LCOUNT, LEND, WINDOWBASE, WINDOWSTART};
@@ -106,6 +107,7 @@ enum Trap {
 pub struct Write {
     pub pc: u32,
     pub addr: u32,
+    #[allow(dead_code)]
     pub size: u8,
     pub value: u64,
 }
@@ -163,8 +165,20 @@ pub struct Xtensa<B: Bus> {
     stops: HashMap<u32, String>,
     stubs: HashMap<u32, Stub<B>>,
     pub stop_write: Option<(u32, u64)>,
+    /// The window audit (a debugging aid, off unless Some): at every
+    /// windowed call the caller's registers that the call must preserve,
+    /// by (return address, caller's stack pointer); checked when the call
+    /// returns.  A mismatch stops the run: the firmware's window handlers,
+    /// its interrupt entry and exit, or this interpreter lost a register.
+    pub audit: Option<HashMap<(u32, u32), Vec<u32>>>,
+    /// ... and at every interrupt the interrupted code's a0-a15, SAR and
+    /// loop registers, by (its pc, its stack pointer); checked when an
+    /// RFI or RFE goes back there.
+    audit_irq: HashMap<(u32, u32), Vec<u32>>,
     /// stop on a write into this range of RAM (a debugging aid)
     pub watch: Option<(u32, u32)>,
+    /// ... of a value with these bytes only, when given
+    pub watch_byte: Option<u8>,
     /// CCOUNT a WAITI may not sleep past
     pub until: Option<u64>,
     pub waiting: bool,
@@ -277,7 +291,10 @@ impl<B: Bus> Xtensa<B> {
             stops: HashMap::new(),
             stubs: HashMap::new(),
             stop_write: None,
+            audit: None,
+            audit_irq: HashMap::new(),
             watch: None,
+            watch_byte: None,
             until: None,
             waiting: false,
             insns: 0,
@@ -341,7 +358,8 @@ impl<B: Bus> Xtensa<B> {
         let value = if size >= 8 { value } else { value & ((1u64 << (8 * size)) - 1) };
         if let Some((i, off)) = self.ram_at(addr, size) {
             if let Some((lo, hi)) = self.watch {
-                if lo <= addr && addr < hi {
+                let wanted = self.watch_byte.map_or(true, |b| (0..size).all(|k| (value >> (8 * k)) as u8 == b));
+                if lo <= addr && addr < hi && wanted {
                     self.watch = None;
                     return Err(Trap::Stop(format!("write of {value:#x} to {addr:#x}")));
                 }
@@ -577,6 +595,7 @@ impl<B: Bus> Xtensa<B> {
         self.set_mark(pc);
     }
 
+    #[allow(dead_code)]
     pub fn del_stub(&mut self, pc: u32) {
         self.stubs.remove(&pc);
         self.set_mark(pc);
@@ -835,6 +854,10 @@ impl<B: Bus> Xtensa<B> {
         }
         self.waiting = false;
         let pc = self.pc;
+        if self.audit.is_some() {
+            let regs = self.audit_regs();
+            self.audit_irq.insert((pc, self.a(1)), regs);
+        }
         if level == 1 {
             self.sr[EPC1 as usize] = pc;
             self.sr[EXCCAUSE as usize] = LEVEL1_INT;
@@ -1019,8 +1042,45 @@ impl<B: Bus> Xtensa<B> {
         }
     }
 
+    fn audit_regs(&self) -> Vec<u32> {
+        let mut v: Vec<u32> = (0..16).map(|i| self.a(i)).collect();
+        v.extend([self.sar, self.lbeg, self.lend, self.lcount, self.br]);
+        v
+    }
+
+    /// The audit's check of a return from an interrupt to `to`.
+    fn audit_return(&mut self, to: u32) -> Result<(), Trap> {
+        if self.audit.is_none() {
+            return Ok(());
+        }
+        let Some(was) = self.audit_irq.remove(&(to, self.a(1))) else { return Ok(()) };
+        let now = self.audit_regs();
+        if let Some(i) = (0..was.len()).find(|i| now[*i] != was[*i]) {
+            let name = match i {
+                0..=15 => format!("a{i}"),
+                16 => "SAR".to_string(),
+                17 => "LBEG".to_string(),
+                18 => "LEND".to_string(),
+                19 => "LCOUNT".to_string(),
+                _ => "BR".to_string(),
+            };
+            return Err(Trap::Stop(format!(
+                "interrupt audit: back at {} after an interrupt, {name} is {:#x}, was {:#x} when it was taken",
+                self.func(to),
+                now[i],
+                was[i]
+            )));
+        }
+        Ok(())
+    }
+
     fn call(&mut self, n: u8, tgt: u32, pc: u32, len: u32) -> u32 {
         let n = n as u32;
+        if n != 0 && self.audit.is_some() {
+            let regs: Vec<u32> = (0..4 * n).map(|i| self.a(i)).collect();
+            let key = (pc.wrapping_add(len) & 0x3fffffff, self.a(1));
+            self.audit.as_mut().unwrap().insert(key, regs);
+        }
         if n == 0 {
             self.w(0, pc.wrapping_add(len));
         } else {
@@ -1029,6 +1089,13 @@ impl<B: Bus> Xtensa<B> {
             self.sr[PS as usize] = (ps & !(3 << PS_CALLINC_SHIFT)) | n << PS_CALLINC_SHIFT;
         }
         tgt
+    }
+
+    /// A RETW now would find its caller's window not live.
+    fn retw_underflows(&self) -> bool {
+        let a0 = self.a(0);
+        let k = a0 >> 30;
+        k != 0 && (self.ws >> ((self.wb4 >> 2).wrapping_sub(k) & 15)) & 1 == 0
     }
 
     fn retw(&mut self, pc: u32) -> Result<Option<u32>, Trap> {
@@ -1042,6 +1109,20 @@ impl<B: Bus> Xtensa<B> {
         if (self.ws >> nwb) & 1 != 0 {
             self.ws &= !(1 << owb);
             self.wb4 = nwb << 2;
+            if self.audit.is_some() {
+                let key = (a0 & 0x3fffffff, self.a(1));
+                if let Some(regs) = self.audit.as_mut().unwrap().remove(&key) {
+                    if let Some(i) = (0..regs.len() as u32).find(|i| self.a(*i) != regs[*i as usize]) {
+                        return Err(Trap::Stop(format!(
+                            "window audit: back in {} after the call returning from {}, a{i} is {:#x}, was {:#x} at the call",
+                            self.func((pc & 0xc0000000) | (a0 & 0x3fffffff)),
+                            self.func(pc),
+                            self.a(i),
+                            regs[i as usize]
+                        )));
+                    }
+                }
+            }
             return Ok(Some((pc & 0xc0000000) | (a0 & 0x3fffffff)));
         }
         // window underflow: the caller's frame is on the stack
@@ -1055,6 +1136,16 @@ impl<B: Bus> Xtensa<B> {
     fn exec(&mut self, insn: &Insn, pc: u32, len: u32) -> Result<Option<u32>, Trap> {
         match insn.k {
             K::Bundle { start, n } => {
+                // A bundle is one instruction: when its RETW takes a window
+                // underflow, nothing of the bundle has happened, and it runs
+                // again after the handler.  (CIX's strlen ends in
+                // { retw ; sub a2, a3, a2 }: applied twice, the length would
+                // be the string's address again.)
+                for i in start..start + n as u32 {
+                    if self.bundle_ops[i as usize].k == K::Retw && self.retw_underflows() {
+                        return self.retw(pc);
+                    }
+                }
                 self.snap = self.ar;
                 self.in_bundle = true;
                 let mut npc = None;
@@ -1283,7 +1374,9 @@ impl<B: Bus> Xtensa<B> {
             }
             K::Rfe => {
                 self.sr[PS as usize] &= !PS_EXCM;
-                Ok(Some(self.sr[EPC1 as usize]))
+                let to = self.sr[EPC1 as usize];
+                self.audit_return(to)?;
+                Ok(Some(to))
             }
             K::Rfde => {
                 self.sr[PS as usize] &= !PS_EXCM;
@@ -1303,7 +1396,9 @@ impl<B: Bus> Xtensa<B> {
             K::Rfi { level } => {
                 let l = level as u32;
                 self.sr[PS as usize] = self.sr[((EPS2 + l).wrapping_sub(2) & 255) as usize];
-                Ok(Some(self.sr[((EPC1 + l).wrapping_sub(1) & 255) as usize]))
+                let to = self.sr[((EPC1 + l).wrapping_sub(1) & 255) as usize];
+                self.audit_return(to)?;
+                Ok(Some(to))
             }
             K::Clrex => {
                 self.monitor = false;
