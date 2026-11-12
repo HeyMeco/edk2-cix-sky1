@@ -77,7 +77,11 @@ pub const TIMER_INT: [u32; 3] = [6, 7, 8];
 /// What the bus sees of the core.
 #[derive(Clone, Debug, Default)]
 pub struct Io {
-    pub ccount: u64,
+    /// simulated time, in units the bus defines (the PM's: 1/800 MHz)
+    pub time: u64,
+    /// time units a cycle of the core's clock takes (the bus sets it when
+    /// the firmware changes the core's clock; 0 counts as 1)
+    pub tick: u32,
     /// level-sensitive interrupt lines driven by the SoC model
     pub int_lines: u32,
     /// the instruction being run
@@ -179,8 +183,12 @@ pub struct Xtensa<B: Bus> {
     pub watch: Option<(u32, u32)>,
     /// ... of a value with these bytes only, when given
     pub watch_byte: Option<u8>,
-    /// CCOUNT a WAITI may not sleep past
+    /// the time (Io::time) a WAITI may not sleep past
     pub until: Option<u64>,
+    /// the core's cycle counter (CCOUNT)
+    pub cc: u64,
+    /// time gone by of a cycle not yet counted (a sleep ended between two)
+    cc_part: u64,
     pub waiting: bool,
     pub insns: u64,
     div: Option<Div>,
@@ -297,6 +305,8 @@ impl<B: Bus> Xtensa<B> {
             watch_byte: None,
             until: None,
             waiting: false,
+            cc: 0,
+            cc_part: 0,
             insns: 0,
             div: None,
             exclusive: 0,
@@ -645,7 +655,7 @@ impl<B: Bus> Xtensa<B> {
             WINDOWSTART => self.ws,
             INTSET => self.io.int_lines | self.int_latched,
             INTENABLE => self.intenable,
-            CCOUNT => self.io.ccount as u32,
+            CCOUNT => self.cc as u32,
             240..=242 => self.ccompare[(n - 240) as usize],
             _ => self.sr[(n & 255) as usize],
         }
@@ -663,7 +673,7 @@ impl<B: Bus> Xtensa<B> {
             INTSET => self.int_latched |= v,
             INTCLEAR => self.int_latched &= !v,
             INTENABLE => self.intenable = v,
-            CCOUNT => self.io.ccount = v as u64,
+            CCOUNT => self.cc = v as u64,
             CPENABLE => self.sr[n as usize] = v & 0xff,
             240..=242 => {
                 self.ccompare[(n - 240) as usize] = v;
@@ -730,7 +740,8 @@ impl<B: Bus> Xtensa<B> {
             }
         };
         self.insns += 1;
-        self.io.ccount += 1;
+        self.cc += 1;
+        self.io.time += self.io.tick.max(1) as u64;
         self.pc = match npc {
             Some(n) => n,
             None => {
@@ -815,20 +826,29 @@ impl<B: Bus> Xtensa<B> {
     /// Advance CCOUNT by cycles (a busy-wait done at once), latching the
     /// timers it passes; the bus sees the time go by.
     pub fn skip(&mut self, cycles: u64) {
-        let c = self.io.ccount as u32;
+        self.skip_time(cycles * self.io.tick.max(1) as u64);
+    }
+
+    /// skip(), for a length of simulated time.
+    pub fn skip_time(&mut self, t: u64) {
+        let tick = self.io.tick.max(1) as u64;
+        let cycles = (self.cc_part + t) / tick;
+        self.cc_part = (self.cc_part + t) % tick;
+        let c = self.cc as u32;
         for i in 0..3 {
             let d = self.ccompare[i].wrapping_sub(c) as u64;
             if 0 < d && d <= cycles {
                 self.int_latched |= 1 << TIMER_INT[i];
             }
         }
-        self.io.ccount += cycles;
-        self.bus.advance(&mut self.io, cycles);
+        self.cc += cycles;
+        self.io.time += t;
+        self.bus.advance(&mut self.io, t);
     }
 
     #[inline]
     fn timers(&mut self) {
-        let c = self.io.ccount as u32;
+        let c = self.cc as u32;
         for i in 0..3 {
             // CCOMPARE matches when CCOUNT reaches it; checked each instruction
             if self.ccompare[i] == c {
@@ -871,18 +891,25 @@ impl<B: Bus> Xtensa<B> {
         }
     }
 
-    /// WAITI: jump CCOUNT to the next timer match if nothing is pending.
+    /// WAITI: jump to the next timer match if nothing is pending.
     fn wake(&mut self) -> Result<bool, String> {
+        // (a compare that matches at the very cycle the core went to sleep)
+        self.timers();
         if self.pending() != 0 {
             return Ok(true);
         }
-        let c = self.io.ccount as u32;
+        let tick = self.io.tick.max(1) as u64;
+        let c = self.cc as u32;
+        // (in time units, from now)
         let mut best: Option<u64> = None;
         for i in 0..3 {
             if self.intenable >> TIMER_INT[i] & 1 != 0 {
                 let d = self.ccompare[i].wrapping_sub(c) as u64;
-                if d != 0 && best.map_or(true, |b| d < b) {
-                    best = Some(d);
+                if d != 0 {
+                    let t = d * tick - self.cc_part;
+                    if best.map_or(true, |b| t < b) {
+                        best = Some(t);
+                    }
                 }
             }
         }
@@ -891,19 +918,31 @@ impl<B: Bus> Xtensa<B> {
                 best = Some(d);
             }
         }
-        let Some(best) = best else { return Ok(false) };
+        let Some(mut best) = best else { return Ok(false) };
+        let mut limit = false;
         if let Some(until) = self.until {
-            if self.io.ccount + best > until {
+            if self.io.time + best > until {
                 // asleep at the time limit: stay in WAITI, stop the run there
-                let d = until.saturating_sub(self.io.ccount);
-                self.io.ccount += d;
-                self.bus.advance(&mut self.io, d);
-                return Err("until".to_string());
+                best = until.saturating_sub(self.io.time);
+                limit = true;
             }
         }
-        self.io.ccount += best;
+        // every compare the sleep passes is latched, also one whose
+        // interrupt is not enabled just now (it is taken when it is)
+        let cycles = (self.cc_part + best) / tick;
+        for i in 0..3 {
+            let d = self.ccompare[i].wrapping_sub(c) as u64;
+            if 0 < d && d <= cycles {
+                self.int_latched |= 1 << TIMER_INT[i];
+            }
+        }
+        self.cc += cycles;
+        self.cc_part = (self.cc_part + best) % tick;
+        self.io.time += best;
         self.bus.advance(&mut self.io, best);
-        self.timers();
+        if limit {
+            return Err("until".to_string());
+        }
         Ok(true)
     }
 

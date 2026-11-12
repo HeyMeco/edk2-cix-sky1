@@ -84,7 +84,7 @@ impl T {
 }
 
 pub fn now_ms(cpu: &Cpu) -> f64 {
-    cpu.io.ccount as f64 * 1000.0 / soc::CORE_HZ as f64
+    cpu.io.time as f64 * 1000.0 / soc::TIME_HZ as f64
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Default)]

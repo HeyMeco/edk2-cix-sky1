@@ -13,6 +13,17 @@ path = "src/main.rs"
 
 [dependencies]
 
+# One feature per emulator still being written, so that work in progress
+# in one does not stop the others from building (cargo build --features ec).
+# A finished emulator moves into `default`.
+[features]
+default = []
+ec = []
+se = ["arm"]
+sfh = ["arm"]
+arm = []
+a64 = []
+
 [profile.release]
 opt-level = 3
 debug = 1

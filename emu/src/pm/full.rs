@@ -39,7 +39,10 @@ const CLOCK_V2: &str = "CIX's clock protocol answers CLOCK_NAME_GET and the rate
 const BAD_STATE: &str = "CIX's firmware asserts on a system power state that does not exist; ours answers INVALID_PARAMETERS";
 const ALARM_LINES: &str = "CIX's PVT warning handler computes in floating point (dev_pvt_ht_warning_isr, convert_temperature_to_data): taken in a task that has no coprocessor state (the idle task) FreeRTOS panics, taken in one that has, that task's registers are used. CIX leaves the PVT alarm and PROCHOT lines masked, so it does not happen as shipped; ours takes them";
 
-const LEVEL_GET: &str = "PERFORMANCE_LEVEL_GET of a cluster set by its fast channel: ours answers the level set (one owner, README), CIX's the level its DVFS last had by message";
+const LEVEL_GET: &str = "PERFORMANCE_LEVEL_GET of a cluster or the DSU whose level was not set by a message (the OS's fast channel, or the DPM's cap: PROCHOT, a skin temperature controller): ours answers the level that runs (sky1soc_perf's, one owner, README), CIX's the level its DVFS last had by message, which is not the PLL's";
+const CAP_FOLLOWED: &str = "a level set by message while the DPM's cap comes down (it does over the first 132 ms after the image idles, with the skin temperature controllers on): ours sets the clusters to each step of the cap as it comes (the voltage with it), CIX's stays at the level the message got until the cap is below sky1soc_perf's own record; both end at the cap";
+const GRANT_SAMPLE: &str = "dpm_main_tab.opp_grant's entry for the DSU is set by the DPM's limit pass and set to 0 again by its export pass, every period (with the skin temperature controllers on); the phase's end reads it between the two in one image (it is 0 in both but for some 50 us of each ms; what is exported, opp_run, is compared and the same)";
+const DVFS_CATCHES_UP: &str = "under a cap of the DPM's, CIX's DVFS still has the level of the last message: the next message for the domain makes it set the level that already runs and notify it (no PLL or voltage write); ours notifies the changes that happen";
 
 const FAN_TIMING: &str = "the fans' loop runs on its own period (boards whose fans the PM drives): between questions the two images are not at the same point of it; compared in the phases by time (fans: ...)";
 const PID_SAMPLE: &str = "the die arbiter's PID feedback term is the value at the instant the phase ends, which is not the same point of the DPM's period in both images";
@@ -47,34 +50,49 @@ const BAD_TABLE: &str = "CIX's fan message 0x802 refuses a user table of nine po
 
 /// What differs between the images and is not counted (see Expected).
 pub const EXPECTED: &[Expected] = &[
-    Expected { except: "fan", phase: "", what: "message 0x801[", cix: "0 [0xc000 0x801", open: "0 [0xc000 0x801", why: FAN_TIMING },
-    Expected { except: "fan", phase: "", what: "'0x801'", cix: "0 [0xc000 0x801", open: "0 [0xc000 0x801", why: FAN_TIMING },
-    Expected { except: "fan", phase: "thermal sweep", what: " C: fans", cix: "", open: "", why: FAN_TIMING },
-    Expected { except: "", phase: "SCMI sensors", what: "register 0x4411", cix: "", open: "", why: FAN_TIMING },
-    Expected { except: "", phase: "die at 100 C", what: "spt_pids[3]", cix: "", open: "", why: PID_SAMPLE },
-    Expected { except: "", phase: "", what: "], then 600 ms", cix: "asserted", open: "2 [", why: BAD_TABLE },
-    Expected { except: "", phase: "by its fast channel", what: " 0x13/8[3]", cix: "0 [", open: "0 [", why: LEVEL_GET },
-    Expected { except: "", phase: "DSU stepped", what: " 0x13/8[3]", cix: "0 [", open: "0 [", why: LEVEL_GET },
-    Expected { except: "", phase: "by message", what: "register 0xa00605", cix: "", open: "", why: DSU_PLL },
-    Expected { except: "", phase: "by message", what: "the DSU's clock", cix: "", open: "", why: DSU_PLL },
-    Expected { except: "", phase: "SCMI performance", what: "register 0xa00605", cix: "", open: "", why: DSU_PLL },
-    Expected { except: "", phase: "", what: " 0x16/", cix: "asserted", open: "-1 []", why: UNKNOWN_PROTOCOL },
-    Expected { except: "", phase: "", what: " 0x17/", cix: "asserted", open: "-1 []", why: UNKNOWN_PROTOCOL },
-    Expected { except: "", phase: "", what: " 0x18/", cix: "asserted", open: "-1 []", why: UNKNOWN_PROTOCOL },
-    Expected { except: "", phase: "", what: " 0x19/", cix: "asserted", open: "-1 []", why: UNKNOWN_PROTOCOL },
-    Expected { except: "", phase: "", what: " 0x80/", cix: "asserted", open: "-1 []", why: UNKNOWN_PROTOCOL },
-    Expected { except: "", phase: "", what: " 0x99/", cix: "asserted", open: "-1 []", why: UNKNOWN_PROTOCOL },
-    Expected { except: "", phase: "message attributes", what: " 0x14/2[8]", cix: "0 [0x0]", open: "-4 []", why: CLOCK_V2 },
-    Expected { except: "", phase: "message attributes", what: " 0x14/2[9]", cix: "0 [0x0]", open: "-4 []", why: CLOCK_V2 },
-    Expected { except: "", phase: "message attributes", what: " 0x14/2[a]", cix: "0 [0x0]", open: "-4 []", why: CLOCK_V2 },
-    Expected { except: "", phase: "every clock read", what: " 0x14/8[", cix: "0 [", open: "-4 []", why: CLOCK_V2 },
-    Expected { except: "", phase: "every clock read", what: " 0x14/9[", cix: "0 []", open: "-4 []", why: CLOCK_V2 },
-    Expected { except: "", phase: "every clock read", what: " 0x14/10[", cix: "0 []", open: "-4 []", why: CLOCK_V2 },
-    Expected { except: "", phase: "system power", what: "ch2 0x12/3[0, 80000000]", cix: "asserted", open: "-2 []", why: BAD_STATE },
-    Expected { except: "", phase: "unmasked", what: "end", cix: "_xt_panic", open: "ran", why: ALARM_LINES },
-    Expected { except: "", phase: "unmasked", what: "register 0xa00005c", cix: "", open: "", why: ALARM_LINES },
-    Expected { except: "", phase: "unmasked", what: "register 0xa0070008", cix: "", open: "", why: ALARM_LINES },
-    Expected { except: "", phase: "unmasked", what: " C: ", cix: "", open: "", why: ALARM_LINES },
+    Expected { capped: false, except: "fan", phase: "", what: "message 0x801[", cix: "0 [0xc000 0x801", open: "0 [0xc000 0x801", why: FAN_TIMING },
+    Expected { capped: false, except: "fan", phase: "", what: "'0x801'", cix: "0 [0xc000 0x801", open: "0 [0xc000 0x801", why: FAN_TIMING },
+    Expected { capped: false, except: "fan", phase: "thermal sweep", what: " C: fans", cix: "", open: "", why: FAN_TIMING },
+    Expected { capped: false, except: "", phase: "SCMI sensors", what: "register 0x4411", cix: "", open: "", why: FAN_TIMING },
+    Expected { capped: false, except: "", phase: "die at 100 C", what: "spt_pids[3]", cix: "", open: "", why: PID_SAMPLE },
+    Expected { capped: false, except: "", phase: "", what: "], then 600 ms", cix: "asserted", open: "2 [", why: BAD_TABLE },
+    Expected { capped: false, except: "", phase: "interrupt lines by themselves", what: " 0x13/8[3]", cix: "0 [", open: "0 [", why: LEVEL_GET },
+    Expected { capped: true, except: "", phase: "", what: " 0x13/8[2]", cix: "0 [", open: "0 [", why: LEVEL_GET },
+    Expected { capped: true, except: "", phase: "", what: " 0x13/8[3]", cix: "0 [", open: "0 [", why: LEVEL_GET },
+    Expected { capped: true, except: "", phase: "", what: " 0x13/8[4]", cix: "0 [", open: "0 [", why: LEVEL_GET },
+    Expected { capped: true, except: "", phase: "", what: " 0x13/8[5]", cix: "0 [", open: "0 [", why: LEVEL_GET },
+    Expected { capped: true, except: "", phase: "", what: " 0x13/8[6]", cix: "0 [", open: "0 [", why: LEVEL_GET },
+    Expected { capped: true, except: "", phase: "cap falls", what: "register 0xa0060", cix: "", open: "", why: CAP_FOLLOWED },
+    Expected { capped: true, except: "", phase: "cap falls", what: "register 0xa00900", cix: "", open: "", why: CAP_FOLLOWED },
+    Expected { capped: true, except: "", phase: "die at 100 C", what: "opp_grant", cix: "", open: "", why: GRANT_SAMPLE },
+    Expected { capped: true, except: "", phase: "cap falls", what: "I2C", cix: "", open: "", why: CAP_FOLLOWED },
+    Expected { capped: true, except: "", phase: "cap falls", what: "clock, kHz", cix: "", open: "", why: CAP_FOLLOWED },
+    Expected { capped: true, except: "", phase: "notifications: levels", what: "register 0xa00900", cix: "", open: "", why: DVFS_CATCHES_UP },
+    Expected { capped: true, except: "", phase: "notifications: levels", what: "the notification channel", cix: "", open: "", why: DVFS_CATCHES_UP },
+    Expected { capped: true, except: "", phase: "notifications: levels", what: "doorbells", cix: "", open: "", why: DVFS_CATCHES_UP },
+    Expected { capped: true, except: "", phase: "SCMI performance", what: "register 0xa00900", cix: "", open: "", why: DVFS_CATCHES_UP },
+    Expected { capped: false, except: "", phase: "by its fast channel", what: " 0x13/8[3]", cix: "0 [", open: "0 [", why: LEVEL_GET },
+    Expected { capped: false, except: "", phase: "DSU stepped", what: " 0x13/8[3]", cix: "0 [", open: "0 [", why: LEVEL_GET },
+    Expected { capped: false, except: "", phase: "by message", what: "register 0xa00605", cix: "", open: "", why: DSU_PLL },
+    Expected { capped: false, except: "", phase: "by message", what: "the DSU's clock", cix: "", open: "", why: DSU_PLL },
+    Expected { capped: false, except: "", phase: "SCMI performance", what: "register 0xa00605", cix: "", open: "", why: DSU_PLL },
+    Expected { capped: false, except: "", phase: "", what: " 0x16/", cix: "asserted", open: "-1 []", why: UNKNOWN_PROTOCOL },
+    Expected { capped: false, except: "", phase: "", what: " 0x17/", cix: "asserted", open: "-1 []", why: UNKNOWN_PROTOCOL },
+    Expected { capped: false, except: "", phase: "", what: " 0x18/", cix: "asserted", open: "-1 []", why: UNKNOWN_PROTOCOL },
+    Expected { capped: false, except: "", phase: "", what: " 0x19/", cix: "asserted", open: "-1 []", why: UNKNOWN_PROTOCOL },
+    Expected { capped: false, except: "", phase: "", what: " 0x80/", cix: "asserted", open: "-1 []", why: UNKNOWN_PROTOCOL },
+    Expected { capped: false, except: "", phase: "", what: " 0x99/", cix: "asserted", open: "-1 []", why: UNKNOWN_PROTOCOL },
+    Expected { capped: false, except: "", phase: "message attributes", what: " 0x14/2[8]", cix: "0 [0x0]", open: "-4 []", why: CLOCK_V2 },
+    Expected { capped: false, except: "", phase: "message attributes", what: " 0x14/2[9]", cix: "0 [0x0]", open: "-4 []", why: CLOCK_V2 },
+    Expected { capped: false, except: "", phase: "message attributes", what: " 0x14/2[a]", cix: "0 [0x0]", open: "-4 []", why: CLOCK_V2 },
+    Expected { capped: false, except: "", phase: "every clock read", what: " 0x14/8[", cix: "0 [", open: "-4 []", why: CLOCK_V2 },
+    Expected { capped: false, except: "", phase: "every clock read", what: " 0x14/9[", cix: "0 []", open: "-4 []", why: CLOCK_V2 },
+    Expected { capped: false, except: "", phase: "every clock read", what: " 0x14/10[", cix: "0 []", open: "-4 []", why: CLOCK_V2 },
+    Expected { capped: false, except: "", phase: "system power", what: "ch2 0x12/3[0, 80000000]", cix: "asserted", open: "-2 []", why: BAD_STATE },
+    Expected { capped: false, except: "", phase: "unmasked", what: "end", cix: "_xt_panic", open: "ran", why: ALARM_LINES },
+    Expected { capped: false, except: "", phase: "unmasked", what: "register 0xa00005c", cix: "", open: "", why: ALARM_LINES },
+    Expected { capped: false, except: "", phase: "unmasked", what: "register 0xa0070008", cix: "", open: "", why: ALARM_LINES },
+    Expected { capped: false, except: "", phase: "unmasked", what: " C: ", cix: "", open: "", why: ALARM_LINES },
 ];
 
 /// The NI-700s' counter snapshot strobes, which the performance streams
@@ -168,17 +186,17 @@ impl Q<'_> {
     fn guarded(&mut self, name: String, f: impl Fn(&mut Cpu) -> Val) -> Val {
         let snaps: Vec<Snapshot> = self.cpus.iter_mut().map(|c| snapshot(c)).collect();
         let mut vals: Vec<Val> = Vec::new();
-        let starts: Vec<u64> = self.cpus.iter().map(|c| c.io.ccount).collect();
+        let starts: Vec<u64> = self.cpus.iter().map(|c| c.io.time).collect();
         for c in self.cpus.iter_mut() {
             // each question takes a whole number of SLOT_MS of simulated
             // time, so that the images' clocks stay together and what they
             // do on a timer (streams, polling) is done as often in both
-            let t0 = c.io.ccount;
+            let t0 = c.io.time;
             vals.push(f(c));
-            let slot = (SLOT_MS * soc::CORE_HZ as f64 / 1000.0) as u64;
-            let used = c.io.ccount - t0;
+            let slot = (SLOT_MS * soc::TIME_HZ as f64 / 1000.0) as u64;
+            let used = c.io.time - t0;
             if used > 10 * slot {
-                self.notes.push(format!("{}: {name}: took {:.1} ms", image_name(c), used as f64 * 1000.0 / soc::CORE_HZ as f64));
+                self.notes.push(format!("{}: {name}: took {:.1} ms", image_name(c), used as f64 * 1000.0 / soc::TIME_HZ as f64));
             }
             let pad = (slot - used % slot) % slot;
             if pad != 0 && !matches!(vals.last(), Some(Val::Error(_))) {
@@ -187,9 +205,9 @@ impl Q<'_> {
         }
         // ... and as many slots in every image as in the slowest
         if !vals.iter().any(|v| matches!(v, Val::Error(_))) {
-            let most = self.cpus.iter().zip(&starts).map(|(c, t)| c.io.ccount - t).max().unwrap_or(0);
+            let most = self.cpus.iter().zip(&starts).map(|(c, t)| c.io.time - t).max().unwrap_or(0);
             for (c, t) in self.cpus.iter_mut().zip(&starts) {
-                let pad = most - (c.io.ccount - t);
+                let pad = most - (c.io.time - t);
                 if pad != 0 {
                     soc::run_cycles(c, pad);
                 }
@@ -256,10 +274,10 @@ impl Q<'_> {
     }
 
     fn align_to(&mut self, ms: f64) {
-        let grid = (ms * soc::CORE_HZ as f64 / 1000.0) as u64;
-        let most = self.cpus.iter().zip(self.t0.iter()).map(|(c, t0)| (c.io.ccount - t0).div_ceil(grid) * grid).max().unwrap_or(0);
+        let grid = (ms * soc::TIME_HZ as f64 / 1000.0) as u64;
+        let most = self.cpus.iter().zip(self.t0.iter()).map(|(c, t0)| (c.io.time - t0).div_ceil(grid) * grid).max().unwrap_or(0);
         for (c, t0) in self.cpus.iter_mut().zip(self.t0.iter()) {
-            let pad = most - (c.io.ccount - t0);
+            let pad = most - (c.io.time - t0);
             if pad != 0 {
                 soc::run_cycles(c, pad);
             }
@@ -470,7 +488,7 @@ fn dsu_with_clusters(q: &mut Q) -> Vec<String> {
 
 /// A PLL's output from its registers (soc.rs: 24 MHz times the feedback
 /// divider and fraction, over the reference and the two post dividers).
-fn pll_khz(cpu: &Cpu, base: u32) -> u32 {
+pub fn pll_khz(cpu: &Cpu, base: u32) -> u32 {
     let m = &cpu.bus.mem;
     let (fb, frac, div) = (m.read32(base) & 0xfff, m.read32(base + 4) & 0xffffff, m.read32(base + 8));
     let (p1, p2, r) = ((div & 7).max(1), ((div >> 4) & 7).max(1), ((div >> 8) & 0x3f).max(1));
@@ -910,6 +928,17 @@ fn i2c_slave(q: &mut Q) -> Vec<String> {
     for id in [0x801u32, 0x804] {
         q.msg(0, id, &[0]);
     }
+    // a transfer of the EC's that goes wrong: arbitration lost, a time-out
+    // with the bus busy 30 ms more, FIFO overflows; the slave has to be
+    // there again afterwards
+    for (isr, busy_ms) in [(0x200u32, 0u64), (0x08, 30), (0xe0, 0)] {
+        q.each(|c| c.bus.slave_error(&mut c.io, bus, isr, busy_ms));
+        q.settle(100.0);
+        q.read(&format!("slave error {isr:#x}: the controller's interrupt source on"), |c| {
+            Val::U32s(Some(vec![c.bus.mem.read32(soc::AGG + 0x80 + 4 * 12) >> bus & 1]))
+        });
+        q.read(&format!("slave error {isr:#x}: register 32 then"), |c| ec_transfer(c, bus, &[0, 32], true));
+    }
     quiet(q)
 }
 
@@ -1042,13 +1071,198 @@ fn pvt_codes(c: &mut Cpu, code: u32) {
     }
 }
 
-/// Six seconds with the watchdog's count running: the PM must feed it.
+/// The watchdog (counting only when the BIOS's configuration gives it a
+/// time-out: --set wdt=MICROSECONDS; armed, then, by a suspend and resume,
+/// which sets it up again).  Six seconds with the count running and its
+/// interrupt's source in the aggregator as the firmware leaves it (it
+/// never enables it: the reset value decides), then with the source on:
+/// the PM has to answer each first time-out.
 fn watchdog(q: &mut Q) -> Vec<String> {
+    let state = |q: &mut Q, what: &str| {
+        q.read(&format!("{what}: watchdog load, control"), |c| {
+            Val::U32s(Some([0x000, 0x008].iter().map(|o| c.bus.mem.read32(soc::WDT + o)).collect()))
+        });
+        q.read(&format!("{what}: time-outs not answered"), |c| Val::U32s(Some(vec![c.bus.wdt.expired])));
+        q.read(&format!("{what}: time-outs the PM counted"), |c| Val::U32s(Some(vec![c.bus.mem.read32(WDT_FIRED)])));
+        q.read(&format!("{what}: events"), |c| Val::Text(format!("{:?}", c.bus.events)));
+    };
     // (the count starts with the PM's next write to the watchdog)
     q.each(|c| c.bus.wdt.count = true);
-    let end = q.settle(6000.0);
-    q.read("watchdog load, control", |c| Val::U32s(Some([0x000, 0x008].iter().map(|o| c.bus.mem.read32(soc::WDT + o)).collect())));
-    q.read("times it ran out", |c| Val::U32s(Some(vec![c.bus.wdt.expired])));
+    q.each(|c| test::unmask(c, 21, 1));
+    q.each(|c| c.bus.wdt_restart(&c.io));
+    let mut end = q.settle(3500.0);
+    state(q, "source on");
+    q.each(|c| test::mask(c, 21, 1));
+    if end.iter().all(|e| e == "ran") {
+        end = q.settle(2500.0);
+        state(q, "source off");
+    }
+    end
+}
+
+/// CIX's scratch word for the AP: the watchdog's first time-outs.
+const WDT_FIRED: u32 = 0x200bef38;
+
+/// The ACPI PCC channel (CPPC): the OS writes a command into the shared
+/// block and writes fast channel 1 of mailbox 0.  The block read back
+/// after "update", each core's desired level set to its lowest and to its
+/// highest and "set desired", then commands that do not exist.
+fn pcc(q: &mut Q) -> Vec<String> {
+    fn block(cpu: &mut Cpu) -> Option<u32> {
+        let sym = cpu.byname.get("_s_pcc_ptr").copied()?;
+        let p = cpu.read(sym, 4) as u32;
+        (p != 0).then_some(p)
+    }
+    fn command(q: &mut Q, cmd: u32, desired: Option<u32>) {
+        let name = match desired {
+            Some(off) => format!("PCC command {cmd:#x}, desired levels from +{off:#x}"),
+            None => format!("PCC command {cmd:#x}"),
+        };
+        q.guarded(name, |cpu| {
+            let Some(p) = block(cpu) else { return Val::Nothing };
+            if let Some(off) = desired {
+                for core in 0..12 {
+                    let r = p + 8 + 64 * core;
+                    let v = cpu.bus.mem.read32(r + off);
+                    cpu.bus.mem.write32(r + 16, v);
+                }
+            }
+            cpu.bus.mem.write32(p + 4, cmd);
+            ask(cpu, 0, &Ask::Fc(0x90, 1));
+            if let Some(why) = soc::run_for(cpu, 4.0) {
+                return Val::Error(format!("stopped: {why}"));
+            }
+            // the command and status word, then each core's levels (not
+            // its counters, which count time)
+            let mut w = vec![cpu.bus.mem.read32(p), cpu.bus.mem.read32(p + 4)];
+            for core in 0..12 {
+                w.extend((4..16).map(|k| cpu.bus.mem.read32(p + 8 + 64 * core + 4 * k)));
+            }
+            Val::U32s(Some(w))
+        });
+    }
+    command(q, 0, None);
+    // lowestPerfLevel is at +32 of a core's registers, highestPerfLevel at +20
+    for off in [32, 20, 32] {
+        command(q, 1, Some(off));
+        q.settle(100.0);
+        command(q, 0, None);
+        for d in 0..4 {
+            q.scmi(0, 0x13, 8, &[d]);
+        }
+    }
+    for cmd in [2, 5, 0xff, 0x100, 0x10001, 0xffffffff] {
+        command(q, cmd, None);
+    }
+    // ... and the fast channel written with nothing asked
+    q.guarded("PCC fast channel alone".to_string(), |cpu| ask(cpu, 0, &Ask::Fc(0x90, 0)));
+    quiet(q)
+}
+
+/// Interrupt lines CIX's firmware has handlers for but that nothing above
+/// raises, each by itself (the PVT warning line, which CIX's image does not
+/// survive, is in the sweeps): the PVT "safe" line (28) for three of the
+/// sensors, PROCHOT (30) for 3 ms and held for 3 s (its timer's steps),
+/// the local GPIO's source of line 21.
+fn lines_alone(q: &mut Q) -> Vec<String> {
+    let state = |q: &mut Q, what: &str| {
+        q.read(&format!("{what}: enables of lines 21, 28, 29, 30"), |c| {
+            Val::U32s(Some([21u32, 28, 29, 30].iter().map(|l| c.bus.mem.read32(soc::AGG + 0x80 + 4 * (l - 12))).collect()))
+        });
+        for name in ["opp_run", "edp_limit"] {
+            q.read(&format!("{what}: {name}"), |c| {
+                test::dpm_outputs(c).into_iter().find(|(n, _)| n.ends_with(name)).map_or(Val::Nothing, |x| x.1)
+            });
+        }
+        q.scmi(0, 0x13, 8, &[3]);
+    };
+    let mut end = vec!["ran".to_string()];
+    q.each(|c| test::unmask(c, 28, 0x1fff));
+    for sensor in [0u32, 3, 12] {
+        q.each(|c| test::set_raw(c, 28, 1 << sensor));
+        q.settle(20.0);
+        q.each(|c| test::set_raw(c, 28, 0));
+        end = q.settle(20.0);
+        state(q, &format!("PVT safe, sensor {sensor}"));
+    }
+    // (what the safe handler enabled of the warning line goes again: the
+    // warning line is not this phase's)
+    q.each(|c| {
+        test::mask(c, 28, 0x1fff);
+        test::mask(c, 29, 0x1fff);
+    });
+    for (held, after) in [(3.0, 60.0), (3000.0, 500.0), (40.0, 3000.0)] {
+        if end.iter().any(|e| e != "ran") {
+            break;
+        }
+        q.each(|c| {
+            test::unmask(c, 30, 1);
+            test::set_raw(c, 30, 1);
+        });
+        q.settle(held);
+        state(q, &format!("PROCHOT for {held} ms"));
+        q.each(|c| test::set_raw(c, 30, 0));
+        end = q.settle(after);
+        state(q, &format!("{after} ms after PROCHOT"));
+    }
+    q.each(|c| test::mask(c, 30, 1));
+    q.each(|c| {
+        test::unmask(c, 21, 4);
+        test::set_raw(c, 21, 4);
+    });
+    if end.iter().all(|e| e == "ran") {
+        end = q.settle(20.0);
+    }
+    state(q, "GPIO");
+    q.each(|c| {
+        test::set_raw(c, 21, 0);
+        test::mask(c, 21, 4);
+    });
+    end
+}
+
+/// The SoC idle switch (PM message 0x803 bit 0).  With the DDR controllers
+/// reporting both frequency copies (--ddr-dfs) and the BIOS's thresholds
+/// given (--set noc_idle...), the SoC counts as idle (the model's cores
+/// count nothing) once it has been busy three seconds, and the PM takes
+/// the DDR to its low frequency and its own clock to 200 MHz; without
+/// them the switch changes nothing.  On: idle at once (the three seconds
+/// are long over); off; on again: idle after three seconds; then a pixel
+/// clock is set, which has the display checked again; off.
+fn idle_switch(q: &mut Q) -> Vec<String> {
+    let state = |q: &mut Q, what: &str| {
+        q.read(&format!("{what}: DDR frequency switches"), |c| Val::Text(format!("{:?}", c.bus.dfs_log)));
+        q.read(&format!("{what}: time units per cycle of the core"), |c| Val::U32s(Some(vec![c.io.tick])));
+        q.scmi(0, 0x13, 8, &[3]);
+    };
+    q.msg(0, 0x803, &[1, 1]);
+    let mut end = q.settle(600.0);
+    state(q, "on for 600 ms");
+    q.msg(0, 0x803, &[1, 0]);
+    q.settle(100.0);
+    state(q, "off");
+    q.msg(0, 0x803, &[1, 1]);
+    q.settle(100.0);
+    q.msg(0, 0x803, &[1, 0]);
+    q.msg(0, 0x803, &[1, 1]);
+    if end.iter().all(|e| e == "ran") {
+        end = q.settle(2600.0);
+        state(q, "on again for 2.6 s");
+        q.settle(800.0);
+        state(q, "on again for 3.4 s");
+    }
+    // a display comes up: a pixel clock set while the switch is on
+    q.scmi(0, 0x14, 5, &[0, 148_500_000, 0, 0]);
+    q.settle(400.0);
+    state(q, "after a clock was set");
+    q.msg(0, 0x803, &[1, 0]);
+    q.settle(100.0);
+    state(q, "off again");
+    // what runs on a timer has to go on at its pace after the core's clock
+    // went down and came back (the fans' loop, the heartbeat)
+    if end.iter().all(|e| e == "ran") {
+        end = q.settle(3000.0);
+    }
     end
 }
 
@@ -1084,7 +1298,7 @@ fn suspend_twice(q: &mut Q) -> Vec<String> {
     r
 }
 
-const STEPS: [(&str, Step); 24] = [
+const STEPS: [(&str, Step); 27] = [
     ("SCMI answered by interrupt", by_interrupt),
     ("notifications: levels and limits by message", notify_by_message),
     ("notifications: a cluster by its fast channel", notify_by_fast_channel),
@@ -1107,7 +1321,10 @@ const STEPS: [(&str, Step); 24] = [
     ("thermal sweep 30 to 130 C and back", thermal_sweep),
     ("thermal sweep with the PVT warning line and PROCHOT unmasked", thermal_sweep_lines),
     ("thermal sweep with the PVT safe line unmasked too", thermal_sweep_safe_line),
-    ("watchdog over 6 s", watchdog),
+    ("PCC commands by the fast channel", pcc),
+    ("interrupt lines by themselves: PVT safe, PROCHOT, GPIO", lines_alone),
+    ("the SoC idle switch and the DDR's frequency (PM message 0x803)", idle_switch),
+    ("watchdog: time-outs with its interrupt on, then off", watchdog),
     ("suspend by PM message 3, then suspend again", suspend_twice),
 ];
 
@@ -1128,7 +1345,7 @@ pub fn suite(pms: &mut [Pm], opts: &Opts, covered: &mut [Vec<(u32, u32)>]) -> Ve
         let mut forks: Vec<Pm> = pms.to_vec();
         let starts: Vec<PhaseStart> = forks.iter().map(|f| PhaseStart::new(f, None)).collect();
         let (ends, outs, notes) = {
-            let t0 = forks.iter().map(|f| f.cpu.io.ccount).collect();
+            let t0 = forks.iter().map(|f| f.cpu.io.time).collect();
             let mut q = Q { cpus: forks.iter_mut().map(|f| &mut f.cpu).collect(), outs: pms.iter().map(|_| Vec::new()).collect(), notes: Vec::new(), t0 };
             let ends = step(&mut q);
             (ends, q.outs, q.notes)

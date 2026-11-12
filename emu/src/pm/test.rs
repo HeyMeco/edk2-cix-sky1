@@ -70,7 +70,7 @@ pub const BOARDS: [(&str, &str); 5] = [
 
 /// --set NAME=VALUE: a config_data_t of pm_config_t (offsets in it) set to
 /// a valid VALUE, the block's sums redone (CIX's do_pm_config_crc_check)
-const CFG_WORDS: [(&str, usize); 8] = [
+const CFG_WORDS: [(&str, usize); 22] = [
     ("gpio0", 0xd37),
     ("gpio1", 0xd3b),
     ("gpio2", 0xd3f),
@@ -78,6 +78,20 @@ const CFG_WORDS: [(&str, usize); 8] = [
     ("psi7", 0xd47),
     ("wdt", 0xd2f),
     ("noc_idle", 0xcf3),
+    ("noc_idle1", 0xcf7),
+    ("noc_idle2", 0xcfb),
+    ("noc_idle3", 0xcff),
+    ("noc_idle4", 0xd03),
+    ("spt_mask", 0xd07),
+    ("spt_set0", 0xd0b),
+    ("spt_set1", 0xd0f),
+    ("spt_set2", 0xd13),
+    ("spt_set3", 0xd17),
+    ("spt_margin", 0xd1b),
+    ("spt_kh", 0xd1f),
+    ("spt_ka", 0xd23),
+    ("spt_c", 0xd27),
+    ("spt_alpha", 0xd2b),
     ("trip", 0x5e),
 ];
 
@@ -159,6 +173,9 @@ pub struct Opts {
     pub prepare: Option<fn(&mut Cpu)>,
     /// --only TEXT: the --full phases whose name has TEXT
     pub only: Option<String>,
+    /// --ddr-dfs: the DDR controllers report both frequency copies trained
+    /// (the SoC idle switch needs it)
+    pub ddr_dfs: bool,
     /// --audit: the interpreter's window and interrupt audit on (a check
     /// of the interpreter itself: an image it stops was run wrongly)
     pub audit: bool,
@@ -177,6 +194,9 @@ pub fn boot(elf: &str, opts: &Opts) -> Result<(Pm, Option<String>, Regs), String
     cpu.bus.count_reads = true;
     if opts.audit {
         cpu.audit = Some(std::collections::HashMap::new());
+    }
+    if opts.ddr_dfs {
+        cpu.bus.ddr_dfs_capable();
     }
     if let Some(b) = &opts.board {
         cpu.write_bytes(BIOS_CFG, b);
@@ -494,6 +514,14 @@ pub fn run(elf: &str, questions: Option<&Asked>, suite: bool, power: bool, opts:
         full_base: full,
         covered: Vec::new(),
     };
+    // With the skin temperature controllers on, the DPM brings its cap
+    // down over the first 132 ms after the image idles, and the two images
+    // do not treat a level set meanwhile alike (full.rs, CAP_FOLLOWED: the
+    // --full phase "a level by message while the DPM's cap falls" compares
+    // that): these questions wait until the cap has settled.
+    if CAPPED.with(|c| c.get()) && idle {
+        ms(cpu, 150.0);
+    }
     let (n_i2c, n_writes) = (cpu.bus.i2c_log.len(), cpu.writes.len());
     if let Some(qs) = questions {
         r.scmi = Some(qs.iter().map(|((chan, a), _)| ((*chan, a.clone()), if idle { ask(cpu, *chan, a) } else { Val::Nothing })).collect());
@@ -582,9 +610,9 @@ fn s3script_table() -> Vec<u8> {
 pub fn pm_msg(cpu: &mut Cpu, chan: usize, msg_id: u32, args: &[u32]) -> Val {
     let base = soc::MBOX + chan as u32 * 0x10000;
     let end = cpu.insns + 3_000_000;
-    let late = cpu.io.ccount + soc::ANSWER_MS * soc::CORE_HZ / 1000;
+    let late = cpu.io.time + soc::ANSWER_MS * soc::TIME_HZ / 1000;
     while cpu.bus.mem.read32(base + 4) & 1 == 0 {
-        if cpu.insns >= end || cpu.io.ccount >= late {
+        if cpu.insns >= end || cpu.io.time >= late {
             return Val::Error("channel never free".into());
         }
         if soc::poll_run(cpu).is_some() {
@@ -602,7 +630,7 @@ pub fn pm_msg(cpu: &mut Cpu, chan: usize, msg_id: u32, args: &[u32]) -> Val {
     }
     cpu.bus.ring(&mut cpu.io, chan, 1);
     while cpu.bus.mem.read32(base + 4) & 1 == 0 {
-        if cpu.insns >= end || cpu.io.ccount >= late {
+        if cpu.insns >= end || cpu.io.time >= late {
             return Val::Error("no answer".into());
         }
         let why = soc::poll_run(cpu);
@@ -692,7 +720,7 @@ impl PhaseStart {
             events: cpu.bus.events.len(),
             doorbells: cpu.bus.doorbells.len(),
             insns: cpu.insns,
-            ccount: cpu.io.ccount,
+            ccount: cpu.io.time,
         }
     }
 
@@ -712,7 +740,7 @@ impl PhaseStart {
             name: name.to_string(),
             end,
             insns: cpu.insns - self.insns,
-            ms: (cpu.io.ccount - self.ccount) as f64 * 1000.0 / soc::CORE_HZ as f64,
+            ms: (cpu.io.time - self.ccount) as f64 * 1000.0 / soc::TIME_HZ as f64,
             regs,
             order,
             i2c: cpu.bus.i2c_log[self.i2c..].iter().map(|l| l.what.clone()).collect(),
@@ -748,7 +776,7 @@ fn power_suite(pm: &mut Pm, covered: &mut Vec<(u32, u32)>) -> Vec<Phase> {
             cpu.bus.mem.write(S3SCRIPT_HUB + i as u32, 1, *b as u64);
         }
         let ans = PM_MESSAGES.iter().map(|(ch, mid, a, _)| (format!("({ch}, {mid:#x}, {a:?})"), pm_msg(cpu, *ch, *mid, a))).collect();
-        (run_until(cpu, "quiet", Some(4 * CHUNK)), ans)
+        (ms(cpu, 60.0), ans)
     }));
 
     out.push(phase(pm, "suspend", None, |pm| {
@@ -776,7 +804,7 @@ fn power_suite(pm: &mut Pm, covered: &mut Vec<(u32, u32)>) -> Vec<Phase> {
             ans.push((format!("({chan}, {proto:#x}, {msg})"), to_val(soc::scmi(cpu, proto, msg, args, chan, 5_000_000))));
         }
         ans.push(("0x42".to_string(), pm_msg(cpu, TFA, STR_BOOT_CORE_NOTIFY, &[0])));
-        (run_until(cpu, "quiet", Some(4 * CHUNK)), ans)
+        (ms(cpu, 60.0), ans)
     }));
 
     out.push(phase(pm, "shutdown", None, |pm| {
@@ -825,6 +853,13 @@ pub fn unmask(cpu: &mut Cpu, line: u32, bits: u32) {
     cpu.bus.update_irqs(&mut cpu.io);
 }
 
+pub fn mask(cpu: &mut Cpu, line: u32, bits: u32) {
+    let a = soc::AGG + 0x80 + 4 * (line - 12);
+    let v = cpu.bus.mem.read32(a) & !bits;
+    cpu.bus.mem.write32(a, v);
+    cpu.bus.update_irqs(&mut cpu.io);
+}
+
 pub fn set_raw(cpu: &mut Cpu, line: usize, v: u32) {
     cpu.bus.irq_raw[line] = v;
     cpu.bus.update_irqs(&mut cpu.io);
@@ -845,6 +880,27 @@ fn services_suite(pm: &mut Pm) -> Vec<Phase> {
     let mut out = Vec::new();
     // pm_ready's work from the handshake on, wherever each image does it
     let since = Some(pm.handshake_write);
+    // With the skin temperature controllers on the DPM's cap comes down
+    // over the first 132 ms: a level set by message meanwhile (40 ms after
+    // the image idles; on a copy), then big cluster 0's clock as the cap
+    // takes its steps.
+    if CAPPED.with(|c| c.get()) {
+        let mut copy = pm.clone();
+        out.push(phase(&mut copy, "a level by message while the DPM's cap falls", since, |pm| {
+            let cpu = &mut pm.cpu;
+            let mut end = ms(cpu, 40.0);
+            let mut ans = vec![("level set".to_string(), to_val(soc::scmi(cpu, 0x13, 7, &[3, 0x1b13], 0, 3_000_000)))];
+            for t in [8.0, 20.0, 20.0, 20.0, 20.0, 100.0] {
+                if end == "ran" {
+                    end = ms(cpu, t);
+                }
+                ans.push((format!("after {t} ms more: big cluster 0's clock, kHz"), Val::U32s(Some(vec![super::full::pll_khz(cpu, soc::CGC)]))));
+            }
+            ans.push(("ch0 0x13/8[3]".to_string(), to_val(soc::scmi(cpu, 0x13, 8, &[3], 0, 3_000_000))));
+            (end, ans)
+        }));
+        pm.cpu.mark_covered(&copy.cpu.covered());
+    }
     out.push(phase(pm, "pm_ready (fans, PVT polling, NoC idle, DPM)", since, |pm| (ms(&mut pm.cpu, 100.0), Vec::new())));
 
     out.push(phase(pm, "fans at 35 C", None, |pm| {
@@ -882,6 +938,7 @@ fn services_suite(pm: &mut Pm) -> Vec<Phase> {
         (if end == "ran" { ms(cpu, 5.0) } else { end }, Vec::new())
     }));
 
+    pm.cpu.mark_covered(&copy.cpu.covered());
     let mut copy = pm.clone();
     out.push(phase(&mut copy, "PROCHOT asserted 3 ms (lines 29, 30 unmasked)", None, |pm| {
         let cpu = &mut pm.cpu;
@@ -892,6 +949,8 @@ fn services_suite(pm: &mut Pm) -> Vec<Phase> {
         set_raw(cpu, 30, 0);
         (if end == "ran" { ms(cpu, 40.0) } else { end }, Vec::new())
     }));
+
+    pm.cpu.mark_covered(&copy.cpu.covered());
 
     out.push(phase(pm, "PMIC fault (PM message 0x400)", None, |pm| {
         let cpu = &mut pm.cpu;
@@ -1098,6 +1157,9 @@ fn fmt_events(v: &[Event]) -> String {
 /// or part of the phase have these texts in them), what each image gives
 /// (texts in them), and why it is not counted.
 pub struct Expected {
+    /// only in a configuration whose DPM caps the CPU domains from boot
+    /// (the skin temperature controllers on: set_capped)
+    pub capped: bool,
     pub phase: &'static str,
     /// not in the phases whose name has this text (when it is not empty)
     pub except: &'static str,
@@ -1117,9 +1179,20 @@ pub struct Periodic {
     pub delta: usize,
 }
 
+thread_local! {
+    static CAPPED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The run's configuration has the DPM's skin temperature controllers on.
+pub fn set_capped(on: bool) {
+    CAPPED.with(|c| c.set(on));
+}
+
 fn expected<'a>(table: &'a [Expected], phase: &str, what: &str, cix: &str, open: &str) -> Option<&'a Expected> {
+    let capped = CAPPED.with(|c| c.get());
     table.iter().find(|e| {
-        phase.contains(e.phase)
+        (!e.capped || capped)
+            && phase.contains(e.phase)
             && (e.except.is_empty() || !phase.contains(e.except))
             && what.contains(e.what)
             && cix.contains(e.cix)
@@ -1368,6 +1441,7 @@ fn ask_line(chan: usize, a: &Ask, ans: &Val) -> Option<String> {
 pub fn report_asked(answers: &[&Asked], verbose: bool) -> usize {
     let mut bad = 0;
     let mut same_n = 0;
+    let mut known_n = 0;
     let mut n = 0;
     for (i, ((chan, a), ans)) in answers[0].iter().enumerate() {
         let Some(line) = ask_line(*chan, a, ans) else { continue };
@@ -1375,17 +1449,21 @@ pub fn report_asked(answers: &[&Asked], verbose: bool) -> usize {
         if answers.len() == 2 {
             let other = answers[1].get(i).map_or(Val::Nothing, |x| x.1.clone());
             let same = other == *ans;
+            // (a difference the table of expected ones has, full.rs)
+            let known = if same { None } else { expected(super::full::EXPECTED, "SCMI", &line, &ans.to_string(), &other.to_string()) };
             same_n += same as usize;
-            bad += !same as usize;
+            bad += (!same && known.is_none()) as usize;
+            known_n += known.is_some() as usize;
             if verbose || !same {
-                println!("{} {line}{}", if same { "ok  " } else { "FAIL" }, if same { String::new() } else { format!(" (open {other})") });
+                let mark = if same { "ok  " } else if known.is_some() { "exp " } else { "FAIL" };
+                println!("{mark} {line}{}", if same { String::new() } else { format!(" (open {other})") });
             }
         } else {
             println!("{line}");
         }
     }
     if answers.len() == 2 {
-        println!("{same_n} of {n} SCMI answers the same");
+        println!("{same_n} of {n} SCMI answers the same{}", if known_n != 0 { format!(", {known_n} differ as expected (full.rs)") } else { String::new() });
     } else {
         println!("{n} SCMI commands");
     }
@@ -1400,7 +1478,7 @@ pub fn main(args: &[String]) -> i32 {
             return 2;
         }
     };
-    if let Err(e) = a.check(&["--scmi", "--power", "--services", "--full", "-v", "--no-cache", "--order", "--audit"]) {
+    if let Err(e) = a.check(&["--scmi", "--power", "--services", "--full", "-v", "--no-cache", "--order", "--audit", "--ddr-dfs"]) {
         eprintln!("{e}");
         return 2;
     }
@@ -1417,11 +1495,15 @@ fn main_run(a: &Args) -> Result<usize, String> {
     let mut opts = Opts::default();
     if let Some(b) = a.opt("--board") {
         opts.board = Some(board_config(b, &a.all("--set"))?);
+        // (the controllers' mask is a valid word, with one of them on)
+        let mask = opts.board.as_ref().map_or(1, |c| util::u32le(c, 0x18 + 0xd07));
+        set_capped(mask & 1 == 0 && mask >> 1 & 15 != 0);
     }
     opts.services = a.flag("--services");
     opts.runtime = a.int("--runtime").unwrap_or(0) as u32;
     opts.full = a.flag("--full");
     opts.audit = a.flag("--audit");
+    opts.ddr_dfs = a.flag("--ddr-dfs");
     opts.only = a.opt("--only").map(|s| s.to_string());
     let (scmi, power, verbose) = (a.flag("--scmi"), a.flag("--power"), a.flag("-v"));
     let cix_elf = match a.opt("--cix") {

@@ -39,8 +39,12 @@ pub const DELAYS: [&str; 2] = ["cc_delay", "udelay_cycles"];
 /// IRAM/DRAM, overlay storage at 0x20100000
 pub const RAM: (u32, u32) = (0x20000000, 0x110000);
 pub const RESET: u32 = 0x20000000;
-/// the core clock both images set (LCRU divider 1)
-pub const CORE_HZ: u64 = 400_000_000;
+/// Simulated time's unit: a cycle of the 800 MHz clock the core's is
+/// divided from (LCRU_CORE_DIV; both images run at 400 MHz, at 200 MHz
+/// while the SoC idle switch has the SoC idle, at 100 MHz suspended).
+pub const TIME_HZ: u64 = 800_000_000;
+/// the core's clock divider: [2:0], 800 MHz / (n + 1)
+const LCRU_CORE_DIV: u32 = 0xb0010100;
 
 /// Sparse little-endian memory: registers nothing models.
 #[derive(Clone, Default)]
@@ -338,6 +342,9 @@ pub struct CadenceI2c {
     /// voltage writes are lost (set, then NACKed) whatever the plan
     pub lose_vout: bool,
     r: HashMap<u32, u32>,
+    /// the time until which the bus stays active after a slave error (a
+    /// test's: the host has not let go yet)
+    pub busy_until: u64,
     pub isr: u32,
     tx: Vec<u8>,
     rx: Vec<u8>,
@@ -365,6 +372,7 @@ impl CadenceI2c {
             plan: None,
             lose_vout: false,
             r: HashMap::new(),
+            busy_until: 0,
             isr: 0,
             tx: Vec::new(),
             rx: Vec::new(),
@@ -654,6 +662,23 @@ fn ppu_status(addr: u32) -> bool {
 // LP_STATE (+0x2f8 [14:8], bit 14: the last command completed) for the
 // state _s_lp_SwCmdStMap gives the command.  Modelled: the state changes
 // at once.
+/// The DDR frequency switch (CIX's mclp_hwif_dfs), one control word per
+/// channel.  Nothing describes it; the handshake here is what CIX's code
+/// waits for, in its order: a request (bit 0, the copy in bits 3:2) is
+/// acknowledged (bit 1); a pulse of bit 10 brings "clock may change" (bit
+/// 30), which bit 31 takes back; with bit 31 off again the switch is done
+/// (bit 11), and the request's end clears the status.  The controller then
+/// reports the copy (DENALI_CTL_198: [1:0] the copy, [9:8] the copy less
+/// one), which CIX's code checks.
+/// the local GPIO's interrupt clear (CIX's gpio_intr_handler writes all ones)
+const GPIO_INT_CLR: u32 = 0xa002001c;
+const DFS_CTRL: u32 = 0xa0000600;
+const DFS_STATUS: u32 = 1 << 1 | 1 << 11 | 1 << 30;
+const DDRC_CTL_198: u32 = 0x318;
+/// DENALI's "both frequency copies trained" bits, which the PM asks for
+/// before it turns the SoC idle switch on (the SE's DDR training leaves
+/// them; a test sets them: PmSoc::ddr_dfs_capable)
+const DDRC_DFS_CAP: u32 = 0x2034;
 const DDRC_LP_CMD: u32 = 0x2bc;
 const DDRC_LP_STATE: u32 = 0x2f8;
 
@@ -689,8 +714,8 @@ const WDT_UNLOCK: u32 = 0x1acce551;
 /// and 1 the tachometers (aggregator lines 22 and 23), 2 the PWM outputs.
 pub const CNTS: [u32; 3] = [0xa0040000, 0xa0048000, 0x44110000];
 const CNTS_LINES: [u32; 2] = [22, 23];
-/// CCOUNT cycles per 25 MHz counter tick
-const CNT_TICK: u64 = 16;
+/// simulated time per 25 MHz counter tick
+const CNT_TICK: u64 = TIME_HZ / 25_000_000;
 
 /// PVT sensors (src/pvt.c's layout): sensor i at PVT_BASE + 0x1000 (i + 1)
 pub const PVT_BASE: u32 = 0xa0070000;
@@ -727,6 +752,8 @@ pub const AGG: u32 = 0xa0000500;
 const MBOX_LINE: u32 = 25;
 /// bit i: I2C controller i
 const I2C_LINE: u32 = 24;
+/// the line the watchdog (source 0) and the local GPIO (source 2) share
+const MIXED_LINE: u32 = 21;
 
 /// Written by CIX's SE firmware before it starts the PM, as the SE's model
 /// runs it on the Orion O6 image with blank eFuses: the PM strap
@@ -800,6 +827,10 @@ pub struct PmSoc {
     /// sleep, wake, warm reset
     pub events: Vec<Event>,
     ddrc_lp: [u32; 4],
+    /// the DDR frequency switch's status bits per channel (DFS_STATUS)
+    dfs_status: [u32; 4],
+    /// frequency switches done: (channel, copy)
+    pub dfs_log: Vec<(usize, u32)>,
     pub wdt: Sp805,
     /// tachometers running: (block, odd node) -> next interrupt, period
     tachs: Vec<((usize, usize), u64, u64)>,
@@ -862,6 +893,8 @@ impl PmSoc {
             doorbells: Vec::new(),
             events: Vec::new(),
             ddrc_lp: [0x40; 4], // idle, the last command completed
+            dfs_status: [0; 4],
+            dfs_log: Vec::new(),
             wdt: Sp805 { locked: 1, due: None, expired: 0, hz: 25_000_000, count: false },
             tachs: Vec::new(),
             fan_max_rpm: 6000,
@@ -901,6 +934,8 @@ impl PmSoc {
                     | self.irq_raw[line as usize]
             }
             S5_LINE => self.s5_pending(),
+            // the watchdog's first time-out, until its interrupt is cleared
+            MIXED_LINE => self.irq_raw[line as usize] | (self.wdt.expired >= 1) as u32,
             _ => self.irq_raw[(line & 31) as usize],
         }
     }
@@ -988,6 +1023,16 @@ impl PmSoc {
         self.update_irqs(io);
     }
 
+    /// A transfer to the slave goes wrong (ISR bits: arbitration lost, a
+    /// time-out, FIFO over- or underflows); the bus stays active for
+    /// `busy_ms` more.
+    pub fn slave_error(&mut self, io: &mut Io, bus: usize, isr: u32, busy_ms: u64) {
+        let c = &mut self.i2c[bus];
+        c.isr |= isr;
+        c.busy_until = io.time + busy_ms * TIME_HZ / 1000;
+        self.update_irqs(io);
+    }
+
     /// The host ends its read (NACK, stop): what the firmware gave.
     pub fn slave_read_end(&mut self, io: &mut Io, bus: usize) -> Vec<u8> {
         let c = &mut self.i2c[bus];
@@ -1005,7 +1050,7 @@ impl PmSoc {
         let pos = self.tachs.iter().position(|t| t.0 == key);
         if value & 0x20000 != 0 {
             let period = (self.mem.read32(CNTS[inst] + 0x1000 * node as u32) as u64).max(1) * CNT_TICK;
-            let entry = (key, io.ccount + period, period);
+            let entry = (key, io.time + period, period);
             match pos {
                 Some(p) => self.tachs[p] = entry,
                 None => self.tachs.push(entry),
@@ -1035,13 +1080,52 @@ impl PmSoc {
         let ((inst, node), due, period) = self.tachs[idx];
         let k = 2 * inst + (node - 5) / 2;
         let even = CNTS[inst] + 0x1000 * (node as u32 - 1);
-        let pulses = self.fan_speed(k) * self.fan_pulses * period / (CORE_HZ * 60);
+        let pulses = self.fan_speed(k) * self.fan_pulses * period / (TIME_HZ * 60);
         let v = self.mem.read32(even + 0x18).wrapping_add(pulses as u32);
         self.mem.write32(even + 0x18, v);
         let line = CNTS_LINES[inst] as usize;
         self.irq_raw[line] |= 1 << (13 + (node - 5) / 2);
         self.tachs[idx].1 = due + period;
         self.update_irqs(io);
+    }
+
+    /// The DDR controllers report both frequency copies trained.
+    pub fn ddr_dfs_capable(&mut self) {
+        for ch in 0..4u32 {
+            self.mem.write32(0x4c010000 + ch * 0x20000 + DDRC_DFS_CAP, 6);
+            self.mem.write32(0x4c010000 + ch * 0x20000 + DDRC_CTL_198, 2 | 1 << 8);
+        }
+    }
+
+    fn dfs_write(&mut self, ch: usize, v: u32) {
+        let old = self.mem.read32(DFS_CTRL + 4 * ch as u32);
+        let st = &mut self.dfs_status[ch];
+        if v & 1 != 0 && old & 1 == 0 {
+            *st = 1 << 1;
+        }
+        if v & 1 != 0 && old & (1 << 10) != 0 && v & (1 << 10) == 0 {
+            *st |= 1 << 30;
+        }
+        if v & (1 << 31) != 0 {
+            *st &= !(1 << 30);
+        }
+        if old & (1 << 31) != 0 && v & (1 << 31) == 0 {
+            *st |= 1 << 11;
+        }
+        if v & 1 == 0 && old & 1 != 0 {
+            if *st & (1 << 11) != 0 {
+                let copy = (old >> 2) & 3;
+                self.dfs_log.push((ch, copy));
+                self.mem.write32(0x4c010000 + ch as u32 * 0x20000 + DDRC_CTL_198, copy | (copy.wrapping_sub(1) & 3) << 8);
+            }
+            *st = 0;
+        }
+    }
+
+    /// The watchdog's count from now (a test that has just let it run).
+    pub fn wdt_restart(&mut self, io: &Io) {
+        self.wdt.expired = 0;
+        self.wdt_reload(io);
     }
 
     fn wdt_reload(&mut self, io: &Io) {
@@ -1051,7 +1135,7 @@ impl PmSoc {
             return;
         }
         let load = self.mem.read32(WDT + WDT_LOAD) as u64;
-        self.wdt.due = Some(io.ccount + load.max(1) * CORE_HZ / self.wdt.hz.max(1));
+        self.wdt.due = Some(io.time + load.max(1) * TIME_HZ / self.wdt.hz.max(1));
     }
 
     // --- PVT ---------------------------------------------------------------------------
@@ -1104,7 +1188,10 @@ impl Bus for PmSoc {
         let off = addr & 0xfff;
         match device(addr) {
             Dev::I2c(i) => {
-                let v = self.i2c[i].read(off);
+                let mut v = self.i2c[i].read(off);
+                if off == SR && self.i2c[i].busy_until > io.time {
+                    v |= SR_BA as u64;
+                }
                 return v;
             }
             Dev::Uart => {
@@ -1132,6 +1219,10 @@ impl Bus for PmSoc {
             }
             Dev::S5 | Dev::Counter(..) => return self.mem.read(addr, size),
             Dev::None => {}
+        }
+        if (DFS_CTRL..DFS_CTRL + 16).contains(&addr) {
+            let ch = ((addr - DFS_CTRL) / 4) as usize;
+            return (self.mem.read(addr, size) & !(DFS_STATUS as u64)) | self.dfs_status[ch] as u64;
         }
         if is_pll_lock(addr) {
             return self.mem.read(addr, size) | 0x10; // PLLs lock at once
@@ -1208,6 +1299,7 @@ impl Bus for PmSoc {
                         self.wdt.expired = 0;
                     }
                     self.wdt_reload(io);
+                    self.update_irqs(io);
                 }
             }
             Dev::Counter(inst, node) => {
@@ -1228,6 +1320,19 @@ impl Bus for PmSoc {
                 }
             }
             Dev::None => {
+                if addr == LCRU_CORE_DIV {
+                    io.tick = (value as u32 & 7) + 1;
+                }
+                if addr == GPIO_INT_CLR {
+                    // the local GPIO's interrupts cleared: its source of line 21 goes
+                    self.irq_raw[MIXED_LINE as usize] &= !4;
+                    self.mem.write(addr, size, value);
+                    self.update_irqs(io);
+                    return;
+                }
+                if (DFS_CTRL..DFS_CTRL + 16).contains(&addr) {
+                    self.dfs_write(((addr - DFS_CTRL) / 4) as usize, value as u32);
+                }
                 self.mem.write(addr, size, value);
                 if (AGG + 0x80..AGG + 0xcc).contains(&addr) {
                     self.update_irqs(io);
@@ -1241,7 +1346,7 @@ impl Bus for PmSoc {
         if let Some(w) = self.wdt.due {
             due = Some(due.map_or(w, |d| d.min(w)));
         }
-        due.map(|d| d.saturating_sub(io.ccount).max(1))
+        due.map(|d| d.saturating_sub(io.time).max(1))
     }
 
     fn advance(&mut self, io: &mut Io, _cycles: u64) {
@@ -1250,14 +1355,14 @@ impl Bus for PmSoc {
         let keys: Vec<_> = order.iter().map(|i| self.tachs[*i].0).collect();
         for key in keys {
             while let Some(idx) = self.tachs.iter().position(|t| t.0 == key) {
-                if self.tachs[idx].1 > io.ccount {
+                if self.tachs[idx].1 > io.time {
                     break;
                 }
                 self.tach_fire(io, idx);
             }
         }
         while let Some(due) = self.wdt.due {
-            if due > io.ccount {
+            if due > io.time {
                 break;
             }
             self.wdt.expired += 1;
@@ -1266,8 +1371,9 @@ impl Bus for PmSoc {
                 self.wdt.due = None;
             } else {
                 let load = self.mem.read32(WDT + WDT_LOAD) as u64;
-                self.wdt.due = Some(due + load.max(1) * CORE_HZ / self.wdt.hz.max(1));
+                self.wdt.due = Some(due + load.max(1) * TIME_HZ / self.wdt.hz.max(1));
             }
+            self.update_irqs(io);
         }
     }
 }
@@ -1319,7 +1425,7 @@ pub const ANSWER_MS: u64 = 2_000;
 pub fn poll_run(cpu: &mut Cpu) -> Option<String> {
     let n = poll();
     let before = cpu.until;
-    let limit = cpu.io.ccount + n;
+    let limit = cpu.io.time + n * cpu.io.tick.max(1) as u64;
     cpu.until = Some(before.map_or(limit, |b| b.min(limit)));
     let why = cpu.run(n);
     cpu.until = before;
@@ -1337,9 +1443,9 @@ pub fn poll_run(cpu: &mut Cpu) -> Option<String> {
 pub fn scmi_raw(cpu: &mut Cpu, protocol: u32, msg: u32, args: &[u32], mbox: usize, budget: u64, len: Option<u32>, flags: u32) -> Answer {
     let base = MBOX + mbox as u32 * 0x10000;
     let end = cpu.insns + budget;
-    let late = cpu.io.ccount + ANSWER_MS * CORE_HZ / 1000;
+    let late = cpu.io.time + ANSWER_MS * TIME_HZ / 1000;
     while cpu.bus.mem.read32(base + SMT_STATUS) & SMT_FREE == 0 {
-        if cpu.insns >= end || cpu.io.ccount >= late {
+        if cpu.insns >= end || cpu.io.time >= late {
             return Err(format!("channel {mbox} never free"));
         }
         let why = poll_run(cpu);
@@ -1362,7 +1468,7 @@ pub fn scmi_raw(cpu: &mut Cpu, protocol: u32, msg: u32, args: &[u32], mbox: usiz
     m.write32(base + SMT_FLAGS, flags);
     cpu.bus.ring(&mut cpu.io, mbox, 1);
     while cpu.bus.mem.read32(base + SMT_STATUS) & SMT_FREE == 0 {
-        if cpu.insns >= end || cpu.io.ccount >= late {
+        if cpu.insns >= end || cpu.io.time >= late {
             return Err(format!("no answer to protocol {protocol:#x} message {msg}"));
         }
         let why = poll_run(cpu);
@@ -1385,29 +1491,30 @@ pub fn scmi_raw(cpu: &mut Cpu, protocol: u32, msg: u32, args: &[u32], mbox: usiz
     Ok((words.first().map(|w| *w as i32), words.iter().skip(1).copied().collect()))
 }
 
-/// Run the PM for ms milliseconds of simulated time (CCOUNT at CORE_HZ).
+/// Run the PM for ms milliseconds of simulated time (CCOUNT at TIME_HZ).
 /// Time asleep in WAITI goes by at once: CCOUNT jumps to the next enabled
 /// CCOMPARE, never past the end; a PM with nothing to wake it sleeps out
 /// the rest.  Deterministic: the same image and inputs give the same run.
 /// Returns None, or why the PM stopped (an assertion...).
 pub fn run_for(cpu: &mut Cpu, ms: f64) -> Option<String> {
-    run_cycles(cpu, (ms * CORE_HZ as f64 / 1000.0).floor() as u64)
+    run_cycles(cpu, (ms * TIME_HZ as f64 / 1000.0).floor() as u64)
 }
 
-/// run_for, in cycles of the core's clock.
-pub fn run_cycles(cpu: &mut Cpu, cycles: u64) -> Option<String> {
+/// run_for, in units of simulated time (1/TIME_HZ).
+pub fn run_cycles(cpu: &mut Cpu, t: u64) -> Option<String> {
     let chunk = 50_000;
-    let end = cpu.io.ccount + cycles;
+    let end = cpu.io.time + t;
     cpu.until = Some(end);
     let mut out = None;
-    while cpu.io.ccount < end {
+    while cpu.io.time < end {
         // a cycle or more per instruction
-        let why = cpu.run(chunk.min(end - cpu.io.ccount).max(1));
+        // an instruction or more per cycle
+        let why = cpu.run(chunk.min((end - cpu.io.time) / cpu.io.tick.max(1) as u64).max(1));
         match why.as_deref() {
             None => continue,
             Some("until") => break,
             Some(w) if w.starts_with("waiti with nothing") => {
-                cpu.skip(end - cpu.io.ccount);
+                cpu.skip_time(end - cpu.io.time);
                 break;
             }
             _ => {
@@ -1437,6 +1544,8 @@ pub fn boot(elf: &str, soc: Option<PmSoc>) -> Result<Cpu, String> {
         }
     }
     cpu.pc = RESET;
+    // 400 MHz until the firmware sets the divider
+    cpu.io.tick = 2;
     Ok(cpu)
 }
 
@@ -1476,10 +1585,10 @@ pub fn main(args: &[String]) -> i32 {
     }
     let why = cpu.run(count);
     println!(
-        "stopped: {} after {} instructions ({:.1} M cycles), in",
+        "stopped: {} after {} instructions ({:.1} ms), in",
         why.as_deref().unwrap_or("None"),
         cpu.insns,
-        cpu.io.ccount as f64 / 1e6
+        cpu.io.time as f64 * 1000.0 / TIME_HZ as f64
     );
     for pc in cpu.backtrace(16) {
         println!("  {}", cpu.func(pc));

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 //! Drive one CSU_PM image by hand, to look into what a test found.
 //!
-//!   sky1emu pm-script ELF [--board NAME] 'COMMAND; COMMAND; ...'
+//!   sky1emu pm-script ELF [--board NAME] [--set NAME=VALUE] [--ddr-dfs] 'COMMAND; COMMAND; ...'
 //!
 //! The image is booted to idle first.  Commands (numbers as in C):
 //!   ms N                    run N ms of simulated time
@@ -16,6 +16,7 @@
 //!   pvt I T                 PVT sensor I at T
 //!   pvtcode CODE            every PVT sensor's raw code
 //!   unmask LINE BITS        unmask sources of an interrupt aggregator line
+//!   raw LINE BITS           the sources of an aggregator line as the hardware drives them
 //!   send CH PROTO MSG [ARGS...]   an SCMI command sent, not waited for
 //!   until-sp LO HI          run until the stack pointer enters [LO, HI)
 //!   audit                   from now on, check at every windowed return that the caller's
@@ -24,6 +25,7 @@
 //!   until-arg SYMBOL IDX MIN  run until SYMBOL is entered with argument IDX >= MIN
 //!   watch LO HI [BYTE]      stop at the next write into [LO, HI) of RAM (of that byte only)
 //!   stop SYMBOL             stop when SYMBOL is reached (then: regs, bt...)
+//!   count SYMBOL MS         how often SYMBOL is entered in MS of simulated time
 //!   nostop SYMBOL
 //!   regs                    pc and a0..a15
 //!   win                     the register windows and the exception PCs
@@ -31,6 +33,7 @@
 //!   trail                   the last instructions run, by function
 //!   mem ADDR [WORDS]        memory or registers, as words
 //!   str ADDR                a string
+//!   poke ADDR VALUE         a word put into the model's memory
 //!   save LO HI FILE         memory to a file (for dwarf_dump.py --ram LO:FILE)
 //!   sym NAME                a symbol's address
 //!   writes [N]              the last N register writes
@@ -78,9 +81,9 @@ fn command(cpu: &mut Cpu, line: &str) -> Result<(), String> {
         }
         "scmi" => {
             let (ch, p, m, args) = (n(1, cpu)?, n(2, cpu)?, n(3, cpu)?, rest(4, cpu)?);
-            let t0 = cpu.io.ccount;
+            let t0 = cpu.io.time;
             let v = test::to_val(soc::scmi(cpu, p, m, &args, ch as usize, 3_000_000));
-            println!("ch{ch} {p:#04x}/{m}{args:x?}: {v}  ({:.2} ms)", (cpu.io.ccount - t0) as f64 * 1000.0 / soc::CORE_HZ as f64);
+            println!("ch{ch} {p:#04x}/{m}{args:x?}: {v}  ({:.2} ms)", (cpu.io.time - t0) as f64 * 1000.0 / soc::TIME_HZ as f64);
         }
         "scmi-len" => {
             let (len, ch, p, m, args) = (n(1, cpu)?, n(2, cpu)?, n(3, cpu)?, n(4, cpu)?, rest(5, cpu)?);
@@ -89,9 +92,9 @@ fn command(cpu: &mut Cpu, line: &str) -> Result<(), String> {
         }
         "msg" => {
             let (ch, id, args) = (n(1, cpu)?, n(2, cpu)?, rest(3, cpu)?);
-            let t0 = cpu.io.ccount;
+            let t0 = cpu.io.time;
             let v = test::pm_msg(cpu, ch as usize, id, &args);
-            println!("ch{ch} message {id:#x}{args:x?}: {v}  ({:.2} ms)", (cpu.io.ccount - t0) as f64 * 1000.0 / soc::CORE_HZ as f64);
+            println!("ch{ch} message {id:#x}{args:x?}: {v}  ({:.2} ms)", (cpu.io.time - t0) as f64 * 1000.0 / soc::TIME_HZ as f64);
         }
         "post" => {
             // a PM message put in the channel and its doorbell rung, not waited for
@@ -110,8 +113,8 @@ fn command(cpu: &mut Cpu, line: &str) -> Result<(), String> {
         }
         "cpu" => {
             println!(
-                "pc {:#010x} {}; waiting {}; ps {:#x}; intenable {:#010x}; lines {:#010x}; latched {:#010x}; ccount {}; ccompare {:x?}",
-                cpu.pc, cpu.func(cpu.pc), cpu.waiting, cpu.ps(), cpu.intenable, cpu.io.int_lines, cpu.int_latched, cpu.io.ccount, cpu.ccompare
+                "pc {:#010x} {}; waiting {}; ps {:#x}; intenable {:#010x}; lines {:#010x}; latched {:#010x}; time {:.3} ms; ccount {:#x}; ccompare {:x?}",
+                cpu.pc, cpu.func(cpu.pc), cpu.waiting, cpu.ps(), cpu.intenable, cpu.io.int_lines, cpu.int_latched, cpu.io.time as f64 * 1000.0 / soc::TIME_HZ as f64, cpu.cc as u32, cpu.ccompare
             );
         }
         "fc" => {
@@ -125,6 +128,10 @@ fn command(cpu: &mut Cpu, line: &str) -> Result<(), String> {
         "unmask" => {
             // an aggregator line's sources unmasked: unmask LINE BITS
             test::unmask(cpu, n(1, cpu)?, n(2, cpu)?);
+        }
+        "raw" => {
+            // an aggregator line's sources as the hardware drives them: raw LINE BITS
+            test::set_raw(cpu, n(1, cpu)? as usize, n(2, cpu)?);
         }
         "pvt" => {
             // one PVT sensor's temperature: pvt I T
@@ -242,6 +249,36 @@ fn command(cpu: &mut Cpu, line: &str) -> Result<(), String> {
             }
             println!();
         }
+        "count" => {
+            // how often SYMBOL is entered in MS of simulated time: count SYMBOL MS
+            let a = n(1, cpu)?;
+            let t: f64 = f.get(2).and_then(|x| x.parse().ok()).ok_or("count SYMBOL MS")?;
+            let end = cpu.io.time + (t * soc::TIME_HZ as f64 / 1000.0) as u64;
+            cpu.set_stop(a, "count");
+            let mut k = 0u32;
+            while cpu.io.time < end {
+                match soc::run_cycles(cpu, end - cpu.io.time).as_deref() {
+                    Some("count") => {
+                        k += 1;
+                        cpu.del_stop(a);
+                        let _ = cpu.step();
+                        cpu.set_stop(a, "count");
+                    }
+                    Some(w) => {
+                        println!("count: {w}");
+                        break;
+                    }
+                    None => break,
+                }
+            }
+            cpu.del_stop(a);
+            println!("{}: {k} times in {t} ms", f[1]);
+        }
+        "poke" => {
+            // a word written into the model's memory (not seen by devices): poke ADDR VALUE
+            let (a, v) = (n(1, cpu)?, n(2, cpu)?);
+            cpu.bus.mem.write32(a, v);
+        }
         "save" => {
             // memory to a file (dwarf_dump.py --ram LO:FILE): save LO HI FILE
             let (lo, hi) = (n(1, cpu)?, n(2, cpu)?);
@@ -283,15 +320,16 @@ fn command(cpu: &mut Cpu, line: &str) -> Result<(), String> {
 
 pub fn main(args: &[String]) -> i32 {
     let r = (|| -> Result<(), String> {
-        let a = Args::parse(args, &["--board"])?;
+        let a = Args::parse(args, &["--board", "--set"])?;
         let (elf, script) = match a.pos.as_slice() {
             [e, s] => (e, s),
             _ => return Err("usage: sky1emu pm-script ELF [--board NAME] 'COMMAND; ...'".to_string()),
         };
         let mut opts = Opts::default();
         if let Some(b) = a.opt("--board") {
-            opts.board = Some(test::board_config(b, &[])?);
+            opts.board = Some(test::board_config(b, &a.all("--set"))?);
         }
+        opts.ddr_dfs = a.flag("--ddr-dfs");
         soc::POLL.with(|p| p.set(2_000));
         let (pm, why, _) = test::boot(elf, &opts)?;
         let mut cpu = pm.cpu;
