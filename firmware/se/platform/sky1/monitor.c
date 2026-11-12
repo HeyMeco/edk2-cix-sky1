@@ -4,14 +4,16 @@
  * plat_monitor_power.c).
  *
  * TODO: CIX records every clock's frequency and every power domain's state
- * here; the open firmware records only the raw PLL and power registers.
+ * here (records "CLK", 4304 bytes, and "POWER", 1088 bytes); the open
+ * firmware records only the raw PLL and power registers, under names of
+ * their own so that nothing reads them as CIX's.
  */
 #include "se.h"
 #include "soc.h"
 
 void clk_save_einfo(void)
 {
-	uint32_t *p = hal_crash_get_eaddr("CLK", 0x40), i;
+	uint32_t *p = hal_crash_get_eaddr("CLK_RAW", 0x40), i;
 
 	if (p == NULL)
 		return;
@@ -21,7 +23,7 @@ void clk_save_einfo(void)
 
 void pwr_save_einfo(void)
 {
-	uint32_t *p = hal_crash_get_eaddr("PWR", 0x40), i;
+	uint32_t *p = hal_crash_get_eaddr("PWR_RAW", 0x40), i;
 
 	if (p == NULL)
 		return;

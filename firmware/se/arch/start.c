@@ -156,11 +156,23 @@ void core_irq_restore(uint32_t primask)
 	dsb();
 }
 
+/*
+ * EXC_RETURN and the stack pointer at the last interrupt (below them on
+ * the stack: this function's two saved words, then the exception frame):
+ * the SE watchdog's crash record is made from them (hal/crash.c).
+ */
+extern uint32_t g_sp;
+uint32_t g_lr;
+
 void Default_Handler(void)
 {
-	uint32_t ipsr;
+	uint32_t ipsr, v;
 	unsigned int irq;
 
+	__asm__ volatile("mov %0, lr" : "=r"(v));
+	g_lr = v;
+	__asm__ volatile("mov %0, sp" : "=r"(v));
+	g_sp = v;
 	__asm__ volatile("mrs %0, ipsr" : "=r"(ipsr));
 	irq = (ipsr & 0x1ff) - 16;
 	if (irq >= ARRAY_SIZE(g_irqn_context)) {

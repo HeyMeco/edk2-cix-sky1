@@ -25,10 +25,16 @@ static void nmi_handler(void)
 		;
 }
 
-/* Faults: restart the firmware, as the CIX image does after its dump */
+/*
+ * HardFault: stop.  (CIX's handler logs the fault and stops in the function
+ * that does; the restart its vector code has after that call is never
+ * reached.  A restart from here would run the firmware inside the fault,
+ * where no interrupt is taken.)
+ */
 static void fault_handler(void)
 {
-	reset_handler();
+	for (;;)
+		;
 }
 
 static void hang(void)

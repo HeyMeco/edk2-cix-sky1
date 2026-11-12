@@ -139,11 +139,12 @@ static void resume(void)
 /* After resume: the PM asks for the SFH (0xaacc) or for it to stop (0xaabb) */
 static void str_magic(void)
 {
-	uint32_t n, err;
+	uint32_t n, err, v;
 
 	REG32(PM_FAST_CHANNEL) = 1;
 	for (n = 5001; n; n--) {
-		if (REG32(PM_MAGIC) == 0xaacc) {
+		v = REG32(PM_MAGIC);	/* one read a pass */
+		if (v == 0xaacc) {
 			hal_crash_deinit();
 			err = hal_stor_qspi_user_switch(QSPI_USER_SE);
 			if (!err)
@@ -156,7 +157,7 @@ static void str_magic(void)
 				REG32(PM_MAGIC) = 0xccaa;
 			return;
 		}
-		if (REG32(PM_MAGIC) == 0xaabb) {
+		if (v == 0xaabb) {
 			if (hal_is_se_load_sfh() == 1) {
 				err = hal_sfh_deinit();
 				if (err) {

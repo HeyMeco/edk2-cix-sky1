@@ -5,27 +5,28 @@
 #include "drivers.h"
 #include "platform.h"
 
-/* One SysTick countdown of val ticks; gives up after val * ratio polls */
+/*
+ * One SysTick countdown of val ticks; gives up after val * ratio polls.
+ * The counter is stopped while it is set up, and the reload value written
+ * before the count is cleared: cleared first, a clock edge before the new
+ * reload value would start the count from the old one.
+ */
 static void _hal_delay(uint32_t val)
 {
 	uint32_t polls = val * sys_clk_get_systick_ratio();
-	uint32_t ctrl;
 
+	REG32(SYST_CSR) &= ~1u;
 	if (val - 1 < 0x1000000) {
-		REG32(SYST_CVR) = 0;
 		REG32(SYST_RVR) = val - 1;
+		REG32(SYST_CVR) = 0;
 	}
-	ctrl = (REG32(SYST_CSR) & ~1u) | 1;
-	REG32(SYST_CSR) = ctrl;		/* enable */
+	REG32(SYST_CSR) |= 1;
 	for (;;) {
-		if (REG32(SYST_CSR) & BIT(16)) {
-			REG32(SYST_CSR) = ctrl;
+		if (REG32(SYST_CSR) & BIT(16))
 			return;
-		}
 		if (polls-- == 0)
 			break;
 	}
-	REG32(SYST_CSR) = ctrl;
 	hal_printf_level(LOG_WARN, "systick doesn't set cuntdown-zearo-flag \n");
 }
 

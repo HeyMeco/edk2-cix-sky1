@@ -104,7 +104,7 @@ that showed about the core, beyond the census:
 ## SoC model
 
 [`emu/src/pm/soc.rs`](../../emu/src/pm/soc.rs) puts the
-interpreter on a model of Sky1 as CSU_PM sees it, as `se_emu.py` does for
+interpreter on a model of Sky1 as CSU_PM sees it, as `emu/src/se/soc.rs` does for
 the SE (`sky1emu pm ELF` boots an image on it): registers are plain memory unless a device gives them behaviour.
 CSU_PM's local window `0xa0000000` is SoC `0x06510000` (the SE sees the
 same blocks at `0x46510000`). What CIX's image needs to boot:
@@ -130,7 +130,7 @@ mailbox's data registers, laid out as TF-A's `mailbox_mem_t`:
 | 4, 6 | `0x065d0000`, `0x065f0000` | base, power domain, system, perf, sensor |
 
 `sky1emu pm-test` ([`emu/src/pm/test.rs`](../../emu/src/pm/test.rs)) is
-the differential test, as `test_se.py` is for the SE. It boots each image,
+the differential test, as `sky1emu se-test` is for the SE. It boots each image,
 compares register writes per register and the I2C transfers, and with
 `--scmi` asks every channel the same 185 questions (discovery, then each
 protocol's attributes and domains: 8 perf domains from `gpu_core` to
@@ -658,5 +658,5 @@ python3 scripts/open/csupm_coverage.py OURS.elf [--units]
 | System power sequence (shutdown, reset, suspend/resume, DDR retention, S3 script), PM messages | done |
 | CIX `Source/common` and `Source/projects/sky1`, without the debug CLI | 72% and 96% of CIX's code; what is left (`csupm_coverage.py --units`) is replaced (FreeRTOS's port, CIX's timer/event/job framework, `ipc_arbiter`), CLI-only, or CIX's I2C state machine for tasks |
 | Our image passes `sky1emu pm-test`, `pm-faults` and `pm-vf --matrix` | done: every phase, `--full` included, seven configurations; no difference outside the table of expected ones; all suites run 74.0% of its code bytes |
-| `build.sh --open` puts it in bootloader1 (`--vendor-pm` keeps CIX's); the open SE verifies it in secure boot and both SEs load it identically (`test_se.py`) | done |
+| `build.sh --open` puts it in bootloader1 (`--vendor-pm` keeps CIX's); the open SE verifies it in secure boot and both SEs load it identically (`sky1emu se-test`) | done |
 | Boot test on hardware (UART4, SCMI from Linux, fans, suspend/resume) | to do |

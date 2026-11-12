@@ -45,6 +45,9 @@
 #define ERR_LOAD		0x930c
 #define ERR_PM_SECTION		0xa501
 #define ERR_DIGEST_PARAM	0x9206
+#define ERR_ROTPK		0x9204
+#define ERR_SIGNATURE		0x9208
+#define ERR_HASH_MISMATCH	0x920e
 
 typedef struct {
 	uint32_t addr, size;
@@ -160,7 +163,11 @@ static bool sig_verify(uint32_t sign_type, const uint8_t *key, uint32_t key_len,
 		return false;
 	memcpy(e + 2 * n - key_len, key + n, key_len - n);	/* exponent right-aligned */
 	rsa.key_bits = sign_type == IMG_SIGN_RSA3072 ? SEC_RSA_KEY_BITS_3072 : SEC_RSA_KEY_BITS_2048;
-	return sec_rsa_verify(rsa.key_bits, &rsa, digest, dig_len, sig, sig_len, SEC_RSA_HASH_TYPE_SHA256);
+	if (!sec_rsa_verify(rsa.key_bits, &rsa, digest, dig_len, sig, sig_len, SEC_RSA_HASH_TYPE_SHA256)) {
+		SE_ERR(ERR_SIGNATURE);
+		return false;
+	}
+	return true;
 }
 
 static const char *sign_name(uint32_t t)
@@ -180,8 +187,10 @@ bool fw_verify_header(const cbff_img_header *h, uint32_t len)
 		return false;
 	if (fw_get_digest_mode(h->sign_type, &m) || fw_efuse_get_cix_user_rotpk_hash(rotpk, h->sign_type) ||
 	    fw_cal_digest(oem->key_value, oem->key_length, digest, &dig_len, m) ||
-	    memcmp(rotpk, digest, 32))
+	    memcmp(rotpk, digest, 32)) {
+		SE_ERR(ERR_ROTPK);
 		return false;
+	}
 	hal_printf_level(LOG_INFO, "Verify OEM ROTPK successful\n");
 	mode = h->sign_type == IMG_SIGN_SM2 ? SEC_SM3_MODE : SEC_SHA_MODE_256;
 	if (fw_cal_digest(h, 0xe00, digest, &dig_len, mode))
@@ -261,9 +270,12 @@ static bool check_hash(const cbff_img_header *h, sec_fw_type_t id, const uint8_t
 	for (i = 0; i < h->hash_count && i < ARRAY_SIZE(h->hash_tables); i++) {
 		if (h->hash_tables[i].image_id != id)
 			continue;
-		if (h->hash_tables[i].hash_len == len && memcmp(digest, h->hash_tables[i].hash_data, len) == 0)
+		if (h->hash_tables[i].hash_len != len)
+			break;
+		if (memcmp(digest, h->hash_tables[i].hash_data, len) == 0)
 			return true;
-		break;
+		SE_ERR(ERR_HASH_MISMATCH);
+		return false;
 	}
 	hal_printf_level(LOG_ERR, "[SE_FW]# Check hash data fail\n");
 	return false;
@@ -382,7 +394,7 @@ static uint32_t load_pm(void)
 {
 	pm_data_info *pm = &g_PM_data_info;
 	image_header_group ih;
-	uint32_t err, i, *e, end, size;
+	uint32_t err, i, *e, end, size, strap;
 
 	SE_INFO("Start to load PM firmware\n");
 	memset(pm, 0, sizeof(*pm));
@@ -394,9 +406,9 @@ static uint32_t load_pm(void)
 	err = fw_xloader_get_img_info(SEC_FW_TYPE_PM, ROM_HDR, &ih);
 	if (err)
 		return ERR_NOMEM;
-	hal_printf_level(LOG_INFO, "Flash Offset flag from strappng pin is: 0x%x\n",
-			 (unsigned)REG32(FLASH_STRAP));
-	pm->base_flash_offset = ih.binary_offset + BL1_FLASH(REG32(FLASH_STRAP));
+	strap = REG32(FLASH_STRAP);
+	hal_printf_level(LOG_INFO, "Flash Offset flag from strappng pin is: 0x%x\n", (unsigned)strap);
+	pm->base_flash_offset = ih.binary_offset + BL1_FLASH(strap);
 	pm->binary_size = ih.binary_length;
 	end = round_4k(pm->binary_size + SIG_SIZE);
 	pm->padding_size = end - SIG_SIZE - pm->binary_size;
@@ -409,17 +421,21 @@ static uint32_t load_pm(void)
 		return ERR_IMAGE;
 
 	/* XBIN: magic, then from 0x10 sections of offset, address, size, memory size, flags */
-	if (*(uint32_t *)pm->pm_header != XBIN_MAGIC)
+	if (*(uint32_t *)pm->pm_header != XBIN_MAGIC) {
+		SE_ERR(ERR_PM_SECTION);
 		return ERR_PM_SECTION;
+	}
 	hal_printf_level(LOG_INFO, "idx,    offset,      size,       mem_addr,    mem_size,     flags\n");
 	for (i = 0; i < 30; i++) {
 		e = (uint32_t *)(pm->pm_header + 0x10 + i * 0x14);
 		if (e[0] + e[2] > pm->binary_size) {
 			hal_printf_level(LOG_ERR, " %d - this section exceeds buffer size !!\n", (int)i);
+			SE_ERR(ERR_PM_SECTION);
 			return ERR_PM_SECTION;
 		}
 		if (e[1] < 0x20000000 || e[1] + e[2] > PM_SRAM_END) {
 			hal_printf_level(LOG_ERR, "There are illegal section in PM header\n");
+			SE_ERR(ERR_PM_SECTION);
 			return ERR_PM_SECTION;
 		}
 		pm->sections[i].addr = e[1];
@@ -451,7 +467,7 @@ static uint32_t load_pm(void)
 static uint32_t load_pbl(void)
 {
 	image_header_group ih;
-	uint32_t size, offset, err;
+	uint32_t size, offset, err, strap;
 	uint8_t *dst;
 
 	err = fw_xloader_get_img_info(SEC_FW_TYPE_PBL, ROM_HDR, &ih);
@@ -459,9 +475,9 @@ static uint32_t load_pbl(void)
 		return ERR_NOMEM;
 	size = round_4k(ih.binary_length + SIG_SIZE);
 	dst = (uint8_t *)(uintptr_t)((ih.run_address & 0x3fffffff) + 0x60000000);
-	hal_printf_level(LOG_INFO, "Flash Offset flag from strappng pin is: 0x%x\n",
-			 (unsigned)REG32(FLASH_STRAP));
-	offset = ih.binary_offset + BL1_FLASH(REG32(FLASH_STRAP));
+	strap = REG32(FLASH_STRAP);
+	hal_printf_level(LOG_INFO, "Flash Offset flag from strappng pin is: 0x%x\n", (unsigned)strap);
+	offset = ih.binary_offset + BL1_FLASH(strap);
 	hal_printf_level(LOG_INFO, "Offset of image in flash is: 0x%x, 0x%x\n", (unsigned)offset,
 			 (unsigned)(uintptr_t)dst);
 	if (load(offset, dst, size))

@@ -17,7 +17,7 @@ path = "src/main.rs"
 # in one does not stop the others from building (cargo build --features ec).
 # A finished emulator moves into `default`.
 [features]
-default = ["ec", "a64"]
+default = ["ec", "a64", "se", "sfh"]
 ec = []
 se = ["arm"]
 sfh = ["arm"]

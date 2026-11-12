@@ -56,9 +56,9 @@ static int xspi_command_complete_status(void)
 	uint32_t i, st;
 
 	for (i = 1; i != XSPI_POLL; i++) {
-		st = REG32(XSPI_INTR_STATUS);
-		if (!(st & 0xe00000))
+		if (!(REG32(XSPI_INTR_STATUS) & 0xe00000))
 			continue;
+		st = REG32(XSPI_INTR_STATUS);	/* read again for what it holds, as CIX's */
 		if (st & INTR_SDMA_ERR) {
 			hal_printf_level(LOG_ERR, "Slave DMA transaction error\n");
 			mSdmaCompleted = 1;

@@ -97,14 +97,15 @@ uint32_t service_boot_entry(void)
  */
 static uint32_t service_check_boot_magic_ready(uint32_t magic, uint32_t ms)
 {
-	uint32_t err;
+	uint32_t err, v;
 
 	for (;;) {
-		if (REG32(PM_MAGIC) == magic) {
+		v = REG32(PM_MAGIC);	/* one read a pass */
+		if (v == magic) {
 			REG32(PM_MAGIC) = 0;
 			return 0;
 		}
-		if (magic == 0x5c5a && REG32(PM_MAGIC) == 0xaacc)
+		if (magic == 0x5c5a && v == 0xaacc)
 			break;
 		hal_mdelay(1);
 		if (ms-- == 0) {
@@ -114,8 +115,10 @@ static uint32_t service_check_boot_magic_ready(uint32_t magic, uint32_t ms)
 	}
 	hal_crash_deinit();
 	err = hal_sfh_init();
-	if (err)
+	if (err) {
+		SE_ERR(err);
 		return err;
+	}
 	REG32(PM_MAGIC) = 0xccaa;
 	for (;;) {
 		hal_mdelay(1);

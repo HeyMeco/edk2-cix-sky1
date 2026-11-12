@@ -295,10 +295,11 @@ from its strings and the call chain, not read from its code.)
 
 ## In the emulators
 
-The SE emulator ([se_emu.py](../scripts/open/se_emu.py)) models the mirror
-as a byte map and the life cycle as a register; `test_se.py` runs life
-cycles 4, 5 and 7, with test device and model keys (`--keys`) and with the
-secure boot bit and the image's own root hashes fused (`--secure`). The PM
+The SE emulator ([emu/src/se/soc.rs](../emu/src/se/soc.rs)) models the mirror
+as a byte map and the life cycle as a register; `sky1emu se-test` runs every
+life cycle, with test device and model keys (`--keys`), with the
+secure boot bit and the image's own root hashes fused (`--secure`), and
+asks for every fuse field over both mailboxes (`--services`). The PM
 emulator ([emu/src/pm/soc.rs](../emu/src/pm/soc.rs)) leaves the PM's copy at
 its marker; `sky1emu pm-vf --fuses SEED --phase N --opn ...` fills it with
 random curves for an ATE phase, a part number and leakage data. None of

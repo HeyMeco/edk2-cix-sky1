@@ -175,12 +175,12 @@ uint32_t hal_stor_load_fw(sec_storage_type_t type, sec_storage_param_t *param, u
 }
 
 /* The firmware table: a count at 8, entries from 0x10 */
-static uint32_t find_entry(reader_t *r, sub_image_type_t type, firmware_entry *e)
+static uint32_t find_entry(reader_t *r, uint32_t strap, sub_image_type_t type, firmware_entry *e)
 {
 	uint32_t base, err, i, n, t;
 	uint8_t *tbl;
 
-	base = REG32(FLASH_STRAP) & 1 ? 0x200000 : 0x100000;
+	base = strap & 1 ? 0x200000 : 0x100000;
 	tbl = malloc(FW_TABLE_SIZE);
 	if (tbl == NULL) {
 		SE_ERR(ERR_STOR_READ);
@@ -214,22 +214,22 @@ uint32_t hal_stor_get_firmware_entry(sub_image_type_t type, firmware_entry *e)
 		SE_ERR(ERR_STOR_PARAM);
 		return ERR_STOR_PARAM;
 	}
-	return find_entry(&r, type, e);
+	return find_entry(&r, REG32(FLASH_STRAP), type, e);
 }
 
 uint32_t hal_stor_get_sub_img(sub_image_type_t type, uint8_t *img, uint32_t *len)
 {
 	reader_t r = { 0 };
 	firmware_entry e;
-	uint32_t err;
+	uint32_t err, strap;
 
 	if (img == NULL || len == NULL) {
 		SE_ERR(ERR_STOR_PARAM);
 		return ERR_STOR_PARAM;
 	}
-	hal_printf_level(LOG_INFO, "Flash Offset flag from strappng pin is: 0x%x\n",
-			 (unsigned)REG32(FLASH_STRAP));
-	err = find_entry(&r, type, &e);
+	strap = REG32(FLASH_STRAP);	/* read once, as CIX does */
+	hal_printf_level(LOG_INFO, "Flash Offset flag from strappng pin is: 0x%x\n", (unsigned)strap);
+	err = find_entry(&r, strap, type, &e);
 	if (err)
 		return err;
 	err = fast_read(&r, e.img_addr, img, e.img_size);
@@ -246,7 +246,7 @@ void hal_secfg_init(void)
 	firmware_entry e;
 
 	if (hal_stor_get_firmware_entry(SE_CONFIG_IMG_DATA_TYPE, &e)) {
-		hal_printf_level(LOG_ERR, "ERR %s, %d\n", __func__, __LINE__);
+		SE_ERR(ERR_STOR_READ);
 		return;
 	}
 	se_config_base = e.img_addr;

@@ -154,11 +154,11 @@ from source, apart from the boot ROM in the chip:
 
 | Stage | Source | Checked against CIX's |
 |---|---|---|
-| SE firmware (Cortex-M33: SoC bring-up, eFuses, DRAM training, secure boot, run-time services) | [firmware/se](firmware/se), translated from CIX's debug build | same register writes and memory contents in [test_se.py](scripts/open/test_se.py): cold boot, DDR, services, suspend/resume, secure boot |
+| SE firmware (Cortex-M33: SoC bring-up, eFuses, DRAM training, secure boot, run-time services) | [firmware/se](firmware/se), translated from CIX's debug build | [`sky1emu se-test`](emu/README.md#se-and-sfh-cortex-m33): same register writes, reads and memory contents in cold boot, DDR, every service, suspend/resume, secure boot, crash records; [what differs](firmware/se/differences.md) |
 | CSU_PM (Xtensa LX7: clocks, PMICs, DVFS, SCMI, fans, suspend) | [firmware/csupm](firmware/csupm): Arm SCP-firmware v2.11.0, FreeRTOS and CIX's code translated | [`sky1emu pm-test`](emu/README.md): boot, SCMI, PM messages, suspend/resume, run-time DPM, fans, every board's PM configuration |
 | TF-A BL2, BL31 | `arm-trusted-firmware` + [patches](patches/2026Q3) | — |
 | OP-TEE with StandaloneMM (UEFI variables) | `optee_os` + EDK2 [StandaloneMm](edk2-project/Platform/CIX/Sky1/StandaloneMm) | — |
-| Sensor fusion hub firmware | [firmware/sfh](firmware/sfh) | [test_sfh.py](scripts/open/test_sfh.py) |
+| Sensor fusion hub firmware | [firmware/sfh](firmware/sfh) | [`sky1emu sfh-test`](emu/README.md#se-and-sfh-cortex-m33): every message, interrupt and wake-up time; [what differs](firmware/sfh/differences.md) |
 | EC firmware (Orion O6, `--open-ec`) | [firmware/ec](firmware/ec), written from scratch (ITE IT5570E) | `sky1emu ec-test` ([emu](emu/README.md#ec-orion-o6)), against Radxa's V1.07 |
 
 ```sh
@@ -187,22 +187,24 @@ the READMEs in [firmware/se](firmware/se/README.md),
 ### Emulator tests
 
 The open firmware is checked against CIX's (or Radxa's) binaries in
-emulators of the SoC, run on the host rather than in the container. The
-CSU_PM's, the Orion O6 EC's and the BL2/BL31 emulators and their tests are
-the Rust crate [emu](emu/README.md) (`sky1emu`, no dependencies beyond a
-Rust toolchain); the SE's and SFH's are still
-Python in `scripts/open`, and need `unicorn` 2.1.4,
-`capstone` and `pyelftools` (PyPy runs them much faster than CPython). CIX's
+emulators of the SoC, run on the host rather than in the container. All
+of them (the SE's, the CSU_PM's, the sensor hub's, the Orion O6 EC's and
+the one for BL2 and BL31) and their tests are the Rust crate
+[emu](emu/README.md) (`sky1emu`, no dependencies beyond a Rust toolchain).
+What each open binary does differently from the vendor's is in its
+`differences.md` ([SE](firmware/se/differences.md),
+[CSU_PM](firmware/csupm/differences.md), [SFH](firmware/sfh/differences.md),
+[EC](firmware/ec/differences.md),
+[BL2 and BL31](docs/differences-bl2-bl31.md)). CIX's
 debug builds they compare against are pinned in
 [manifests/cix-debug-firmware.json](manifests/cix-debug-firmware.json) and
 fetched by `scripts/open/cix_debug.py`.
 
 ```sh
-pypy3 scripts/open/test_se.py output/orion-o6/RELEASE/open/se/se_fw.elf dist/orion-o6_2026Q3_open.bin --ddr
-pypy3 scripts/open/test_se.py <se_fw.elf> <image.bin> --services --suspend
-pypy3 scripts/open/test_se.py <se_fw.elf> <image.bin> --secure
+emu/build-open.sh se sfh                       # the open SE and sensor hub images -> out/emu
+emu/test-se.sh out/emu/se/se_fw.elf out/emu/sfh/sfh_fw.bin   # SE and sensor hub: every suite, every board's image
+emu/target/release/sky1emu se-test <se_fw.elf> <image.bin> --services --suspend   # (cargo build ...)
 emu/test-pm.sh <csupm.elf>                     # CSU_PM: every suite, every board
-pypy3 scripts/open/test_sfh.py <sfh_fw.bin>    # sensor fusion hub
 emu/target/release/sky1emu ec-test --open firmware/ec/build/ec_fw.bin   # Orion O6 EC (cargo build --release --manifest-path emu/Cargo.toml)
 ```
 

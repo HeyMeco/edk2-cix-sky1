@@ -50,21 +50,31 @@ Generated from the ELF by scripts, with `--check` against CIX's data:
 `scripts/open/se_ddr_header.py`) and `driver/pvt_data.c` (the PVT table,
 2668 entries, CIX's 10 672 bytes exactly: `scripts/open/se_pvt_table.py`).
 
-How it was checked, against CIX's code in the emulator:
+How it was checked, against CIX's code in the emulator
+([`sky1emu se-test`](../../emu/README.md#se-and-sfh-cortex-m33)):
 
-* `scripts/open/test_se_ddr_fn.py` calls each function of CIX's and of the
-  port from the same captured state (from a run of CIX's SE) with the same
-  arguments, random and boundary ones too, and compares return values,
-  memory, register writes and asserts (115 functions, 0 failing);
-* `test_se.py --ddr` runs both SEs with the driver live on a model of the
-  controllers, PHYs and PI blocks (`se_emu.py` `DdrModel`, inferred from
+* while the port was under way, `test_se_ddr_fn.py` (Python, retired with
+  the Python emulator) called each function of CIX's and of the port from
+  the same captured state with the same arguments, random and boundary
+  ones too, and compared return values, memory, register writes and
+  asserts (115 functions, 0 failing);
+* `se-test --ddr` runs both SEs with the driver live on a model of the
+  controllers, PHYs and PI blocks (`DdrModel` in
+  [emu/src/se/soc.rs](../../emu/src/se/soc.rs), inferred from
   what CIX's driver writes and waits for: the PI's frequency-change
   requests to the PM, INIT_COMP, mode registers as written, BIST passing)
-  and compares every register write, the memory, the size and channels
-  reported and the memory configuration written back to flash: identical
-  on the O6 (9739 registers) and O6N (9745), and with each driver feature
-  switched (DFS, inline and link ECC, BIST, SSC, train mode, RFM, PBR,
-  address mode, port priority; `--ddr-feature`), the eye scan too.
+  and compares every register write in order, the registers read, the
+  memory, the size and channels reported and the memory configuration
+  written back to flash: the same on the O6 (51 634 writes to 9759
+  registers), the O6N, the Orange Pi 6 and the 6 Plus (the MS-R1's
+  memory configuration is format 1.6, which both drivers refuse with the
+  same assertion);
+* `se-test --ddr-suite --eye` does the same with 19 feature settings (DFS,
+  inline and link ECC, BIST, SSC, train mode, RFM, PBR, address mode, port
+  priority, periodic training, the eye scan), 7 kinds of parts as their
+  mode registers 5 and 8 would answer, 9 failures (a channel that never
+  completes, DFI and PI errors, a failing BIST), every interrupt status
+  bit of every group on every channel, and a suspend.
 
 What only real DRAM shows: training itself (the PI does it in hardware:
 frequency order, failures and retries), the parts' mode-register values,
@@ -84,34 +94,34 @@ port from one elsewhere in the SE).
 |---|---|
 | Structure, boot path and interfaces mapped (`main` → `fw_init` → `services_init`) | done |
 | DDR island generator; with every symbol at its original address it reassembles to CIX's 43 876 code bytes exactly | done (kept for tests) |
-| DDR driver translated (`ddr/`), PVT table as generated source; DDR model and `test_se.py --ddr` | done: identical to CIX's with the driver live, O6 and O6N, every feature switch |
+| DDR driver translated (`ddr/`), PVT table as generated source; DDR model and `se-test --ddr`, `--ddr-suite` | done: identical to CIX's with the driver live, four boards' memory configurations, every feature switch, parts, failures and interrupts |
 | Startup, UART, timer, heap, log, RAM log | done |
-| Flash access (QSPI and FCH xSPI), firmware table, SE config | done |
-| eFuse, key manager, crypto (Mbed TLS for SHA-2, HKDF, RSA; SM2/SM3 here; engine bring-up, TRNG, OTP from CIX's binary) | done |
+| Flash access (QSPI and FCH xSPI), firmware table, SE config | done; both controllers compared with CIX's (the xSPI one on a model after the public Linux driver) |
+| eFuse, key manager, crypto (Mbed TLS for SHA-2, HKDF, RSA; SM2/SM3 here; engine bring-up, TRNG, OTP from CIX's binary) | done; SM2 checked against the standard's example (no board's image uses it) |
 | SoC init (PLLs, clocks/resets/power, MPU, memory repair, fuse distribution, harvest) | done |
 | CI-700, MMHUB, RCSU gaskets (the TZC-400s are set up by the DDR driver) | done |
-| Secure boot: load, verify and start CSU_PM and BL2 | done; with secure boot fused for its keys, the open O6 image boots in the emulator, and does not with one byte of BL2 or CSU_PM changed |
-| Runtime mailbox services, suspend/resume | done; answers to run-time requests and everything from a suspend request to the resume message match CIX's (804 registers) |
-| SFH loading during suspend | written; not yet exercised in the emulator |
-| Crash information | written; clock and power records are reduced to raw registers |
-| Cold boot from reset to AP release, against CIX's firmware in the emulator | identical (831 registers, DRAM and PM SRAM) for life cycles 4, 5 and 7, with and without device keys |
+| Secure boot: load, verify and start CSU_PM and BL2 | done; 20 cases against CIX's: the same but that CIX's starts a CSU_PM that fails its check |
+| Runtime mailbox services, suspend/resume | done; every request on both mailboxes and five suspends match CIX's but for the listed differences |
+| SFH loading during suspend | done; the image each SE loads starts in the sensor hub's model |
+| Crash information | done; compared with CIX's (exception area, hang record, the watchdogs); clock and power records are raw registers under names of their own |
+| Cold boot from reset to the idle loop, against CIX's firmware in the emulator | identical (2039 writes to 844 registers in order, the registers read, DRAM and PM SRAM) for every life cycle, with and without device keys |
 | `build.sh --open` puts it in bootloader1 (re-signed with the chain-A keys) | done; not yet boot-tested on hardware |
 
-The services keep CIX's interface, with three differences: secret eFuse
-fields (device and model keys) are given only to requests on the TEE
-mailbox, the hash service only reads DRAM, and the request to burn the
-OEM root key hash into the eFuse is refused: nothing here programs eFuses.
-CIX's firmware does all three for the non-secure side.
+Every way this firmware differs from CIX's, with the test that shows it
+and the place in CIX's image it comes from, is in
+[differences.md](differences.md). In short: secret eFuse fields (device
+and model keys) are given only to requests on the TEE mailbox, the hash
+service only reads DRAM, the request to burn the OEM root key hash into
+the eFuse is refused (nothing here programs eFuses), and a CSU_PM image
+that fails its check under secure boot stops the boot (CIX's starts it).
+No debug monitor; the DDR driver's training report and register dumps are
+left out; the hang record's clock and power parts are raw registers.
 
-Elsewhere: no debug monitor; the memory-configuration block lookup stays
-inside its table (CIX's reads past it); a write enable per erased flash
-sector; in the DDR driver, no training report or register dumps, the
-BIST's pass/fail arrays (only printed) dropped with the BIST runs kept,
-and the density table padded to 16 entries because CIX's lookup reads past
-its 9. The full list for every stage is in
-[docs/open-firmware.md](../../docs/open-firmware.md#how-the-open-firmware-differs-from-cixs).
-
-`scripts/open/test_se.py` runs CIX's debug build and this firmware in
-Unicorn (`scripts/open/se_emu.py`, a model of the SoC as the SE sees it) on
-the same flash image and compares every register write and what ends up in
-DRAM and the PM's SRAM.
+[`sky1emu se-test`](../../emu/README.md#se-and-sfh-cortex-m33) runs CIX's
+debug build and this firmware on the same flash image and model of the
+SoC, in step, and compares every register write and read, every answer,
+and what ends up in DRAM, the PM's SRAM, the sensor hub's SRAM and the
+flash; `emu/test-se.sh` runs all of its suites. They execute 81 % of this
+firmware's code; the 22 functions never run cannot be reached
+([differences.md](differences.md#what-no-test-reaches)). Nothing has run
+on hardware.

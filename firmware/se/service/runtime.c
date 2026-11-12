@@ -61,7 +61,7 @@ static void ipc_crypto_hash_handler(void *param, uint32_t plen, void *resp, uint
 		hal_printf_level(LOG_ERR, "ERR %s, %d\n", __func__, __LINE__);
 		return;
 	}
-	if (p[4] != 0 || p[1] < AP_DRAM_START || p[2] > AP_DRAM_END - p[1]) {
+	if (p[4] != 0 || p[1] < AP_DRAM_START || p[1] >= AP_DRAM_END || p[2] > AP_DRAM_END - p[1]) {
 		err = 1;
 		goto fail;
 	}
@@ -170,7 +170,8 @@ static void fuse_addr_handler(void *param, uint32_t plen, void *resp, uint32_t *
 		return;
 	}
 	SE_INFO("fuse addr:%d, offset:%d, size:%d\n", (int)p[0], (int)p[1], (int)p[2]);
-	bytes = (p[2] + p[1] + 7) / 8;
+	/* (offset and size bounded first: their sum must not wrap) */
+	bytes = p[1] <= 0x380 && p[2] <= 0x380 ? (p[2] + p[1] + 7) / 8 : 0xffffffff;
 	if (p[0] < 0x800 && bytes <= 0x70 && p[0] + bytes <= 0x800 && fuse_range_allowed(p[0], bytes) &&
 	    sec_efuse_read(&g_handle_efuse, p[0], p[1], p[2], r + 1) == 0) {
 		r[0] = 0;
@@ -207,7 +208,8 @@ static void ipc_dis_mem_repair_handler(void *param, uint32_t plen, void *resp, u
 		return;
 	}
 	SE_INFO("memrepair id:%d, index:%d\n", (int)p[0], (int)p[1]);
-	if (hal_memr_distribute_by_id(p[0], &valid)) {
+	/* the group is the request's first byte, as in CIX's */
+	if (hal_memr_distribute_by_id(*(const uint8_t *)param, &valid)) {
 		r[0] = RSP_ERR_PARAM;
 		r[1] = 0;
 		return;

@@ -14,7 +14,7 @@ mask ROM ─▶ SE firmware ─▶ CSU_PM ─▶ TF-A BL2 ─▶ BL31 + OP-TEE (
 
 | Stage | Source | Status here |
 |---|---|---|
-| SE firmware (Cortex-M33: SoC bring-up, eFuse, image checks, AP services) | [firmware/se](../firmware/se), translated from CIX's debug build, DDR driver included | **built from source** (`--open`; `--vendor-se` keeps CIX's); same register writes and memory contents as CIX's in [test_se.py](../scripts/open/test_se.py) ([below](#se-firmware)) |
+| SE firmware (Cortex-M33: SoC bring-up, eFuse, image checks, AP services) | [firmware/se](../firmware/se), translated from CIX's debug build, DDR driver included | **built from source** (`--open`; `--vendor-se` keeps CIX's); same register writes, reads and memory contents as CIX's in [`sky1emu se-test`](../emu/README.md#se-and-sfh-cortex-m33) but for what [firmware/se/differences.md](../firmware/se/differences.md) lists ([below](#se-firmware)) |
 | CSU_PM (Xtensa LX7, Arm SCP-firmware based) | [firmware/csupm](../firmware/csupm): SCP-firmware v2.11.0 and CIX's code translated from its debug build | **built from source** (`--open`; `--vendor-pm` keeps CIX's); does what CIX's does in the emulator ([`sky1emu pm-test`](../emu/README.md)) at boot, over SCMI, for PM messages, through suspend/resume, shutdown and reset and at run time (DPM, fans, thermal), with each board's PM configuration; not yet boot-tested on hardware ([below](#csu_pm)) |
 | TF-A BL2 | `arm-trusted-firmware` + patches 0002, 0008 | **built from source** (`--open`, chain A), re-signed into bootloader1; does what CIX's does from its entry to the jump to BL31 in the emulator ([`sky1emu a64-test`](../emu/README.md#bl2-and-bl31-aarch64)) but for what [differences-bl2-bl31.md](differences-bl2-bl31.md) lists |
 | TF-A BL31 | `arm-trusted-firmware` + patches 0004-0008 | **built from source** (`--open`); same cold boot and same answer to every SMC as CIX's in the emulator, but for what [differences-bl2-bl31.md](differences-bl2-bl31.md) lists |
@@ -24,7 +24,7 @@ mask ROM ─▶ SE firmware ─▶ CSU_PM ─▶ TF-A BL2 ─▶ BL31 + OP-TEE (
 | bootloader1 container (`CIXBTFF!`) | — | **open**: parse, verify, replace, re-sign (`cixfw.py bl1`) |
 | SPI image packer (`cix_package_tool`) | — | **open**: `cixfw.py pack`, used by every build |
 | `memory_config`, `pm_config` | CIX generators | built from source where the board package has them |
-| Sensor fusion hub firmware (`sfh_fw.bin`, Cortex-M) | [firmware/sfh](../firmware/sfh) | **built from source** (`--open`); same hardware writes as CIX's in every scenario of [test_sfh.py](../scripts/open/test_sfh.py) |
+| Sensor fusion hub firmware (`sfh_fw.bin`, Cortex-M) | [firmware/sfh](../firmware/sfh) | **built from source** (`--open`); same hardware writes as CIX's in every phase of [`sky1emu sfh-test`](../emu/README.md#se-and-sfh-cortex-m33) ([differences](../firmware/sfh/differences.md)) |
 | EC firmware (`ec_fw.bin`, Orion O6 only; ITE IT5570E, 8051) | [firmware/ec](../firmware/ec) | **written from scratch** after Radxa's EC V1.07; same pin changes, I2C transfers, host-command answers, e-flash writes and LED as the vendor's in all 61 scenarios of `sky1emu ec-test` ([emu](../emu/README.md#ec-orion-o6)) but for the differences listed in [differences.md](../firmware/ec/differences.md), and the update to it and back works in the model; `--open-ec`; not hardware-tested ([below](#ec-firmware-orion-o6)) |
 | `trustzone_config` | CIX generator | CIX stock binary on every board; identical to the generator's output apart from its timestamp ([below](#trustzone-configuration)) |
 
@@ -168,7 +168,7 @@ built from [firmware/ec](../firmware/ec) (SDCC, in the container) at
    size of CIX's so the container keeps its layout; CSU_PM is not (the SE
    hashes only the XBIN's sections and finds the signature from the
    image's length): it ends in CIX's slot and its signature moves down,
-   nothing else moves. `test_se.py --secure` checks that the open SE
+   nothing else moves. `sky1emu se-test --secure` checks that the open SE
    verifies it and starts the AP, and both SEs load it identically.
 9. bootloader3: the BL33 certificates come from `cert_create` under the
    same root (trusted key certificate with only the non-trusted-world key,
@@ -250,11 +250,12 @@ They are applied by `scripts/prepare.py` like the EDK2 queues
 
 What `--open` builds for the O6 and O6N differs from CIX's firmware only
 where listed here; everything else matched CIX's write for write in the
-emulator tests (SE: boot, DRAM initialisation on the O6 and O6N,
-suspend/resume, secure boot; CSU_PM: boot, SCMI, PM messages, power
+emulator tests (SE: boot, every run-time request, DRAM initialisation
+with four boards' memory configurations, suspend/resume, secure boot,
+crash records, failures, [all of it](../firmware/se/differences.md); CSU_PM: boot, SCMI, PM messages, power
 transitions, run time, all five boards' PM configurations and one with
 the options no board sets; SFH: every
-hardware write). The open SE and CSU_PM have not run on hardware, and
+hardware write and the time of every wake-up). The open SE and CSU_PM have not run on hardware, and
 what the emulators model of the hardware is inferred from CIX's code.
 
 ### At a glance
@@ -272,12 +273,15 @@ Security fixes, where CIX's behaviour is a hole:
 | SE ([below](#se-firmware)) | secret eFuse fields (device and model keys) only to the TEE mailbox | to the OS's mailbox too |
 | SE | the hash service reads DRAM only | hashes any address, SE SRAM and eFuse included |
 | SE | refuses to burn the OEM root key hash; programs no eFuses | burns it, turning secure boot on for good |
+| SE | secure boot stops at a CSU_PM image that fails its digest or signature | logs the error and starts the PM all the same: secure boot does not protect CSU_PM ([differences](../firmware/se/differences.md#faults-of-cixs-image-that-the-open-one-does-not-have)) |
+| SE | the eFuse requests (`0x8200000e`, `0x82000002`) check address, offset and length | unchecked: the OS's mailbox can overflow the SE's stack and reset the system, and read past the fuse array |
 
 Left out, debug or unused:
 
 * SE: the UART debug monitor; the DDR driver's training report and
   register dumps, and its BIST pass/fail arrays (only printed; the BIST
-  runs are kept).
+  runs are kept); the clock-tree and power-domain parts of the hang
+  record (raw register dumps under names of their own instead).
 * CSU_PM ([below](#csu_pm-differences)): the debug CLI and what only it reaches;
   CIX's code overlays; CIX's timer, event and job framework (SCP-firmware
   events and alarms instead, with CIX's periods, under upstream FreeRTOS
@@ -299,7 +303,9 @@ Behaviour that differs slightly:
   writes land at their offset.
 * SE: a memory-configuration block lookup that stays inside its table; a
   write enable per erased flash sector; the DDR driver's density table
-  padded so it is not read past its end.
+  padded so it is not read past its end; messages to the AP sent without
+  CIX's 100 ms wait; refused requests answered as errors (the full list:
+  [firmware/se/differences.md](../firmware/se/differences.md)).
 * bootloader1: CSU_PM's image is not padded to CIX's size and its
   signature moves down (the SE hashes the image's sections only); the
   container is otherwise CIX's, re-signed with the same published chain-A
@@ -547,10 +553,17 @@ seconds), `0xFFF4` (resume), `0xFFF7` (wake after N ms), waking the system
 by writing 3 to `0x50070080`, and signals `0xAABB` at `0x50070100` once
 up. CIX's image is FreeRTOS-based (the scheduler never starts) with
 newlib's stdio; [firmware/sfh](../firmware/sfh) does the same in 4 KB of C.
-[scripts/open/test_sfh.py](../scripts/open/test_sfh.py) runs both images
-in Unicorn against a model of the mailbox, timers and control block and
-compares every hardware write: boot, the three messages, malformed ones and
-the timer interrupts produce the same writes in the same order.
+[`sky1emu sfh-test`](../emu/README.md#se-and-sfh-cortex-m33) runs both
+images on a model of the mailboxes, the timers (which count) and the
+control block, in step by simulated time, through 162 phases: boot, the
+three messages with every delay, every command number and length on both
+channels, several messages at once, every interrupt and fault vector. The
+writes, their order, the registers read and the times of the wake-up
+requests are the same but for what
+[firmware/sfh/differences.md](../firmware/sfh/differences.md) lists: CIX's
+image answers tens of milliseconds late once it has resumed (it logs
+through a UART pointer that is 0), and its vector table ends three
+interrupts early.
 
 The SE loads `sfh_fw.bin` from flash without any signature or hash check,
 on every board, so this image (and anything else put there) runs whatever
@@ -574,28 +587,47 @@ source; how they were checked is in the
 [README](../firmware/se/README.md#ddr-driver).  The image is 141 KB
 (CIX's release image: 334 KB).
 
-[se_emu.py](../scripts/open/se_emu.py) runs an SE image in Unicorn on a
-model of the SoC as the SE sees it (boot ROM hand-over, QSPI flash, PLLs,
-power controllers, crypto engine status, PM handshakes);
-[test_se.py](../scripts/open/test_se.py) boots CIX's debug build and the
-open one on the same flash image and compares every register write and
-what ends up in DRAM and the PM's SRAM (CSU_PM, BL2, key blocks, boot
-records):
+[`sky1emu se-test`](../emu/README.md#se-and-sfh-cortex-m33) runs CIX's
+debug build and the open one on the same flash image, on a model of the
+SoC as the SE sees it (boot ROM hand-over, both flash controllers, PLLs,
+power controllers, mailboxes, watchdog, timers, the PM's and the sensor
+hub's handshakes, the DDR controllers), in step by simulated time, and
+compares every register write in order, the registers read, the answers
+and what ends up in DRAM, the PM's SRAM, the hub's SRAM and the flash:
 
-* cold boot from reset to the AP's release: identical over 831 registers,
-  for life cycles 4, 5 and 7, with and without device keys;
-* run-time requests from the AP (`--services`): the same answers;
-* a suspend request through WFI, the SoC's re-initialisation and the
-  resume message to the PM (`--suspend`): identical over 804 registers;
-* secure boot fused for the image's keys (`--secure`, open firmware only):
-  the open O6 image is verified and boots; with one byte of BL2 or CSU_PM
-  changed it does not.
-
+* cold boot from reset to the idle loop: 2039 writes to 844 registers in
+  the same order, for 8 life cycles with and without device keys, 11 boot
+  reasons, 14 flash parts and 24 damaged pieces of the flash image;
+* every run-time request (`0x82000001` to `0x82000020`) on both mailboxes
+  with valid, boundary and invalid arguments (`--services`);
+* suspend to RAM and resume five times over, with the sensor hub started
+  and stopped and every wake-up source (`--suspend`); the hub image the SE
+  loaded is then started in the hub's model;
+* secure boot fused for the image's keys (`--secure`, both firmwares, 20
+  cases): the image as signed boots; an altered BL2, header, key or key
+  hash stops both. An altered CSU_PM stops only the open one: **CIX's
+  starts a PM image that failed its digest or signature check**;
+* crash records and watchdogs (`--crash`), PLLs, PM and hub that do not
+  answer (`--failures`), and the code no board's image takes: the flash
+  behind the FCH's xSPI controller, trim and repair data in the fuses,
+  debug certificates, two DDR channels (`--paths`);
 * DRAM initialisation with the driver live (`--ddr`, on a model of the
   controllers, PHYs and PI blocks inferred from what CIX's driver does):
-  identical over 9739 registers on the O6 and 9745 on the O6N, with each
-  driver feature switched too.  Training itself happens in the PI
-  hardware and is only modelled.
+  51 634 writes to 9759 registers in the same order on the O6, and the
+  same for the O6N's, the Orange Pi 6's and the 6 Plus's memory
+  configurations (the MS-R1's is of a format both firmwares refuse);
+  19 feature settings, 7 kinds of parts, 9 failures and every interrupt
+  (`--ddr-suite`).  Training itself happens in the PI hardware and is
+  only modelled.
+
+The tests run 81 % of the open firmware's code; the functions they do not
+reach cannot be reached in it. Every difference, with the place in CIX's
+image it comes from, is in
+[firmware/se/differences.md](../firmware/se/differences.md): four things
+refused for security (below), what is left out, and a dozen faults of
+CIX's image (the secure-boot hole above, a stack overflow from the
+non-secure mailbox, uninitialised message headers, a 100 ms wait in an
+interrupt handler).
 
 Differences from CIX's firmware, on purpose:
 
@@ -610,12 +642,14 @@ Differences from CIX's firmware, on purpose:
 * the request to burn the OEM root key hash (`0x8200001a`) is refused;
   CIX's burns it and turns secure boot on for good. Nothing in the open
   SE programs eFuses;
+* a CSU_PM image that fails its check under secure boot stops the boot;
+* the eFuse requests check their address, bit offset and length;
 * no debug monitor; a memory-configuration block lookup that is correct
   where CIX's reads past its table; a write enable per erased sector.
 
 Not done: the clock and power records of crash reports are raw register
-dumps, and the SFH load during suspend has not been emulated.  The open
-SE has not been boot-tested on hardware.
+dumps (named `CLK_RAW` and `PWR_RAW`, so that nothing takes them for
+CIX's).  The open SE has not been boot-tested on hardware.
 
 ### CSU_PM
 

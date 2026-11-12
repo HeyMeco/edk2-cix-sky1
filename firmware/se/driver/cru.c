@@ -19,6 +19,7 @@
 #define S5_RST_AUDIO	(S5_RST + 0x404)
 #define AUDIO_PWR	0x47000020u
 #define AUDIO_CTRL	0x47000034u
+#define AUDIO_TEST	0x47110010u
 
 #define TRACE()		hal_printf_level(LOG_INFO, "%s\n", __func__)
 
@@ -96,11 +97,14 @@ static uint32_t drv_soc_audio_ss_self_test(void)
 		return err;
 	}
 	REG32(AUDIO_CTRL) = 0x20000000;
+	/* the test: read a register of the subsystem under a 500 ms watchdog that resets the system */
 	err = drv_wdt_init(500, 1);
 	if (!err)
 		err = drv_wdt_start();
-	if (!err)
+	if (!err) {
+		(void)REG32(AUDIO_TEST);
 		err = drv_wdt_stop();
+	}
 	if (err) {
 		SE_ERR(err);
 		return err;

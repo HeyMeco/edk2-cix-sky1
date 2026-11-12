@@ -346,6 +346,8 @@ void hard_fault_policy(uint32_t exc_return, uint32_t *sp)
 				 (unsigned)sp[6], (unsigned)sp[7], (unsigned)sp[8], (unsigned)sp[9]);
 	hal_printf_level(LOG_ERR, "CFSR %08x HFSR %08x MMFAR %08x BFAR %08x\n", (unsigned)REG32(SCB_CFSR),
 			 (unsigned)REG32(SCB_HFSR), (unsigned)REG32(SCB_MMFAR), (unsigned)REG32(SCB_BFAR));
+	/* the fault's postcode (CIX's dump ends with it); it keeps 0x9204 off the display */
+	hal_pc_log_ec(0xffffffff, __LINE__);
 	hal_printf_level(LOG_ERR, "System will reboot\n");
 	hal_pc_trace(0x9204);
 	reboot(4);

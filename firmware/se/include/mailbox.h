@@ -20,7 +20,7 @@ typedef enum {
 typedef struct mbox_client mbox_client;
 struct mbox_client {
 	uint32_t tx_tout;		/* ms; 0: 100 */
-	bool tx_block;			/* do not wait for the ack */
+	bool tx_block;			/* CIX's waits for the ack when set (see mbox_send_data_sync) */
 	uint8_t chan;
 	uint8_t chan_type;
 	uintptr_t shared_mem;

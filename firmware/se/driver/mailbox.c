@@ -272,6 +272,14 @@ uint32_t mbox_send_data_sync(mbox_chan_id chan, const void *msg)
 		REG(c, MBOX_FAST(c->index)) = w[0];
 		return 0;
 	}
+	/*
+	 * CIX's firmware waits here when tx_block is set, and its only
+	 * blocking channel (to the AP) is only ever used from interrupt
+	 * handlers, with interrupts masked: the acknowledgement cannot be
+	 * seen, so each message costs the full 100 ms and is then reported
+	 * as timed out although it was sent.  A blocking channel does not
+	 * wait here.
+	 */
 	if (c->cl->tx_block)
 		return 0;
 	for (tout = c->cl->tx_tout ? (int)c->cl->tx_tout : 100; tout > 0; tout--) {

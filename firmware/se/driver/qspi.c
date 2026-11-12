@@ -204,14 +204,17 @@ static uint32_t qspi_write(drv_qspi_t *q, uint32_t addr, const uint8_t *data, ui
 	return 0;
 }
 
-/* Reads do not cross a 2 MiB boundary from 2 MiB on */
+/*
+ * Reads do not cross a 2 MiB boundary, for the boundaries up to 14 MiB (the
+ * seven CIX's driver looks at: a 16 MiB flash).
+ */
 static uint32_t __drv_qspi_flash_read(drv_qspi_t *q, uint32_t addr, uint8_t *data, uint32_t len)
 {
 	uint32_t end = addr + len, next = (addr / CHUNK_2M + 1) * CHUNK_2M, err = 0, n;
 
 	if (addr < CHUNK_2M && end <= CHUNK_2M)
 		return __drv_qspi_flash_read1(q, addr, data, len);
-	if (addr >= CHUNK_2M && end <= next)
+	if (addr >= CHUNK_2M && (end <= next || next >= 8 * CHUNK_2M))
 		return __drv_qspi_flash_read1(q, addr, data, len);
 	while (len) {
 		n = MIN(len, next - addr);

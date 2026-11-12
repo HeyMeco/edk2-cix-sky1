@@ -136,7 +136,8 @@ uint32_t hal_memr_by_id(MEMR_GROUP_ID id, uint32_t index)
 	memr_group_t *g;
 	uint32_t err;
 
-	if (id > MEMR_GROUP_ID_MAX) {
+	/* (CIX's takes group 0 for the entry before its table) */
+	if (id < MEMR_GROUP_ID_CPU || id > MEMR_GROUP_ID_MAX) {
 		hal_printf_level(LOG_ERR, "# Invalid group id: %d\n", id);
 		return MEMR_ERR_ID;
 	}
@@ -181,7 +182,7 @@ uint32_t hal_memr_distribute_by_id(MEMR_GROUP_ID id, uint32_t *valid)
 	uint32_t err;
 
 	*valid = 0;
-	if (id > MEMR_GROUP_ID_MAX) {
+	if (id < MEMR_GROUP_ID_CPU || id > MEMR_GROUP_ID_MAX) {
 		hal_printf_level(LOG_ERR, "# Invalid group id: %d\n", id);
 		return MEMR_ERR_ID;
 	}

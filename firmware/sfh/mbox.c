@@ -67,16 +67,20 @@ static void mbox_irq(void *arg)
 			if (c->cl->rx)
 				c->cl->rx(c->cl, msg);
 		}
-		if (st & 0x80)
+		if (st & 0x80) {
+			log_printf(LOG_INFO, "fifo underflow: int_stats %d\n", (int)REG32(c->base + MB_FIFO_STAT));
 			REG32(c->base + MB_INT_CLR) |= 0x80;
+		}
 	} else {
 		if (st & 0x08) {
 			REG32(c->base + MB_INT_CLR) |= 0x08;
 			REG32(c->base + MB_TX_INT_EN) &= ~0x08u;
 			c->tx_done = 1;
 		}
-		if (st & 0x40)
+		if (st & 0x40) {
+			log_printf(LOG_INFO, "fifo overflow: int_stats %d\n", (int)REG32(c->base + MB_FIFO_STAT));
 			REG32(c->base + MB_INT_CLR) |= 0x40;
+		}
 	}
 }
 

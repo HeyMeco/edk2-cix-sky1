@@ -9,11 +9,10 @@ For now it has the CSU_PM: an interpreter for its Xtensa LX7 core
 run the open firmware ([firmware/csupm](../firmware/csupm)) and CIX's image
 side by side. It replaces the Python `xt_emu.py`, `pm_emu.py`, `test_pm.py`,
 `test_pm_faults.py` and `test_vf.py`, which are gone. The Orion O6's EC
-is here too (feature `ec`, [below](#ec-orion-o6); it replaces
-`i8051_emu.py`, `ec_emu.py` and `test_ec.py`). The SE and SFH
-emulators are still the Python ones in [scripts/open](../scripts/open)
-(`se_emu.py`, `test_se.py`; `test_sfh.py`) and are to follow into this crate (their modules are
-stubs behind features until then, see [Layout](#layout)).
+is here too ([below](#ec-orion-o6); it replaces
+`i8051_emu.py`, `ec_emu.py` and `test_ec.py`). The SE and the sensor
+fusion hub are here as well ([below](#se-and-sfh-cortex-m33); they replace
+`se_emu.py`, `test_se.py`, `test_se_ddr_fn.py` and `test_sfh.py`).
 
 ## Build
 
@@ -306,11 +305,11 @@ a fault of one image:
 | [src/pm/script.rs](src/pm/script.rs) | `pm-script` |
 | [test-pm.sh](test-pm.sh) | every suite on every configuration, in parallel |
 
-The emulators still being written are modules behind a Cargo feature
-each, so that work in progress in one does not stop the others' builds
-(`cargo build --release --manifest-path emu/Cargo.toml --features se`); a
-finished one moves into `default` (`ec` and `a64` are there). Each adds its own commands to
-`sky1emu` and its section to this file:
+Each emulator besides the CSU_PM's is a module behind a Cargo feature (so
+that one being worked on cannot stop the others' builds:
+`--no-default-features --features ec` builds one alone); all are in
+`default`. Each adds its own commands to `sky1emu` and its section to
+this file:
 
 | Feature | Module | What |
 |---|---|---|
@@ -577,3 +576,122 @@ boards sold it authenticates nothing, which is the path compared.
 | [src/a64/bl2.rs](src/a64/bl2.rs), [bl31.rs](src/a64/bl31.rs) | the scenarios |
 | [src/a64/expected.rs](src/a64/expected.rs) | `EXPECTED`, `O6_JUNE` |
 | [test-a64.sh](test-a64.sh) | all of it in one go |
+
+## SE and SFH (Cortex-M33)
+
+Features `se` and `sfh` (each turns on `arm`): [src/arm](src/arm/mod.rs),
+an interpreter for ARMv8-M Thumb-2; [src/se](src/se/mod.rs), the open SE
+firmware ([firmware/se](../firmware/se)) against CIX's debug build of its
+own (`debug/se_fw/se_fw.elf`, pinned in
+[manifests/cix-debug-firmware.json](../manifests/cix-debug-firmware.json)
+and read from `blobs-cache/` like the PM's); [src/sfh](src/sfh/mod.rs), the
+open sensor fusion hub firmware ([firmware/sfh](../firmware/sfh)) against
+CIX's `sfh_fw.bin`
+(`edk2-non-osi/Platform/CIX/Sky1/PackageTool/Firmwares`, no symbols). What
+the comparisons found is in
+[firmware/se/differences.md](../firmware/se/differences.md) and
+[firmware/sfh/differences.md](../firmware/sfh/differences.md).
+
+```sh
+emu/build-open.sh se sfh                      # out/emu/se/se_fw.elf, out/emu/sfh/sfh_fw.bin
+cargo build --release --manifest-path emu/Cargo.toml
+E=emu/target/release/sky1emu
+emu/test-se.sh out/emu/se/se_fw.elf out/emu/sfh/sfh_fw.bin --cov     # everything, 2 min on eight cores
+$E se-test out/emu/se/se_fw.elf dist/orion-o6_2026Q3_open.bin --services --suspend
+$E se-test OPEN.elf FLASH.bin --secure --only 'CSU_PM altered' -v --uart cix:'CSU_PM altered'
+$E se-test OPEN.elf dist/orion-o6n_2026Q3.bin --ddr
+$E sfh-test out/emu/sfh/sfh_fw.bin -v
+$E arm-check out/emu/se/se_fw.elf             # every instruction of an image decodes
+```
+
+| Command | What it does |
+|---|---|
+| `se-test OPEN.elf FLASH.bin [suites] [options]` | the open SE and CIX's on a flash image (a build in `dist/`), from reset to the idle loop, then the suites asked for |
+| `se-test OPEN.elf FLASH.bin --pyref [--services] [--suspend] [--ddr] [--secure] [--keys] [--dump PREFIX]` | the comparison exactly as the Python test made it (below) |
+| `se ELF [--flash IMAGE] [--trace] [--stub NAME=R0] [--stop NAME] [--max N]` | one SE image on the model: its bus writes and where it stopped |
+| `sfh-test OPEN.bin [CIX.bin] [--elf OPEN.elf] [--only TEXT] [--cov FILE] [-v] [--pyref]` | the open SFH image and CIX's through 162 phases |
+| `arm-check ELF...` | decode every instruction of the images' functions; anything the interpreter does not know is an error |
+
+`se-test` suites: `--services` (every request `0x82000001`…`20`, about
+130 questions on each of the two mailboxes: valid, boundary and invalid
+arguments), `--suspend` (five suspends: the sensor hub started, left,
+stopped, every wake-up source, a PM that says nothing; the hub image the
+SE loaded is started in the SFH model), `--crash` (exception area, hang
+record, the three watchdogs' interrupts, the SE watchdog not fed, every
+fault vector, the RCSU violation interrupts, a bus fault in a service),
+`--secure` (20 cases with the secure-boot fuses set: altered images,
+headers, signatures, digests, keys, key hashes, life cycles), `--inputs`
+(boot reasons, life cycles, flash parts, clocks, 24 damaged pieces of the
+flash image), `--failures` (PLLs that never lock, a PM or sensor hub that
+does not answer or answers late or wrong), `--paths` (what no board's
+image takes: the flash behind the FCH's xSPI controller, trims and repair
+data in the fuses, debug certificates, two DDR channels, the emulation
+platform, MTE on; and the open firmware's SM2 check against the
+standard's example), `--ddr-suite` (the DDR driver live: 19 feature
+settings, 7 kinds of parts, 9 failures, every interrupt status bit, a
+suspend; `--eye` adds the eye scan), `--full` (all of them). Options:
+`--ddr` (the DDR driver runs on the model of the controllers; without it
+its entry points are stubbed), `--life-cycle N`, `--keys` (device and
+model keys fused), `--ddr-feature NAME=VALUE`, `--cix CIX.elf`,
+`--only TEXT` (the phases whose name has TEXT; boots whose phases cannot
+have it are skipped), `--uart TEXT` or `--uart cix:TEXT` (the UART log of
+those phases), `--cov FILE`, `--audit`, `-v`.
+
+[`test-se.sh`](test-se.sh) `OPEN_se_fw.elf OPEN_sfh_fw.bin [--cov] [--audit]`
+runs all of it side by side: every suite on the O6's open flash image, the
+boot with the DDR driver live on every board's image in `dist/`, life
+cycles 5 and 7 with keys, `sfh-test` and `arm-check`. Logs go to
+`out/emu/test/se-*.log`; the exit status is 0 when nothing differs.
+
+**Method.** As for the PM ([above](#method)): both images run on one
+model, driven by simulated time (the SE's core at 800 MHz over its
+divider, SysTick from the 24 MHz reference or the core; the hub's core at
+an assumed 100 MHz, its timers at 25 MHz), brought to the same instant
+before each question; an image that a question kills is put back for the
+next one, and what it ran still counts for coverage. A phase compares the
+state at its end, every write outside the image's own memory in order
+across all registers, the registers read (which, how often, by which
+function, in which order first), the answers and messages, the events
+(interrupts, resets, postcodes), DRAM, the PM's and the hub's SRAM by
+content, and the flash. `EXPECTED` in [src/se/test.rs](src/se/test.rs) and
+[src/sfh/test.rs](src/sfh/test.rs) lists the differences that stay, each
+with its reason and matched to the phase, the register and both values;
+anything else fails the run. CIX's crypto library (the engine's hash and
+public-key units are not modelled) is replaced at `c_mbedtls_sha*`,
+`c_mbedtls_hkdf` and `sec_rsa_verify` by the same functions on the host
+([src/se/crypto.rs](src/se/crypto.rs)), and the monitor of its debug build
+(`service_monitor_entry`: a prompt on the UART) by a return.
+
+**The port's proof.** `--pyref` is the Python emulator and test line for
+line: the interpreter stops at the block boundaries QEMU's translator
+makes, hooks and stubs act where Unicorn's did, interrupts are calls on a
+scratch stack. Before the Python files were removed their output was
+recorded (PyPy, Unicorn 2.1.4) for 11 cases with every bus write of both
+images (3.1 million writes in 23 traces) and for 12 DDR feature settings;
+`se-test --pyref` and `sfh-test --pyref` reproduce all of it byte for
+byte. The recordings are not in the repository (CIX's image is not
+redistributable); the Python files are in the history up to the commit
+that removed them. `test_se_ddr_fn.py` (each function of the DDR driver
+called alone with captured arguments) was not ported: the driver now runs
+whole with every feature, part and failure above, on both images.
+
+**Coverage.** `test-se.sh --cov` writes `out/emu/test/se-coverage.txt`:
+the runs execute 80.8 % of the open SE's code bytes; 22 of its 657
+functions never run, none of them reachable in this firmware
+([why](../firmware/se/differences.md#what-no-test-reaches)). Of the open
+SFH every function runs but libgcc's division-by-zero stub. Of CIX's SE
+image the same runs execute 37 %: its monitor, its crypto library and
+most of its clock and power framework are stubbed or never asked.
+
+| File | What |
+|---|---|
+| [src/arm/mod.rs](src/arm/mod.rs) | the core: exceptions on the stack, NVIC, SysTick, WFI, faults and lockup, stack limits, memory with remapped windows, stops, stubs, hooks, the audit, coverage |
+| [src/arm/decode.rs](src/arm/decode.rs) | Thumb-2 decoding (an unknown encoding is an error) |
+| [src/se/soc.rs](src/se/soc.rs) | the Sky1 as the SE sees it: boot ROM hand-over, QSPI flash, the FCH's xSPI controller, PLLs, power controllers, mailboxes, watchdog, timers, PM and hub handshakes, the DDR controllers, PHYs and PI (`DdrModel`), simulated time (`Timed`) |
+| [src/se/timed.rs](src/se/timed.rs) | `Sim`, `Pair`, phases, the comparison and the report |
+| [src/se/test.rs](src/se/test.rs) | the suites, `EXPECTED` |
+| [src/se/crypto.rs](src/se/crypto.rs) | SHA-2, SM3, HKDF, RSA-PSS on the host, for CIX's image |
+| [src/se/emu.rs](src/se/emu.rs), [pyref.rs](src/se/pyref.rs) | the Python emulator's way of driving an image, and its test |
+| [src/sfh/test.rs](src/sfh/test.rs) | the hub's model (timers, mailboxes, control block), the phases, `EXPECTED` |
+| [src/sfh/pyref.rs](src/sfh/pyref.rs) | the Python test of the hub |
+| [test-se.sh](test-se.sh) | all of it in one go |

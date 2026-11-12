@@ -17,6 +17,7 @@
 #define MEMCFG_HDR_OFFSET	0x20
 #define MEMCFG_BLKTBL_OFFSET	0x60
 #define MEMCFG_BLK_BIOS_SETUP	0x1007
+#define MEMCFG_NO_BLOCK		0xfffffffe	/* the block table has no such block */
 #define FLASH_SECTOR		0x1000
 #define PM_STRAP		0x46510800u	/* CSU_PM boot strap, two words */
 
@@ -115,6 +116,9 @@ static uint32_t blk_offset(uint32_t blk_guid, uint32_t *offset)
 	if (err)
 		return err;
 	n = hdr.BlockCount;
+	/* (no blocks: an error, by the flash driver refusing to read nothing, as in CIX's) */
+	if (n == 0)
+		return drv_memcfg_flash_read(mem_cfg_addr_s + MEMCFG_BLKTBL_OFFSET, &hdr, 0);
 	tbl = malloc(n * 4);
 	if (tbl == NULL)
 		return 0xffffffff;
@@ -126,11 +130,12 @@ static uint32_t blk_offset(uint32_t blk_guid, uint32_t *offset)
 		}
 	}
 	/*
-	 * Not found is an error.  (CIX's loop also fails a match on the last
-	 * entry and, for no match, reads the offset from past the table.)
+	 * Not found is an error of its own.  (CIX's loop also fails a match on
+	 * the last entry and, for no match, reads the offset from past the
+	 * table.)
 	 */
 	if (!err && i >= n)
-		err = 0xffffffff;
+		err = MEMCFG_NO_BLOCK;
 	free(tbl);
 	return err;
 }
@@ -235,10 +240,21 @@ uint32_t drv_memcfg_get_cpu_freq_mode(uint32_t *mode)
 	return err;
 }
 
+/*
+ * The setup block.  When the block table has none (an erased memory
+ * configuration: CIX's lookup then takes an offset from past its table and
+ * reads erased flash), every setting reads as erased, 0xff: "automatic".
+ * The boot goes on with that, as it does with CIX's firmware.
+ */
 static uint32_t bios_setup(MEM_CONFIG_BIOS_SETUP *s)
 {
 	uint32_t err = drv_memcfg_get_blk_setup(MEMCFG_BLK_BIOS_SETUP, s, sizeof(*s));
 
+	if (err == MEMCFG_NO_BLOCK) {
+		hal_printf_level(LOG_ERR, "[SE_FW]# no setup block in the memory configuration: all settings automatic\n");
+		memset(s, 0xff, sizeof(*s));
+		return 0;
+	}
 	if (err)
 		SE_ERR(err);
 	return err;

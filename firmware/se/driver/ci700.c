@@ -23,12 +23,22 @@ static void wr64(uint32_t base, uint32_t reg, uint64_t v)
 	REG32(NODE(base, reg + 4)) = (uint32_t)(v >> 32);
 }
 
-/* Read-modify-write of a 64-bit register's low word (high word read first) */
+/* Low word of a 64-bit register; the high word is read after it, as CIX does */
+static uint32_t rd64_lo(uint32_t base, uint32_t reg)
+{
+	uint32_t lo = REG32(NODE(base, reg));
+
+	(void)REG32(NODE(base, reg + 4));
+	return lo;
+}
+
+/* Read-modify-write of a 64-bit register's low word: both words read, then both written, low first */
 static void rmw64_lo(uint32_t base, uint32_t reg, uint32_t clr, uint32_t set)
 {
+	uint32_t lo = REG32(NODE(base, reg));
 	uint32_t hi = REG32(NODE(base, reg + 4));
 
-	REG32(NODE(base, reg)) = (REG32(NODE(base, reg)) & ~clr) | set;
+	REG32(NODE(base, reg)) = (lo & ~clr) | set;
 	REG32(NODE(base, reg + 4)) = hi;
 }
 
@@ -37,13 +47,13 @@ static void __drv_ci700_slc_flush(uint32_t hnf, uint64_t start, uint64_t size)
 {
 	uint32_t n = 1000000, st;
 
-	if (REG32(NODE(hnf, 0xa08)) & 0x2800)
+	if (rd64_lo(hnf, 0xa08) & 0x2800)
 		return;
 	wr64(hnf, 0xf50, start);
 	wr64(hnf, 0xf58, start + size);
 	rmw64_lo(hnf, 0xf60, 0, 1);
 	do {
-		st = REG32(NODE(hnf, 0xf68));
+		st = rd64_lo(hnf, 0xf68);
 		hal_udelay(1);
 		if (st & 1)
 			return;
@@ -98,11 +108,11 @@ static void _drv_ci700_mte_tag_flush(uint32_t mtu)
 	uint32_t n;
 
 	wr64(mtu, 0xa30, 3);
-	if (REG32(NODE(mtu, 0xa38)) & 1)
+	if (rd64_lo(mtu, 0xa38) & 1)
 		return;
 	hal_udelay(1);
 	for (n = 500; n; n--) {
-		if (REG32(NODE(mtu, 0xa38)) & 1)
+		if (rd64_lo(mtu, 0xa38) & 1)
 			return;
 		hal_udelay(1);
 	}

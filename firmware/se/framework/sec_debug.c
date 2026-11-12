@@ -56,14 +56,15 @@ static uint32_t fw_sec_debug_enable(const fea_ctrl_info *f, uint32_t n)
 		[1] = { 0x80, "spniden" }, [2] = { 0x40, "niden" }, [3] = { 0x20, "spiden" },
 		[4] = { 0x10, "dbgen" }, [5] = { 0x08, "jtagen" },
 	};
-	uint32_t i;
+	uint32_t i, v;
 
 	for (i = 0; i < n; i++) {
 		if (!f[i].value)
 			continue;
+		v = REG32(DBG_CTRL);	/* read before the feature is looked at, as CIX's */
 		if (f[i].feature_id < 1 || f[i].feature_id > 5)
 			return 0xa808;
-		REG32(DBG_CTRL) |= feat[f[i].feature_id].bit;
+		REG32(DBG_CTRL) = v | feat[f[i].feature_id].bit;
 		hal_printf_level(LOG_ERR, "[SE_FW]Enabel %s bit for debug\n", feat[f[i].feature_id].name);
 	}
 	return 0;
@@ -72,7 +73,7 @@ static uint32_t fw_sec_debug_enable(const fea_ctrl_info *f, uint32_t n)
 uint32_t fw_sec_debug_check(void)
 {
 	sec_storage_param_t p;
-	uint32_t sec = 0, err;
+	uint32_t sec = 0, err, strap;
 	sec_info hdr;
 	uint8_t *buf;
 
@@ -80,9 +81,9 @@ uint32_t fw_sec_debug_check(void)
 	buf = malloc(0x1000);
 	if (buf == NULL)
 		return 0xa801;
-	hal_printf_level(LOG_INFO, "Flash Offset flag from strappng pin is: 0x%x\n",
-			 (unsigned)REG32(SE_CLKCTRL_BASE + 0x60));
-	p.offset = SEC_DEBUG_FLASH(REG32(SE_CLKCTRL_BASE + 0x60));
+	strap = REG32(SE_CLKCTRL_BASE + 0x60);
+	hal_printf_level(LOG_INFO, "Flash Offset flag from strappng pin is: 0x%x\n", (unsigned)strap);
+	p.offset = SEC_DEBUG_FLASH(strap);
 	if (hal_stor_load_fw(SEC_STOR_TYPE_FLASH, &p, buf, 0x1000)) {
 		err = 0xa802;
 		goto out;

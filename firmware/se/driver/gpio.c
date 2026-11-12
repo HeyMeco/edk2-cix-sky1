@@ -63,7 +63,7 @@ static const uint32_t gpio_bank_base[7] = {
 
 uint32_t drv_gpio_get_value(uint32_t index, uint32_t *value)
 {
-	uint32_t mux_base, base, bit, a;
+	uint32_t mux_base, base, bit, a, mux;
 
 	if (value == NULL) {
 		hal_printf_level(LOG_ERR, "[%s:%d]ERR: %s", __func__, __LINE__, "illegal input param. \n");
@@ -80,8 +80,9 @@ uint32_t drv_gpio_get_value(uint32_t index, uint32_t *value)
 	else
 		goto bad;
 	a = mux_base + fch_gpio_iomuxmap_table[index - 1].mux + 0x40000000;
-	REG32(a) = (REG32(a) & 0xfffffe7f) | (uint32_t)fch_gpio_iomuxmap_table[index - 1].func << 7;
-	hal_printf_level(LOG_INFO, "mux_addr is 0x%x, value = 0x%x\n", (unsigned)a, (unsigned)REG32(a));
+	mux = (REG32(a) & 0xfffffe7f) | (uint32_t)fch_gpio_iomuxmap_table[index - 1].func << 7;
+	REG32(a) = mux;		/* (logged as written: the register is read once) */
+	hal_printf_level(LOG_INFO, "mux_addr is 0x%x, value = 0x%x\n", (unsigned)a, (unsigned)mux);
 	base = gpio_bank_base[fch_gpio_iomuxmap_table[index - 1].bank] + 0x40000000;
 	bit = fch_gpio_iomuxmap_table[index - 1].bit;
 	REG32(base + GPIO_DIR_CLR) &= ~BIT(bit);

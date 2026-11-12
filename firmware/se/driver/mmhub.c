@@ -30,8 +30,8 @@ void drv_mmhub_init(void)
 	if (rev <= 0x686c)
 		return;
 	if (rev < 0x896c || plat_get_plat_id() != PLAT_FPGA) {
-		/* ports 0..0x19 but 0x18 */
-		for (i = 0; i <= 0x19; i++)
+		/* ports 0..0x1a but 0x18 */
+		for (i = 0; i <= 0x1a; i++)
 			if (i != 0x18)
 				REG32(MMHUB_PORT(i)) = 2;
 		return;
