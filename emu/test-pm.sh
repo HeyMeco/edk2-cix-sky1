@@ -77,6 +77,6 @@ if [ -n "$COV" ]; then
   cat "$OUT"/*.cov > "$OUT/all.cov"
   # (per function: sky1emu cov out/emu/test/all.cov ELF --partial)
   "$EMU" cov "$OUT/all.cov" "$ELF" > "$OUT/coverage.txt" 2>&1
-  cat "$OUT/coverage.txt"
+  head -1 "$OUT/coverage.txt"
 fi
 exit $bad
