@@ -48,7 +48,6 @@ static __xdata uint8_t target_rpm[4];
 static __xdata uint8_t cmd3e0f[2];
 static volatile __xdata uint8_t pending;
 static __xdata uint16_t pending_at;
-static __xdata uint8_t autoflag_last = 0xFF;	/* the vendor compares with what it last wrote */
 #define P_RPM		0x02
 #define P_GPIO_WR	0x04
 #define P_GPIO_RD	0x08
@@ -76,7 +75,6 @@ static void gpio_write(uint8_t num, uint8_t v)
 		GPDR(port) |= 1 << bit;
 	else
 		GPDR(port) &= ~(1 << bit);
-	gpio_val = v ? 1 : 0;
 }
 
 static void dispatch(uint16_t cmd)
@@ -407,6 +405,10 @@ void host_poll(void)
 	uint8_t p;
 
 	trip_flag = 0;
+	/* the vendor's standby loop leaves this work until S0 (no host can
+	 * send commands while the SoC is off) */
+	if (power_state == PS_S5 || power_state == PS_G3)
+		return;
 	if (!(pending & ~P_GPIO_WR) || !after(pending_at))
 		return;
 	EA = 0;
@@ -415,12 +417,11 @@ void host_poll(void)
 	EA = 1;
 	if (p & P_RPM) {
 		/* the vendor's first step towards a target speed: duty =
-		 * max(target, 2500) / 21, at most 255; then fan.c corrects it
-		 * from the measured speed */
+		 * max(target, 2500) / 21, at most 255, from the target's low
+		 * 16 bits; then fan.c corrects it from the measured speed */
 		uint16_t t = ((uint16_t)target_rpm[2] << 8) | target_rpm[3];
 
-		if (target_rpm[0] || target_rpm[1])
-			t = 0xFFFF;
+		rpm_target_hi = target_rpm[0] || target_rpm[1];
 		if (t < 2500)
 			t = 2500;
 		t /= 21;
@@ -431,11 +432,11 @@ void host_poll(void)
 	if (p & P_GPIO_RD)
 		gpio_read(gpio_rd_num);
 	if (p & P_AUTOFLAG) {
+		/* written when the e-flash does not hold it (the vendor writes
+		 * every time: an erase per request) */
 		auto_power_on = autoflag_new;
-		if (autoflag_new != autoflag_last) {
-			autoflag_last = autoflag_new;
+		if (eflash_read(0x1F8FF) != autoflag_new)
 			eflash_write_byte(0x1F8FF, autoflag_new);
-		}
 	}
 	if (p & P_RESET)
 		power_force_reset();
@@ -443,7 +444,7 @@ void host_poll(void)
 
 void host_poll_100ms(void)
 {
-	if (!(pending & P_GPIO_WR))
+	if (!(pending & P_GPIO_WR) || power_state == PS_S5 || power_state == PS_G3)
 		return;
 	EA = 0;
 	pending &= ~P_GPIO_WR;

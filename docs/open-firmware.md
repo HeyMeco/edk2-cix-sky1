@@ -25,7 +25,7 @@ mask ROM ─▶ SE firmware ─▶ CSU_PM ─▶ TF-A BL2 ─▶ BL31 + OP-TEE (
 | SPI image packer (`cix_package_tool`) | — | **open**: `cixfw.py pack`, used by every build |
 | `memory_config`, `pm_config` | CIX generators | built from source where the board package has them |
 | Sensor fusion hub firmware (`sfh_fw.bin`, Cortex-M) | [firmware/sfh](../firmware/sfh) | **built from source** (`--open`); same hardware writes as CIX's in every scenario of [test_sfh.py](../scripts/open/test_sfh.py) |
-| EC firmware (`ec_fw.bin`, Orion O6 only; ITE IT5570E, 8051) | [firmware/ec](../firmware/ec) | **written from scratch** after Radxa's EC V1.07; same pin changes, I2C transfers, host-command answers and e-flash writes as the vendor's in [test_ec.py](../scripts/open/test_ec.py) in 14 of 16 scenarios, and the update to it and back works in the model; `--open-ec`; not hardware-tested ([below](#ec-firmware-orion-o6)) |
+| EC firmware (`ec_fw.bin`, Orion O6 only; ITE IT5570E, 8051) | [firmware/ec](../firmware/ec) | **written from scratch** after Radxa's EC V1.07; same pin changes, I2C transfers, host-command answers, e-flash writes and LED as the vendor's in all 61 scenarios of `sky1emu ec-test` ([emu](../emu/README.md#ec-orion-o6)) but for the differences listed in [differences.md](../firmware/ec/differences.md), and the update to it and back works in the model; `--open-ec`; not hardware-tested ([below](#ec-firmware-orion-o6)) |
 | `trustzone_config` | CIX generator | CIX stock binary on every board; identical to the generator's output apart from its timestamp ([below](#trustzone-configuration)) |
 
 With `--open` on an Orion O6/O6N, everything that runs before UEFI apart
@@ -673,51 +673,58 @@ The plan is in the
 
 ### EC firmware (Orion O6)
 
-The O6's EC (ITE IT5570E, 8051; [pins](../scripts/open/ec_o6_pins.py)
-from Radxa's V1.2 schematic, sheet 35) sequences the board's power
-(always-on rails, `RSM_RST`, the SoC's power button and sleep signals,
-S0 rails, the PMIC enable gate), runs the fan from the SoC's PVT
-temperature (read from CSU_PM's I2C slave) and five board NTCs, sets the
-two RTS5453H PD controllers up, and answers the host on I2C6 at 0x76
-(CIX's ChromeOS-EC style host commands: UEFI's `Ite5570EcLib`, and
+The O6's EC (ITE IT5570E, 8051; pins from Radxa's V1.2 schematic, sheet
+35, in [emu/src/ec/board.rs](../emu/src/ec/board.rs)) sequences the
+board's power (always-on rails, `RSM_RST`, the SoC's power button and
+sleep signals, S0 rails, the PMIC enable gate), runs the fan from the
+SoC's PVT temperature (read from CSU_PM's I2C slave) and five board NTCs,
+sets the two RTS5453H PD controllers up, and answers the host on I2C6 at
+0x76 (CIX's ChromeOS-EC style host commands: UEFI's `Ite5570EcLib`, and
 Linux's `google,cros-ec-i2c` with CIX's `cix-ec-*` drivers in device-tree
 mode). Radxa's image is a Keil C51 build of CIX's EC code base, mostly
 laptop code the O6 never runs.
 
 [firmware/ec](../firmware/ec) is a new firmware (SDCC) that does what the
-vendor's does on the O6: its sequencer tables, its thresholds and duty
-table, its NTC conversion (the vendor's own routine run over every ADC
-code), its host-command answers byte for byte, including the persistent
-buffers some commands read leftovers from, and its e-flash records
-(AC-loss policy at 0x1F8FF, power-off reason at 0x1FCFC). `i8051_emu.py`
-interprets the 8051 and `ec_emu.py` models the IT5570 (timers, interrupt
-and wake-up controllers, GPIO, ADC, PWM, SMBus masters and slaves, the
-flash follow mode, the e-flash) and the board (rails and power goods, the
-SoC's sleep signals, CSU_PM, the PD controllers, NTCs).
-[test_ec.py](../scripts/open/test_ec.py) runs both images through 16
-scenarios (AC on, button, S0, OS shutdown, button in G3, short and long
-press, both AC-loss policies, heating and cooling, fan modes, a target fan
-speed, an NTC at 90 C, every host command, the AC-loss write, UEFI's EC
-reset) and compares what the board sees in order, with a timing
-tolerance. It also installs each image over the other the way UEFI does
-(the new image in the SPI flash, host command 3E19, the mirror reset) and
-checks that the new one boots, reaches S0 and answers. Run it with
-`scripts/open/run_ec_tests.sh`: it uses PyPy (`pypy3` on `PATH` or
-`$PYPY`) when there is one, about 28 times faster than CPython (the
-whole suite in under a minute, against about 25 minutes), and falls back
-to `python3`. `test_ec.py`, `ec_emu.py` and `i8051_emu.py` run unchanged
-under PyPy 7.3 (Python 3.11). On macOS take the official build
-(`https://downloads.python.org/pypy/pypy3.11-v7.3.20-macos_arm64.tar.bz2`,
-unpacked anywhere, `PYPY=<dir>/bin/pypy3`): Homebrew's `pypy3.10` bottle
-does not install. `ec_ntc_table.py` needs numpy: run it with `python3`.
+vendor's does on the O6: its sequencer tables, suspend to RAM and the
+resume, its thresholds and duty table, its NTC conversion (the vendor's
+own routine run over every ADC code: `sky1emu ec-ntc-table`), its
+host-command answers byte for byte, including the persistent buffers some
+commands read leftovers from, its e-flash records (AC-loss policy at
+0x1F8FF, power-off reason at 0x1FCFC), the watchdog it arms after an NTC
+trip, the power LED (breathing in suspend). The emulator is part of
+`sky1emu` ([emu/README.md](../emu/README.md#ec-orion-o6), feature `ec`):
+its own 8051 interpreter, the IT5570 (timers, interrupt and wake-up
+controllers, GPIO, ADC, PWM, SMBus masters and slaves, the flash follow
+mode, the e-flash, the external watchdog) and the board (rails and power
+goods, the SoC's sleep signals, CSU_PM as its firmware answers, the PD
+controllers, NTCs, the fan). `sky1emu ec-test` runs both images through
+61 scenarios and compares what the board sees, part by part (the power
+pins and the e-flash, the thermal pass, the PD bus, the host interface,
+the LED), in order and with a timing tolerance: power-on, S0, shutdown,
+suspend to RAM and the wakes, AC lost in S0, S3 and standby, rails that
+never come or are lost, the SoC's THERMTRIP, a stalled fan, open and
+shorted NTCs, CSU_PM and the PD controllers not answering or their buses
+hung, an e-flash that does not take a write, an NTC trip and the
+watchdog, every fan mode, every host command id of the vendor's table and
+its neighbours in standby, S0 and S3, malformed and cut-short requests,
+commands back to back, runs of minutes. It also installs each image over
+the other the way UEFI does (the new image in the SPI flash, host command
+3E19, the mirror reset) and checks that the new one boots, reaches S0 and
+answers. The result: no difference besides the ones listed, each with its
+reason, in [firmware/ec/differences.md](../firmware/ec/differences.md);
+the open image's functions all run (99 % of its code bytes; `ec-cov`).
+The suite takes about 35 s. The Python emulator it replaced
+(`i8051_emu.py`, `ec_emu.py`, `test_ec.py`) is gone; `ec-test --port`
+still runs that test's 16 scenarios its way.
 
-Not the same: the version string (`V1.07-open`); the vendor's probes of
-parts the O6 lacks (PMICs, IO expander, light sensor, an SMBus scan),
-its debug console and its keyboard, HID, battery and charger code are
-left out; GPIO reads (0x93), which return the previous read, can see a
-write a hook earlier or later than the vendor's; the vendor's slow hooks
-run at slightly different moments (within a period: after a power-up from
-G3 its first thermal pass comes a hook earlier).
+Found by it: on top of what the open firmware did not do yet (suspend to
+RAM: the S0 rails never came back after a resume; the fan's duty not set
+again after a mode change or a resume; a 1 ms tick running ~2 % slow),
+faults of Radxa's image the open one does not reproduce: a request with
+a bad checksum is answered "invalid checksum" but run; two GPIO writes
+(0x92) within 100 ms lose the first; a PD controller that does not answer
+stops its main loop for 16.5 s at each set-up (a button press then is
+lost). The list, with the evidence: differences.md.
 
 The EC runs from its internal e-flash; a new image in the SPI flash
 (offset 0x10000) is copied in only when UEFI's platform reset (host

@@ -3,7 +3,7 @@
  * The O6's EC pin set-up: control (GPCR: 0x40 output, 0x80 input,
  * 0x84 input with pull-up, 0x00 alternate function) and initial levels,
  * as Radxa's EC V1.07 programs them (its table at 0x3436).  The nets are
- * in scripts/open/ec_o6_pins.py.
+ * in emu/src/ec/board.rs (PINS).
  */
 #include "ec.h"
 

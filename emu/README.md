@@ -8,10 +8,11 @@ For now it has the CSU_PM: an interpreter for its Xtensa LX7 core
 (`pm_core_v1`), a model of the SoC as the PM sees it, and the tests that
 run the open firmware ([firmware/csupm](../firmware/csupm)) and CIX's image
 side by side. It replaces the Python `xt_emu.py`, `pm_emu.py`, `test_pm.py`,
-`test_pm_faults.py` and `test_vf.py`, which are gone. The EC, SE and SFH
+`test_pm_faults.py` and `test_vf.py`, which are gone. The Orion O6's EC
+is here too (feature `ec`, [below](#ec-orion-o6); it replaces
+`i8051_emu.py`, `ec_emu.py` and `test_ec.py`). The SE and SFH
 emulators are still the Python ones in [scripts/open](../scripts/open)
-(`i8051_emu.py`, `ec_emu.py`, `test_ec.py`; `se_emu.py`, `test_se.py`;
-`test_sfh.py`) and are to follow into this crate (their modules are
+(`se_emu.py`, `test_se.py`; `test_sfh.py`) and are to follow into this crate (their modules are
 stubs behind features until then, see [Layout](#layout)).
 
 ## Build
@@ -321,3 +322,106 @@ finished one moves into `default`. Each adds its own commands to
 
 CI builds the crate and runs its unit tests; the comparisons need CIX's
 image, which CI has not got.
+
+## EC (Orion O6)
+
+Feature `ec`, [src/ec](src/ec/mod.rs): the Orion O6's embedded controller
+(ITE IT5570E, an 8051), the open firmware ([firmware/ec](../firmware/ec))
+against Radxa's EC V1.07
+(`edk2-project/Platform/Radxa/Orion/O6/Firmwares/ec_fw.bin`). The SPI
+flash image (`output/orion-o6/RELEASE/cix_flash_all.bin`, `--flash`) is
+where the update check takes the EC image from.
+
+```sh
+cargo build --release --manifest-path emu/Cargo.toml --features ec --target-dir emu/target-ec
+E=emu/target-ec/release/sky1emu
+$E ec-test --open firmware/ec/build/ec_fw.bin              # everything, ~35 s
+$E ec-test --open IMG -v s3_button host_bad                # some scenarios, every difference
+$E ec-test --open IMG --port                               # the Python test_ec.py, exactly
+$E ec-test --open IMG --cov ec.cov && $E ec-cov ec.cov firmware/ec/build --partial --lines
+$E ec IMG 8000 output/orion-o6/RELEASE/cix_flash_all.bin  # one image, 8 s, every event
+$E ec-probe IMG s3_button --x 0x9247 --pc 0xCB71 --stack "i2c C" --from 7000
+$E ec-ntc-table VENDOR.bin firmware/ec/src/ntc_table.h
+```
+
+| Command | What it does |
+|---|---|
+| `ec IMG [MS] [SPI]` | run an image on the O6 model; print every event (pins, I2C, host, UART, e-flash) and where it stopped |
+| `ec-test [--open IMG] [--vendor IMG] [--flash SPI] [-v] [--port] [--dump DIR] [--cov FILE] [scenario...]` | the comparison: both images through every scenario, then each installed over the other as UEFI does (3E19) |
+| `ec-probe IMG SCENARIO [--x ADDR]... [--pc ADDR]... [--stack TEXT] [--from MS]` | one image through one scenario: its events, the writes to external RAM addresses, the registers at code addresses, the stack when an event's text matches |
+| `ec-cov FILE BUILD_DIR [--partial] [--all] [--lines]` | the open image's functions (from the SDCC listings `*.rst` and `ec.map`; there is no ELF) the runs recorded in FILE executed; `--lines`: the C lines of the instructions never run |
+| `ec-ntc-table VENDOR.bin OUT.h` | firmware/ec's NTC table: the vendor's own conversion routine (bank 1 0xDD46) run for every ADC code |
+
+**The port.** `cpu.rs` (the 8051), `chip.rs` (the IT5570: timers, idle,
+the interrupt and wake-up controllers, GPIO, UART1, the SMBus channels as
+masters and the slave the host talks to, the SMFI follow mode to the SPI
+flash and the e-flash, scratch ROM, the watchdog's mirror reset),
+`board.rs` (rails and their power goods, the SoC's sleep signals,
+CSU_PM, the two RTS5453H, NTCs, fan and tachometer, the pins' nets) and
+`test.rs` (the 16 scenarios of `test_ec.py`, the update check) are the
+Python emulator line for line; `seqmatch.rs` is Python's
+`difflib.SequenceMatcher`, so that the counts are the same. With
+`--port`, `ec-test` printed what `test_ec.py` printed, byte for byte, and
+`--dump DIR` wrote every event and every register write (with its cycle)
+of all 16 scenarios on both images exactly as the Python model did
+(checked 2026-11-12 on firmware/ec at 9bad500; out/checkpoints/ec-rs.md).
+It runs the suite in 6 s where PyPy took a minute.
+
+**What the port did not compare** (`gaps.rs`, 45 more scenarios, with
+the extended model: `--port` turns it off): suspend to RAM and the wakes
+(button, the SoC itself), shutdown from S3, a long S3; AC lost in S0, S3
+and standby (the EC unpowered: its pins float, then a power-on reset);
+the always-on, S0 and S3 power goods never coming or lost; the SoC's
+THERMTRIP; a fan that does not turn; NTCs open and shorted; CSU_PM and
+the PD controllers NACKing or their buses hung (`SmbusMaster::hang`); the
+PD controllers' interrupt lines; an e-flash that takes no write; an NTC
+trip and the external watchdog it arms (EWDCNTLLR starts it, 1.024 kHz or
+32.768 kHz by ETWCFG bit 4, EWDKEYR 0x5C restarts it); every fan mode and
+back; the button in SD, held in G3 and standby; every command id of the
+vendor's table and its neighbours in standby, S0 and S3; bad checksums,
+versions, prefixes, lengths, a request cut short, bytes read past an
+answer; commands 1 to 10 ms apart; runs of minutes (the open firmware's
+16-bit millisecond count wraps); the 0x25 duty for every percent; target
+speeds out of reach. CSU_PM answers as both PM firmwares do (`sky1emu
+pm-test --full`, "I2C slave"), and only while the SoC's always-on part is
+powered.
+
+**How it compares.** What the board sees: pin changes, I2C transfers a
+device answered (the vendor's probes of parts the O6 lacks are NACKed and
+left out), host answers (bytes on the wire), e-flash commands, the
+watchdog's registers, the fan's duty as it changes, the LED (on, off,
+dim). In the extended mode each part is a stream of its own, in order:
+the power sequence and the e-flash, the thermal pass (CSU_PM and the fan),
+the PD bus, the host interface, the LED; events the table below covers
+for both sides are one more. Times must agree within a tolerance (0.9 s
+for the sequencer and pins, 1.5 s for the PD bus and the host, 2.5 s for
+what the vendor does in its ~2 s hook, 3 s for the LED, 4 s for the
+thermal pass); after a reset in both images the first 2 s are timed from
+it. The host sends its requests at fixed times (50 ms apart, the GPIO
+commands 250 ms) so both images get each at the same moment. A run ends
+with "N differences, M expected in K kinds"; `EXPECTED` in
+[gaps.rs](src/ec/gaps.rs) has each kind, matched by scenario, side and
+the event's text, and [firmware/ec/differences.md](../firmware/ec/differences.md)
+the evidence. Today: 0 differences; every function of the open image runs
+(99 % of its code bytes).
+
+**Looking into a finding.** `ec-probe` shows one image's events with
+`--x ADDR` (writes to an external RAM address: the vendor's state is at
+0x9247, the fan mode 0x93A8, the applied fan state 0x93E4, the pass
+count 0x9237; the open image's are in `ec.map`), `--pc ADDR` (the
+registers when a code address runs, any bank) and `--stack TEXT` (the
+stack when an event whose text contains TEXT is logged: return addresses
+are pairs low, high; Keil's bank switches go through 0x2Axx).
+`scripts/open/i8051.py` disassembles (`decode(code, pc, base)`).
+
+| File | What |
+|---|---|
+| [src/ec/mod.rs](src/ec/mod.rs) | the commands |
+| [src/ec/cpu.rs](src/ec/cpu.rs) | the 8051 interpreter, bank switching by P1, cycle table |
+| [src/ec/chip.rs](src/ec/chip.rs) | the IT5570, the event queue, the run loop, AC loss |
+| [src/ec/board.rs](src/ec/board.rs) | the O6 around the EC, the pins' nets, the faults to inject |
+| [src/ec/test.rs](src/ec/test.rs) | the port's scenarios, the host, the comparison, `ec-probe` |
+| [src/ec/gaps.rs](src/ec/gaps.rs) | the scenarios the port left out, `EXPECTED` |
+| [src/ec/seqmatch.rs](src/ec/seqmatch.rs) | `difflib.SequenceMatcher` |
+| [src/ec/cov.rs](src/ec/cov.rs) | `ec-cov`: functions from the SDCC listings |
+| [src/ec/ntc.rs](src/ec/ntc.rs) | `ec-ntc-table` |

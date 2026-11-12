@@ -4,9 +4,11 @@
  * interrupt dispatch and the main loop.
  *
  * Behaviour follows Radxa's EC V1.07 (CIX's EC code base) as observed in
- * scripts/open/ec_emu.py; only what the O6 uses is here: power sequencing,
- * the power button, the host interface (SMBus B slave, CIX's CrOS-style
- * host commands), the fan, the PD controllers' set-up and the power LED.
+ * the emulator (emu/src/ec, `sky1emu ec-test`); only what the O6 uses is
+ * here: power sequencing (S0, suspend to RAM, shutdown), the power button,
+ * the host interface (SMBus B slave, CIX's CrOS-style host commands), the
+ * fan, the PD controllers' set-up and the power LED.  Where it differs
+ * from the vendor's: differences.md.
  */
 #include "ec.h"
 
@@ -15,10 +17,12 @@
 volatile uint16_t ms_now;
 static volatile uint8_t ticks;
 
-/* Timer 0, mode 1, reloaded to 0xFD00: 768 counts of 9.2 MHz / 12 = 1 ms */
+/* Timer 0, mode 1, reloaded to 0xFD00: 768 counts of 9.2 MHz / 12 = 1 ms.
+ * Only TH0 is reloaded: TL0 holds the counts since the overflow (the
+ * interrupt's latency), which a reload of TL0 would lose (the tick ran
+ * ~2 % slow so) */
 void timer0_isr(void) __interrupt __using(1)
 {
-	TL0 = 0x00;
 	TH0 = 0xFD;
 	ms_now++;
 	ticks++;
@@ -85,7 +89,7 @@ static void chip_init(void)
 
 void main(void)
 {
-	/* the vendor's hooks: 100 ms (at x90 ms), 2 s (2.3 s, 4.3 s, ...) */
+	/* the vendor's hooks: 100 ms (at x90 ms), slow (2.3 s, then 1-2 s) */
 	uint16_t next100 = 250, next2s = 2300;
 
 	P1 = (P1 & 0xF8) | 0x01;	/* code bank 1, as the vendor image runs */
@@ -119,9 +123,15 @@ void main(void)
 			host_poll_100ms();
 		}
 		if (after(next2s)) {
-			next2s += 2000;
-			power_2s();
-			fan_poll_2s();
+			/* the vendor's slow hooks come every ~2.04 s in S0, ~1.6 s
+			 * in suspend and ~1 s in standby (its loops' load) */
+			next2s += power_state == PS_S5 ? 1000 : power_state == PS_STR ? 1570 : 2040;
+			/* not while a power sequence, the S0 set-up or the PD
+			 * set-up runs: the vendor's main loop waits for those */
+			if (!power_busy() && !pd_setting_up()) {
+				power_2s();
+				fan_poll_2s();
+			}
 		}
 	}
 }

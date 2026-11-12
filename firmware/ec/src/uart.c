@@ -34,16 +34,3 @@ void puthex(uint8_t v)
 	putch(hexd[v >> 4]);
 	putch(hexd[v & 15]);
 }
-
-void putdec(uint16_t v)
-{
-	char b[6];
-	uint8_t n = 0;
-
-	do {
-		b[n++] = '0' + v % 10;
-		v /= 10;
-	} while (v);
-	while (n)
-		putch(b[--n]);
-}

@@ -13,11 +13,22 @@
  *       release RSM_RST, a PWRBTN_EC pulse, wait for the SoC, GPJ7 and
  *       EC_SLP_S3_L, TP91 and the PMIC enable gate, wait SYS_S0_PG.
  *
- * Shutdown follows the SoC: SLP_S3 low takes EC_SLP_S3_L low, SLP_S5 low
- * takes GPJ7 and the PMIC gate low; 1.5 s later the audio de-pop line,
- * 3.75 s later the always-on rails go off (G3).  The button is mirrored to
+ * The SoC's sleep signals are acted on as the vendor's handler (bank 2
+ * 0xC423) does, a few ms after SLP_S3 goes low, with SLP_S5 as it is
+ * then: EC_SLP_S3_L low; with SLP_S5 low too, GPJ7 low ("s5 n_off") and
+ * shutdown (SD), else suspend to RAM (STR); the PMIC gate low in both.
+ * SLP_S3 high again in STR (SLP_S5 high) is the resume: GPJ7,
+ * EC_SLP_S3_L and the PMIC gate high, S0.  SLP_S5 low in STR is a
+ * shutdown from S3 (GPJ7 left as the vendor leaves it).  In the ~2 s
+ * hook, as the vendor's state-change hook (bank 1 0xCCEF): S0 -> STR or
+ * SD mutes the audio (de-pop line low, 0xCB43); STR, SD or G3 -> S0
+ * unmutes it and runs a thermal pass at once (0xCB71); the second hook
+ * in SD turns the always-on rails off (G3).  The button is mirrored to
  * the SoC's (PWRBTN_EC) whenever it changes; a release in S0 is a host
- * event (EC_ACPI_INT).
+ * event (EC_ACPI_INT); in SD the mirrored button starts the SoC again,
+ * whose SLP signals then bring the board back as from STR.  SYS_S0_PG or SYS_S3_PG lost while the SoC is on
+ * is recorded as the power-off reason (4, 8) in the e-flash, as the
+ * vendor does (it does not turn anything off).
  */
 #include "ec.h"
 
@@ -45,6 +56,11 @@ static uint16_t g3_at;
 static uint8_t s0_post, s0_pd;
 static uint16_t s0_at;
 static uint8_t evt_pending;
+static uint8_t prev_state = 0xFF;	/* the vendor's 0x923E: the state its hook saw last
+					 * (0xFF: none yet, its G3PP after AC) */
+static uint8_t slp3_wait;
+static uint16_t slp3_at;
+static uint8_t pg_s0, pg_s3;
 
 /* ---- steps ---- */
 static uint8_t st_s5_off(void)	{ S5_1V8_EN(0); return 1; }
@@ -163,6 +179,8 @@ static void seq_done(void)
 	}
 	power_state = PS_S0;
 	seq_auto = 0;
+	if (id == SEQ_S0)
+		fan_s0();
 	/* the vendor sets the PD controllers up again only after S5 -> S0 */
 	s0_pd = id == SEQ_S0;
 	s0_post = 1;
@@ -218,31 +236,81 @@ static void soc_signals(void)
 	if (s3 != slp3) {
 		slp3 = s3;
 		if (s3 && power_state == PS_S0) {
-			EC_SLP_S3_L(0);		/* "s3 n_off" */
+			/* the vendor acts on it ~8 ms later, with SLP_S5 as it is then */
+			slp3_wait = 1;
+			slp3_at = ms_now + 8;
+		} else if (!s3 && (power_state == PS_STR || power_state == PS_SD) && !s5) {
+			/* the SoC resumes from suspend to RAM, or comes back on
+			 * before the rails went off (the button in SD) */
+			GPJ7(1);
+			EC_SLP_S3_L(1);
+			PMIC_EN_GATE_L(1);
+			power_state = PS_S0;
+			puts_("resume\r\n");
+		}
+	}
+	if (slp3_wait && after(slp3_at)) {
+		slp3_wait = 0;
+		if (SOC_SLP3() && power_state == PS_S0) {
+			EC_SLP_S3_L(0);			/* "s3 n_off" */
+			if (SOC_SLP5()) {
+				GPJ7(0);		/* "s5 n_off" */
+				power_state = PS_SD;
+				sd_stage = 0;
+				puts_("shutdown\r\n");
+			} else {
+				power_state = PS_STR;
+				puts_("suspend\r\n");
+			}
+			PMIC_EN_GATE_L(0);
 		}
 	}
 	if (s5 != slp5) {
 		slp5 = s5;
-		if (s5 && power_state == PS_S0) {
-			GPJ7(0);		/* "s5 n_off" */
-			PMIC_EN_GATE_L(0);
-			power_state = PS_SD;
+		if (s5 && power_state == PS_STR) {
+			power_state = PS_SD;		/* off from S3 */
 			sd_stage = 0;
 			puts_("shutdown\r\n");
 		}
 	}
 }
 
-/* the vendor steps from shutdown to G3 in its ~2 s hook: the audio de-pop
- * line at the first tick, the rails at the second */
+/* power good lost while the SoC is on: the reason kept in the e-flash */
+static void power_goods(void)
+{
+	uint8_t s0 = SYS_S0_PG(), s3 = SYS_S3_PG();
+	uint8_t on = !SOC_SLP3() && !SOC_SLP5();
+
+	if (s0 != pg_s0) {
+		pg_s0 = s0;
+		if (!s0 && on)
+			eflash_write_reason(4);
+	}
+	if (s3 != pg_s3) {
+		pg_s3 = s3;
+		if (!s3 && on)
+			eflash_write_reason(8);
+	}
+}
+
+/* the vendor's ~2 s hook: its state-change handlers, and the step from
+ * shutdown to G3 at the second tick in SD */
 void power_2s(void)
 {
-	if (power_state == PS_S0 && !PIN_GET(GPDRC, 6))
-		DEPOP_MUTE_L(1);		/* back on in S0 (the vendor's hook) */
+	/* (the vendor's standby loop does not run its state-change hook) */
+	if (power_state != prev_state && power_state != PS_S5) {
+		if (power_state == PS_S0 &&
+		    (prev_state == PS_STR || prev_state == PS_SD || prev_state == PS_G3)) {
+			fan_resume();			/* "OS resume" */
+			DEPOP_MUTE_L(1);
+		} else if ((power_state == PS_STR || power_state == PS_SD) && prev_state == PS_S0) {
+			DEPOP_MUTE_L(0);		/* "OS suspend" */
+		}
+		prev_state = power_state;
+	}
 	if (power_state != PS_SD)
 		return;
 	if (sd_stage == 0) {
-		DEPOP_MUTE_L(0);
 		sd_stage = 1;
 	} else {
 		S5_1V8_EN(0);
@@ -280,6 +348,8 @@ void power_init(void)
 	btn = PWRBTN_PRESSED();
 	slp3 = SOC_SLP3();
 	slp5 = SOC_SLP5();
+	pg_s0 = SYS_S0_PG();
+	pg_s3 = SYS_S3_PG();
 	puts_("AC on, policy ");
 	puthex(auto_power_on);
 	puts_("\r\n");
@@ -293,6 +363,7 @@ void power_1ms(void)
 {
 	button();
 	soc_signals();
+	power_goods();
 	seq_run();
 	s0_post_run();
 	pd_poll();
@@ -306,8 +377,11 @@ void power_1ms(void)
 	}
 }
 
-void power_wuc(void)
+/* a power sequence or the S0 set-up still running, or the button held
+ * in standby (the vendor's standby loop waits for its release) */
+uint8_t power_busy(void)
 {
+	return seq_id || s0_post || (power_state == PS_S5 && btn);
 }
 
 /*

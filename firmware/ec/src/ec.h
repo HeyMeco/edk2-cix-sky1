@@ -61,21 +61,20 @@ void uart_init(void);
 void putch(char c);
 void puts_(const char *s);
 void puthex(uint8_t v);
-void putdec(uint16_t v);
 
 /* ---- gpio ---- */
 void gpio_init(void);
 
 /* ---- power ---- */
-enum { PS_G3, PS_S5, PS_S0, PS_SD };
+enum { PS_G3, PS_S5, PS_S0, PS_SD, PS_STR };
 extern uint8_t power_state;
 extern uint8_t auto_power_on;		/* AC-loss policy: 1 = power on */
 extern uint8_t poweroff_reason;
 void power_init(void);
 void power_1ms(void);
-void power_wuc(void);
 void power_2s(void);			/* wake-up interrupt: SoC signals, button */
-void power_force_reset(void);		/* host command 3E19 */
+void power_force_reset(void);
+uint8_t power_busy(void);		/* host command 3E19 */
 
 /* ---- events for the host (EC_ACPI_INT) ---- */
 #define EVT_POWER_BUTTON	0x02
@@ -100,10 +99,13 @@ extern uint8_t soc_temp;
 extern uint8_t trip_flag;
 void fan_init(void);
 void fan_poll_2s(void);
+void fan_resume(void);
+void fan_s0(void);
 void fan_set_duty(uint16_t v);
 uint16_t fan_rpm(void);
 extern uint8_t rpm_mode;
 extern uint16_t rpm_target;
+extern uint8_t rpm_target_hi;
 
 /* ---- PD controllers ---- */
 void pd_init_all(void);
@@ -111,6 +113,7 @@ void pd_init_all_status(void);
 extern __xdata uint8_t pd_ver[2];
 void pd_poll(void);
 uint8_t pd_busy(void);
+uint8_t pd_setting_up(void);
 
 /* ---- e-flash ---- */
 uint8_t eflash_read(uint32_t addr);

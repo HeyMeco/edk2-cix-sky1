@@ -2,13 +2,19 @@
 /*
  * Temperatures and the fan, as Radxa's EC V1.07 runs them on the O6.
  *
- * Every 10 s while the SoC is on: the five board NTCs (SoC, board edge,
- * DRAM, USB-C, PMIC; ADC channels 0, 1, 3, 4, 5) are read, and the
- * hottest at 85 C or more raises THERMTRIP_EC; the SoC's temperature is
- * read from CSU_PM over I2C (controller 3, address 4, register 32:
- * degrees, hundredths); in the automatic modes it selects a state from
- * the vendor's thresholds with hysteresis and the state the fan duty.
- * The NTC conversion is the vendor's own (ntc_table.h).
+ * Every fifth ~2 s hook (the vendor's 0x9237), in S0, suspend (STR) and
+ * shutdown (SD): the five board NTCs (SoC, board edge, DRAM, USB-C, PMIC;
+ * ADC channels 0, 1, 3, 4, 5) are read, and the hottest at 85 C or more
+ * raises THERMTRIP_EC; the SoC's temperature is read from CSU_PM over I2C
+ * (controller 3, address 4, register 32: degrees, hundredths; when it
+ * does not answer, the last one read, 25 C before any, as the vendor); in the automatic modes it selects a
+ * state from the vendor's thresholds with hysteresis, and the state's
+ * duty is set when it is not the one set last (0x93E4).  A change of fan
+ * mode, and a resume to S0 from STR, SD or G3, forget the state set, so
+ * its duty is set again (the vendor's 0xDC42, 0xCB71).  Every other hook
+ * the fan is stopped in STR and SD.  Standby (S5) is the vendor's SD
+ * state: passes run there too, and the fan is stopped.  The NTC conversion is the vendor's
+ * own (ntc_table.h).
  *
  * Fan modes (host command 0x52, UEFI's EcFanMode): 1 and 3 automatic,
  * 2 off ("mute"), 4 full ("performance"), 0 left alone.
@@ -21,9 +27,11 @@ uint8_t fan_duty;
 uint8_t soc_temp;
 static uint8_t soc_frac;
 static uint8_t tstate, last_temp;
-static int8_t tick = -1;	/* counts 2 s hooks in S0 and shutdown; the vendor's first pass is the 6th */
-static uint8_t off_done;
-static uint8_t passes;
+static uint8_t tick;		/* counts slow hooks (0x9237): a pass at every 5th */
+static uint8_t passes;		/* the vendor's 0x9238 */
+static uint8_t applied;		/* the state whose duty was set (0x93E4) */
+static uint8_t last_mode = 1;	/* the mode of the last pass (0x93A7) */
+static uint8_t state_temp = 25;	/* the temperature the states use: the last read, 25 C before any */
 uint8_t trip_flag;
 
 /* the vendor's tables (its initialised data at 0x93C1, 0x93C8, 0x93CF) */
@@ -122,7 +130,8 @@ void fan_set_duty(uint16_t v)
 
 /* target-speed mode (host command 0x21; 0x25 leaves it) */
 uint8_t rpm_mode;
-uint16_t rpm_target;
+uint16_t rpm_target;		/* the target's low 16 bits */
+uint8_t rpm_target_hi;		/* the target is 65536 or more */
 __xdata uint8_t rpm_meas[4];		/* the last measured speed, for 0x20 */
 static uint8_t hook_cnt;
 
@@ -158,7 +167,9 @@ static void rpm_step(void)
 	rpm_meas[1] = 0;
 	rpm_meas[2] = rpm >> 8;
 	rpm_meas[3] = rpm;
-	if (rpm == rpm_target)
+	/* as the vendor: which way from the whole target, how far from its
+	 * low 16 bits */
+	if (rpm == rpm_target && !rpm_target_hi)
 		return;
 	err = (int16_t)(rpm_target - rpm);
 	aerr = err < 0 ? -err : err;
@@ -166,7 +177,7 @@ static void rpm_step(void)
 		return;
 	step = rpm < 2500 ? 0 : (uint8_t)(2 * (aerr / 100));
 	duty = DCR2;
-	if (rpm_target > rpm) {
+	if (rpm_target_hi || rpm_target > rpm) {
 		if (duty != 0xFF)
 			duty++;
 		duty = (uint16_t)duty + step > 0xFF ? 0xFF : duty + step;
@@ -179,8 +190,8 @@ static void rpm_step(void)
 	DCR2 = duty;
 }
 
-/* the vendor's 2 s hook, the other half: every second time, the fan off
- * while the SoC is off, else the target-speed correction */
+/* the vendor's 2 s hook, the other half (0xC4D7): every second time, the
+ * fan off in STR and SD, else the target-speed correction */
 static void fan_hook2(void)
 {
 	uint8_t c = hook_cnt;
@@ -188,7 +199,9 @@ static void fan_hook2(void)
 	hook_cnt = c >= 10 ? 0 : c + 1;
 	if (c & 1)
 		return;
-	if (!SOC_SLP3() && rpm_mode)
+	if (power_state == PS_STR || power_state == PS_SD || power_state == PS_S5)
+		DCR2 = 0;
+	else if (!SOC_SLP3() && rpm_mode)
 		rpm_step();
 }
 
@@ -215,18 +228,20 @@ static uint8_t tstate_update(uint8_t t)
 	return tstate != old;
 }
 
-static void soc_temp_read(void)
+/* the SoC's temperature from CSU_PM; 0 if it did not answer */
+static uint8_t soc_temp_read(void)
 {
 	static __xdata uint8_t w[2] = { 0x00, 0x20 };
 	static __xdata uint8_t r[2];
+	int8_t e;
 
-	if (i2c_xfer(SMB_C, 0x04, w, 2, 0, 0))
-		return;
+	e = i2c_xfer(SMB_C, 0x04, w, 2, 0, 0);
 	delay_ms(25);
-	if (i2c_xfer(SMB_C, 0x04, 0, 0, r, 2))
-		return;
+	if (i2c_xfer(SMB_C, 0x04, 0, 0, r, 2) || e)
+		return 0;
 	soc_temp = r[0];
 	soc_frac = r[1];
+	return 1;
 }
 
 /*
@@ -256,56 +271,56 @@ static void pm_board_temps(void)
 	}
 }
 
-void fan_poll_2s(void)
+/* the vendor's thermal pass (bank 1 0xDB7C) */
+static void thermal_pass(void)
 {
-	fan_hook2();
 	static __code const uint8_t ch[5] = { 0, 1, 3, 4, 5 };
 	int8_t hot = -128, t;
-	uint8_t i;
+	uint8_t i, temp;
 
-	if (SOC_SLP3()) {			/* the SoC is off */
-		if (!off_done) {		/* the vendor stops the fan once */
-			off_done = 1;
-			fan_set_pct(0);
-		}
-	} else {
-		off_done = 0;
-	}
-	if (power_state != PS_S0 && power_state != PS_SD)
-		return;
-	if (++tick < 5)
-		return;
-	tick = 0;
 	for (i = 0; i < 5; i++) {
 		t = ntc_deg[adc_read(ch[i]) & 0x3FF];
 		if (t > hot)
 			hot = t;
 	}
 	if (hot >= 85) {
+		/* as the vendor: THERMTRIP_EC, the power-off reason (2) kept
+		 * in the e-flash, and the external watchdog set to reset the
+		 * EC ~32 s later (1.024 kHz, 0x7FF8), again at every pass
+		 * while it is hot (so the reset comes 32 s after the passes
+		 * stop or it cools).  The vendor writes the reason at every
+		 * such pass too (an e-flash erase each time); here only at
+		 * the first. */
 		if (!PIN_GET(GPDRI, 7)) {
-			/* as the vendor: THERMTRIP_EC, the power-off reason (2)
-			 * kept in the e-flash, the watchdog set up, and the
-			 * AC-loss policy off */
 			THERMTRIP_EC(1);
 			puts_("NTC overheat\r\n");
-			eflash_write_reason(2);
-			poweroff_reason = 2;
-			ETWCFG = 0x30;
+			eflash_write_reason(2);	/* (3E09 reports it after the next start) */
+		}
+		{
+			XREG(0x1F02) = 0x00;		/* ETPSR */
+			XREG(0x1F04) = 0xFF;		/* ET1CNTLLR */
+			ETWCFG = 0x30;			/* key enable, WDT clock 1.024 kHz */
+			XREG(0x1F05) = 0x10;		/* ETWCTRL */
+			XREG(0x1F09) = 0x7F;		/* EWDCNTLHR */
+			XREG(0x1F06) = 0xF8;		/* EWDCNTLLR: starts it */
 			trip_flag = 1;
 		}
 	} else {
 		THERMTRIP_EC(0);
 	}
-	soc_temp_read();
-	if (++passes == 4) {
-		passes = 0;
-		pm_board_temps();
+	if (soc_temp_read())
+		state_temp = soc_temp;
+	temp = state_temp;
+	if (fan_mode != last_mode) {
+		last_mode = fan_mode;
+		applied = 0;
 	}
 	switch (fan_mode) {
 	case 1:
 	case 3:
-		/* the duty is written only when the state changes */
-		if (tstate_update(soc_temp)) {
+		tstate_update(temp);
+		if (tstate != applied) {
+			applied = tstate;
 			fan_set_pct(duty_tbl[tstate]);
 			rpm_mode = 0;		/* as the vendor: the state's duty wins */
 		}
@@ -319,4 +334,44 @@ void fan_poll_2s(void)
 	default:
 		break;
 	}
+}
+
+/* standby -> S0: the vendor's pass count starts again */
+void fan_s0(void)
+{
+	tick = 0;
+}
+
+/* back in S0 from STR, SD or G3: in the automatic modes, the duty set again now */
+void fan_resume(void)
+{
+	if (fan_mode == 1 || fan_mode == 3) {
+		applied = 0;
+		thermal_pass();
+	}
+}
+
+void fan_poll_2s(void)
+{
+	/* in S0 the vendor's fan hook (0xC4D7) runs just before its pass
+	 * counter's (0xC505); in its other loops just after */
+	uint8_t s0 = power_state == PS_S0;
+
+	if (s0)
+		fan_hook2();
+	if (++tick < 5)
+		goto hook2;
+	tick = 0;
+	passes++;
+	/* (standby is the vendor's SD as well) */
+	if (power_state == PS_S0 || power_state == PS_STR || power_state == PS_SD || power_state == PS_S5)
+		thermal_pass();
+	/* the board temperatures to CSU_PM at the 4th pass of every 12 */
+	if (passes == 4)
+		pm_board_temps();
+	else if (passes >= 12)
+		passes = 0;
+hook2:
+	if (!s0)
+		fan_hook2();
 }

@@ -22,12 +22,31 @@ __xdata uint8_t pd_ver[2];
 static uint8_t pd_status;		/* read the IC status after the set-up */
 
 static __xdata uint8_t buf[8];
-static uint8_t pd_i, pd_step, pd_busy_;
+static uint8_t pd_i, pd_step, pd_busy_, tries;
 static uint16_t pd_at;
+
+/* a ping not answered or not done: again every 27 ms, 200 times, as the
+ * vendor (bank 2 0x93CC); then the controller's next step.  True when
+ * the step is given up.  Unlike the vendor's, the wait does not hold up
+ * the rest of the firmware. */
+static uint8_t retry(void)
+{
+	pd_at = ms_now + 27;
+	if (++tries < 200)
+		return 0;
+	tries = 0;
+	return 1;
+}
 
 uint8_t pd_busy(void)
 {
 	return pd_busy_;
+}
+
+/* setting the controllers up, none of them failing to answer */
+uint8_t pd_setting_up(void)
+{
+	return pd_busy_ && !tries;
 }
 
 void pd_init_all_status(void)
@@ -60,20 +79,17 @@ void pd_poll(void)
 			n = pd_step >> 1;
 			for (i = 0; i < 5; i++)
 				buf[i] = sc[n][i];
-			if (i2c_xfer(SMB_F, 0x67, buf, 5, 0, 0)) {
-				pd_at = ms_now + 27;
-				return;
-			}
+			i2c_xfer(SMB_F, 0x67, buf, 5, 0, 0);
+			tries = 0;
 			pd_step++;
 			/* the controller takes a while to gather its status */
 			pd_at = ms_now + (pd_step == 3 ? 565 : 64);
 			return;
 		}
 		if (pd_step < 4) {		/* ping until done */
-			if (i2c_xfer(SMB_F, 0x67, 0, 0, buf, 1) || (buf[0] & 3) != 1) {
-				pd_at = ms_now + 27;
+			if ((i2c_xfer(SMB_F, 0x67, 0, 0, buf, 1) || (buf[0] & 3) != 1) && !retry())
 				return;
-			}
+			tries = 0;
 			pd_step++;
 			pd_at = ms_now + (pd_step == 4 ? 22 : 4);
 			return;
@@ -98,18 +114,16 @@ void pd_poll(void)
 		n = lens[pd_step >> 1];
 		for (i = 0; i < n; i++)
 			buf[i] = cmds[pd_step >> 1][i];
-		if (i2c_xfer(SMB_F, addr, buf, n, 0, 0)) {
-			pd_at = ms_now + 27;	/* retry, as the vendor */
-			return;
-		}
+		/* sent once: a NACK leaves it to the ping's time-out (the vendor) */
+		i2c_xfer(SMB_F, addr, buf, n, 0, 0);
+		tries = 0;
 		pd_step++;
 		pd_at = ms_now + 64;
 		return;
 	}
-	if (i2c_xfer(SMB_F, addr, 0, 0, buf, 1) || (buf[0] & 3) != 1) {
-		pd_at = ms_now + 27;
+	if ((i2c_xfer(SMB_F, addr, 0, 0, buf, 1) || (buf[0] & 3) != 1) && !retry())
 		return;
-	}
+	tries = 0;
 	pd_step++;
 	pd_at = ms_now + 4;
 	if (pd_step == 7) {
