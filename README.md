@@ -155,7 +155,7 @@ from source, apart from the boot ROM in the chip:
 | Stage | Source | Checked against CIX's |
 |---|---|---|
 | SE firmware (Cortex-M33: SoC bring-up, eFuses, DRAM training, secure boot, run-time services) | [firmware/se](firmware/se), translated from CIX's debug build | same register writes and memory contents in [test_se.py](scripts/open/test_se.py): cold boot, DDR, services, suspend/resume, secure boot |
-| CSU_PM (Xtensa LX7: clocks, PMICs, DVFS, SCMI, fans, suspend) | [firmware/csupm](firmware/csupm): Arm SCP-firmware v2.11.0, FreeRTOS and CIX's code translated | [test_pm.py](scripts/open/test_pm.py): boot, SCMI, PM messages, suspend/resume, run-time DPM, fans, every board's PM configuration |
+| CSU_PM (Xtensa LX7: clocks, PMICs, DVFS, SCMI, fans, suspend) | [firmware/csupm](firmware/csupm): Arm SCP-firmware v2.11.0, FreeRTOS and CIX's code translated | [`sky1emu pm-test`](emu/README.md): boot, SCMI, PM messages, suspend/resume, run-time DPM, fans, every board's PM configuration |
 | TF-A BL2, BL31 | `arm-trusted-firmware` + [patches](patches/2026Q3) | — |
 | OP-TEE with StandaloneMM (UEFI variables) | `optee_os` + EDK2 [StandaloneMm](edk2-project/Platform/CIX/Sky1/StandaloneMm) | — |
 | Sensor fusion hub firmware | [firmware/sfh](firmware/sfh) | [test_sfh.py](scripts/open/test_sfh.py) |
@@ -187,9 +187,12 @@ the READMEs in [firmware/se](firmware/se/README.md),
 ### Emulator tests
 
 The open firmware is checked against CIX's (or Radxa's) binaries in
-emulators of the SoC, run on the host rather than in the container. They need
-Python with `unicorn` 2.1.4, `capstone` and `pyelftools`. PyPy runs them much
-faster than CPython. CIX's debug builds they compare against are pinned in
+emulators of the SoC, run on the host rather than in the container. The
+CSU_PM's emulator and its tests are the Rust crate [emu](emu/README.md)
+(`sky1emu`, no dependencies beyond a Rust toolchain); the SE's, SFH's and
+EC's are still Python in `scripts/open`, and need `unicorn` 2.1.4,
+`capstone` and `pyelftools` (PyPy runs them much faster than CPython). CIX's
+debug builds they compare against are pinned in
 [manifests/cix-debug-firmware.json](manifests/cix-debug-firmware.json) and
 fetched by `scripts/open/cix_debug.py`.
 
@@ -197,7 +200,7 @@ fetched by `scripts/open/cix_debug.py`.
 pypy3 scripts/open/test_se.py output/orion-o6/RELEASE/open/se/se_fw.elf dist/orion-o6_2026Q3_open.bin --ddr
 pypy3 scripts/open/test_se.py <se_fw.elf> <image.bin> --services --suspend
 pypy3 scripts/open/test_se.py <se_fw.elf> <image.bin> --secure
-pypy3 scripts/open/test_pm.py                  # CSU_PM
+emu/test-pm.sh <csupm.elf>                     # CSU_PM: every suite, every board
 pypy3 scripts/open/test_sfh.py <sfh_fw.bin>    # sensor fusion hub
 scripts/open/run_ec_tests.sh                   # Orion O6 EC
 ```

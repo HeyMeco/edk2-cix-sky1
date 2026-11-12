@@ -33,6 +33,12 @@ jobs:
         run: python3 -m py_compile scripts/*.py scripts/extract/*.py scripts/acpi/*.py scripts/open/*.py
       - name: Open tools
         run: python3 scripts/open/test_cixfw.py
+      # the emulators (emu/README.md); their comparisons need CIX's images,
+      # which CI has not got
+      - name: Emulator build
+        run: cargo build --release --manifest-path emu/Cargo.toml
+      - name: Emulator unit tests
+        run: cargo test --release --manifest-path emu/Cargo.toml
       - name: Import manifest
         run: python3 scripts/imports.py --check
       - name: Patch queue applies

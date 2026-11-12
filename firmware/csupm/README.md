@@ -6,8 +6,12 @@ LX7 core that runs from PM SRAM once the SE has loaded and verified it
 limits, PLLs and the clock tree, power domains, thermal and fan control,
 DDR frequency changes, suspend/resume and the SCMI channels the AP talks
 to. This directory rebuilds it from source, a part at a time;
-`scripts/open` has the tools to decode CIX's image, run it on a model of
-the SoC and compare ours against it.
+`scripts/open` has the tools to decode CIX's image, and
+[`emu`](../../emu/README.md) runs it on a model of the SoC and compares
+ours against it.
+
+How the open image differs from CIX's, item by item, for whoever decides
+which to flash or writes the OS side: [differences.md](differences.md).
 
 ## Reference material
 
@@ -73,14 +77,15 @@ unsigned 16-bit multiply) are marked in the file.
 
 ## Emulator
 
-[`scripts/open/xt_emu.py`](../../scripts/open/xt_emu.py) is an interpreter
-for the core (about 450 000 instructions per second): windowed registers
-with overflow and underflow exceptions, zero-overhead loops, XEA2
+[`emu/src/xtensa`](../../emu/src/xtensa) (Rust, part of
+[`sky1emu`](../../emu/README.md)) is an interpreter for the core: windowed
+registers with overflow and underflow exceptions, zero-overhead loops, XEA2
 exceptions and interrupts, the three CCOUNT/CCOMPARE timers, FLIX bundles
-(all slots read, then write, then the one control transfer), code that
-overlays copy in at run time, and a log of every bus write. It runs CIX's
-image from the reset vector through `_start` and `main` into the drivers.
-What that showed about the core, beyond the census:
+(all slots read, then write, then the one control transfer; a bundle whose
+`retw` takes a window underflow has done nothing yet), code that overlays
+copy in at run time, and a log of every bus write. It runs CIX's image
+from the reset vector through `_start` and `main` into the drivers. What
+that showed about the core, beyond the census:
 
 * a double-precision FPU (64-bit FP registers; opcodes as in QEMU's
   public `de233_fpu` core description; `pwr_leakage_init` loads 10000.0
@@ -98,9 +103,9 @@ What that showed about the core, beyond the census:
 
 ## SoC model
 
-[`scripts/open/pm_emu.py`](../../scripts/open/pm_emu.py) puts the
+[`emu/src/pm/soc.rs`](../../emu/src/pm/soc.rs) puts the
 interpreter on a model of Sky1 as CSU_PM sees it, as `se_emu.py` does for
-the SE: registers are plain memory unless a device gives them behaviour.
+the SE (`sky1emu pm ELF` boots an image on it): registers are plain memory unless a device gives them behaviour.
 CSU_PM's local window `0xa0000000` is SoC `0x06510000` (the SE sees the
 same blocks at `0x46510000`). What CIX's image needs to boot:
 
@@ -124,8 +129,8 @@ mailbox's data registers, laid out as TF-A's `mailbox_mem_t`:
 | 2 | `0x065b0000` | base, power domain, system (TF-A, `sky1_bl31_setup.c`) |
 | 4, 6 | `0x065d0000`, `0x065f0000` | base, power domain, system, perf, sensor |
 
-[`scripts/open/test_pm.py`](../../scripts/open/test_pm.py) is the
-differential test, as `test_se.py` is for the SE. It boots each image,
+`sky1emu pm-test` ([`emu/src/pm/test.rs`](../../emu/src/pm/test.rs)) is
+the differential test, as `test_se.py` is for the SE. It boots each image,
 compares register writes per register and the I2C transfers, and with
 `--scmi` asks every channel the same 185 questions (discovery, then each
 protocol's attributes and domains: 8 perf domains from `gpu_core` to
@@ -136,8 +141,9 @@ clock generator writes these lead to. With CIX's image alone it prints
 CIX's answers:
 
 ```sh
-python3 scripts/open/test_pm.py --scmi                 # CIX's image: reference
-python3 scripts/open/test_pm.py OURS.elf --scmi        # ours against it
+cargo build --release --manifest-path emu/Cargo.toml   # emu/target/release/sky1emu
+sky1emu pm-test --scmi                 # CIX's image: reference
+sky1emu pm-test OURS.elf --scmi        # ours against it
 ```
 
 ## Firmware
@@ -278,7 +284,13 @@ tick and the I2C controllers' interrupts (`ARCH_IRQ_KERNEL`), so no
 framework handler runs in the middle of an event. Another task's events
 go through the framework's interrupt queue (`fwk_is_interrupt_context` is
 true outside SCP-firmware's task). The tick (CCOMPARE1, interrupt 7, as
-CIX's) only runs while a task waits with a time-out. SCP-firmware's task
+CIX's) only runs while a task waits with a time-out, and its period is
+1 ms at whatever clock the core has (`core_hz`, which `lcru_core_clock`
+sets with the divider; the services' timers count microseconds from
+`arch_getTimeNowUs`, which turns the cycles into time at the clock they
+were counted at). CIX's tick keeps its cycle count: while the SoC idle
+switch has the core at 200 MHz, its tick and everything counted in ticks
+(its DPM ticker, the heartbeat, timers) run at half speed. SCP-firmware's task
 has main's stack (the top of DRAM1, which DDR retention's borrowing is
 measured from); the others' are in bss.
 
@@ -310,7 +322,7 @@ set, and three places differ from CIX's for it:
   rail's (CIX's keeps the old), so that asking for the old one writes it.
   This one is CIX's too, not the three rounds': CIX's MP5475 write reports
   failure after four NACKed tries even when the read-back shows the
-  voltage set. In pm_emu, big cluster 0 lowered to 2520 with its writes
+  voltage set. In the emulator, big cluster 0 lowered to 2520 with its writes
   set but NACKed, then raised to 6931 by fast channel: CIX's image (and
   ours before) writes the PLL and no voltage, the regulator at 810 mV.
 
@@ -328,15 +340,15 @@ records, and until that write succeeds nothing else is changed (the values
 the rails may hold lie between two the planner had checked). After a
 resume, `dpm_edp_restore_voltage` says which rails it could not set
 again; once `ddr_s3_exit` is done (before it, the clock changes upset the
-DDR's resume in pm_emu; the AP cores run only afterwards) their DVFS
+DDR's resume in the emulator; the AP cores run only afterwards) their DVFS
 elements' clocks go to their lowest OPP's frequency, recorded so by
 `sky1soc_perf` or DVFS, the rail unsure. CIX's ignores the restore's
-result too, but on a dead bus never gets past it: in pm_emu, with big
+result too, but on a dead bus never gets past it: in the emulator, with big
 cluster 0's bus NACKing, its image is still in `dpm_edp_restore_voltage`
 (in a critical section) after 4446 transfers, so the PM never resumes;
 ours resumes with those clusters at their lowest OPP. Between
 `clk_nodes_restore` and that, their PLLs are as before the suspend, their
-cores still off. In pm_emu the regulators keep their voltage across the
+cores still off. In the emulator the regulators keep their voltage across the
 suspend, so a resume with the rail lost is not under-volted there; on a
 board that depends on whether the PMIC keeps its setting (not known). At boot `sky1soc_perf`'s first pass waits until DVFS has set
 (or, after its retries, given up) the clusters' and DSU's boot OPP, and
@@ -344,9 +356,9 @@ starts from DVFS's record; a boot OPP not set leaves the lowest OPP's
 voltage recorded, unsure. Around the power sequence the workers
 finish their jobs first (`rtos_quiesce`; CIX suspends its tasks). A stuck
 bus thus stops its worker for about 35 ms, then costs nothing; the rest of
-the PM goes on meanwhile, which
-[`scripts/open/test_pm_faults.py`](../../scripts/open/test_pm_faults.py)
-checks on pm_emu with a bus made to hang (`CadenceI2c.fault`): SCMI
+the PM goes on meanwhile, which `sky1emu pm-faults`
+([`emu/src/pm/faults.rs`](../../emu/src/pm/faults.rs))
+checks on the model with a bus made to hang (`Fault::Stuck`): SCMI
 answered on another channel, the DPM following the die to 100 C, the fans
 speeding up, another cluster's voltage on a healthy bus, the level set once
 the bus is free, the stacks' high-water marks. It also raises big cluster
@@ -363,31 +375,62 @@ firmware an SCMI `PERFORMANCE_LEVEL_SET` or `LIMITS_SET`, a lock and the
 DPM's TDP changes set them through DVFS, the OS's fast channels through
 `sky1soc_perf`, each module with its own record of the OPP; a fast channel
 after a message could then raise the clock without the voltage (big
-cluster 0 at 6616 on 810 mV, in pm_emu, CIX's image and ours alike). Ours:
+cluster 0 at 6616 on 810 mV, in the emulator, CIX's image and ours alike). Ours:
 `scmi_perf` keeps such a level for the domain and schedules a fast-channel
 pass, which takes it in place of the domain's level-set fast channel until
 that channel's value changes (the newest request wins); a TDP change
-schedules a pass, in which `sky1soc_perf` caps the requests (CIX's set the
-domains, through DVFS, to the TDP frequency's level); `LEVEL_GET` answers
+schedules a pass, in which `sky1soc_perf` caps the requests (CIX's caps
+the clusters in `sky1soc_perf`'s pass too, but its DVFS keeps the level of
+the last message, below); `LEVEL_GET` answers
 `sky1soc_perf`'s level. DVFS still sets their boot OPP, and drives every
 other domain. A DSU level by message thus changes the DSU PLL's second
 post-divider, as the fast channel always did, where CIX's DVFS programmed
 the PLL itself (and left `sky1soc_perf` dividing a frequency the PLL no
-longer had): `test_pm.py --scmi` reports those clock generator writes as
-different, the rest as before. `test_pm_faults.py` asks big cluster 0 by
+longer had): `pm-test` lists those clock generator writes among the
+expected differences, the rest as before. `pm-faults` asks big cluster 0 by
 fast channel, message, fast channel and checks after each that the rail
 has the voltage the PLL's setting needs and that the level was applied. It also checks the rewrite of an unsure voltage, a resume whose rail
 cannot be set (big cluster 0 at its lowest level after it, then raised
 voltage first), and a boot whose voltage writes are all lost.
 
+Under a cap of the DPM's (PROCHOT, a skin temperature controller) the OS
+sees the two firmwares differ, by design:
+
+- `PERFORMANCE_LEVEL_GET`: ours answers the level that runs; CIX's the
+  level its DVFS last had by message, which its own level-get fast channel
+  and PLL contradict.
+- CIX's DVFS "catches up" at the next message for the domain: it sets the
+  level that already runs (no PLL or voltage write) and sends a
+  `PERFORMANCE_LEVEL_CHANGED` for it. Ours sends none, as nothing changed.
+- A level set by message while the cap is still coming down: ours follows
+  each step of the cap, voltage with it; CIX's stays at the message's
+  level until the cap is below `sky1soc_perf`'s own record (in the
+  emulator, big cluster 0 at 1900 MHz for a DPM period under a 1500 MHz
+  cap). Both end at the cap.
+- The notifications of a pass the cap caused carry agent 0, as CIX's
+  (`sky1soc_perf`'s reports pass cookie 0); only the pass that takes a
+  message's request carries that message's agent
+  (`scmi_perf_owned_pass_planned`).
+
+`pm-test` lists these among the expected differences (`capped` entries,
+and the phase "a level by message while the DPM's cap falls" of
+`--services`). Left as they are, from reading the code: `LEVEL_GET`
+during a pass (a few ms of I2C) answers the level being set; the level-get
+fast channel is written at message time, as CIX's is, and keeps the asked
+level if the pass then makes no change to it; a DSU message that arrives
+during a pass loses its notification. In both firmwares mailbox 1 holds one
+notification, and a report made before the OS has taken the last one is
+lost.
+
 ```sh
-python3 scripts/open/test_pm_faults.py OURS.elf
+sky1emu pm-faults OURS.elf
 ```
 
 The configurations in [`scp/config`](scp/config) are CIX's, read from its
 image with [`scripts/open/dwarf_dump.py`](../../scripts/open/dwarf_dump.py)
 (a variable as a C initializer, from the DWARF; values from a RAM image
-saved by `pm_emu` for tables CIX builds at run time). Where CIX's
+saved with `sky1emu pm-script ELF 'save LO HI FILE'` for tables CIX
+builds at run time). Where CIX's
 configuration is odd it is kept and says so: its power-domain table makes
 ISP0 the parent of ISP0 and GPUTOP, so CIX's firmware answers DENIED to
 powering either on, and so does ours.
@@ -399,7 +442,7 @@ built for the other endianness). `csupm.xbin` is the bootloader1 image
 XBIN format (header, one entry per program header, data), checked by
 rebuilding the images in both vendor bootloader1 files byte for byte.
 
-Against CIX's image in `test_pm.py` (CIX's boot: 1329 registers, 8 pages
+Against CIX's image in `pm-test` (CIX's boot: 1329 registers, 8 pages
 of shared memory, 33 I2C transfers, then 215 SCMI answers): it boots and
 completes the handshake; all 1329 registers get the same values in the
 same order; the 33 I2C transfers are the same, in order; all 215 SCMI
@@ -417,46 +460,126 @@ reset; with `--services` the run-time services after `pm_ready` (fans at
 two temperatures, Linux's fan modes, a PVT threshold, PROCHOT, a PMIC
 fault, a DDR DFS check); with `--runtime MS` the DPM and streams for MS
 simulated milliseconds, a high level asked on big0, then the die at 100 C
-with PROCHOT (pm_emu fast-forwards time while the PM sleeps). `--board
+with PROCHOT (the model fast-forwards time while the PM sleeps). `--board
 o6|o6n|ms-r1|opi6|opi6plus|PATH` loads a board's PM configuration into
-both images, `--set NAME=VALUE` changes one of its words. Every phase is
+both images, `--set NAME=VALUE` changes one of its words, `--ddr-dfs` has
+the DDR controllers report both frequency copies trained. Every phase is
 compared register by register, with the I2C transfers, the SE's and the
 S5 controller's events, the answers and, for the run time, the DPM's
 state and the AP's data board:
 
 ```sh
-python3 scripts/open/test_pm.py OURS.elf --scmi --power --services --runtime 100 [--board o6n]
+sky1emu pm-test OURS.elf --scmi --power --services --runtime 100 --full [--board o6n]
+emu/test-pm.sh OURS.elf [--cov] [--audit]     # every suite, every configuration
 ```
 
-All of it is the same as CIX's, with no board configuration and with each
-of the five boards' (O6, O6N, MS-R1, Orange Pi 6 with its MP2845 and
-shared bucks, Orange Pi 6 Plus), apart from the version and RAM log pages
-and, on the MS-R1, where its 200 ms board-sensor read falls among the
-SCMI questions (paced by instructions, not time; the transfers are the
-same). On the three boards whose fans the PM drives (O6N, MS-R1, Orange
-Pi 6), `--runtime` also reports writes landing one phase early: fan PWM
-(`0x4411x028`), `0xa004x034`, and on the MS-R1 one TMP75 read. They are
-the same writes, the phases are paced by instructions, and the image
-before the tasks (one loop, polled I2C) has the same ones. Run the tests with PyPy
-(`pypy3` instead of `python3`, about 28 times faster; see the EC's
-README for where to get it). A run with every phase takes several minutes (CIX's reference is
-cached in `out/test_pm-cache`). What pm_emu models of devices (the S5
-controller, power policy units, DDR controllers, the SE's side of
-suspend, PMICs and TMP75s, tachometers, the watchdog's lock) is in its
-source: modelled on what CIX's image does with them, not known from
+`--full` ([`emu/src/pm/full.rs`](../../emu/src/pm/full.rs)) adds what the
+suites above leave out, each phase from a copy of the image 100 ms after
+it idles: every SCMI message of every protocol on every channel,
+every power domain switched, every performance level set and read back,
+notifications, every clock, every sensor at two temperatures, malformed
+messages, every PM message id and its arguments, PCC commands by the fast
+channel, the I2C slave the EC reads and its transfers going wrong, the
+fans by time (and at the sensors' raw codes), a temperature sweep from 30
+to 130 C and back with the thermal lines masked and unmasked, interrupt
+lines by themselves (PVT safe, PROCHOT for 3 ms and held 3 s, GPIO), the
+SoC idle switch and the DDR's frequency, the watchdog with its interrupt
+on then off, a suspend by PM message 3 and a second suspend.
+
+Both images run on the same model and are asked the same things in
+lock-step, on simulated time (kept apart from the core's cycle counter;
+the model follows the core's clock divider: 400 MHz, 200 MHz while the
+SoC idle switch has the SoC idle, 100 MHz suspended): each question
+takes the same time in both, and the clocks are aligned before the model
+is changed (in the fan phases, to the fans' loop's 500 ms period). When a
+question kills one image, both are put back as they were before it and
+its answer is still compared. Differences that are known and meant, or
+are CIX's image failing, are in a table with the reason (`EXPECTED` in
+`full.rs`); registers written on a timer may be cut one period
+differently at a phase's ends (`PERIODIC`), and so may the MS-R1's TMP75
+read (`POLLED`). Anything else is a failure. There are none in seven
+configurations: none loaded, each of the five boards' (O6, O6N, MS-R1,
+Orange Pi 6 with its MP2845 and shared bucks, Orange Pi 6 Plus), and
+`options`, the O6N's with every option of the BIOS's block that no board
+sets (the watchdog at 1 s, the heartbeat and EC GPIOs, the SoC idle
+switch's thresholds with `--ddr-dfs`, the four skin temperature
+controllers on). The version and RAM log pages are each image's own. The
+expected ones (about 705 to 730 per standard configuration, in six to ten
+kinds; 827 in ten kinds in `options`):
+
+- CIX's image dies on any SCMI message of a protocol it does not have
+  (0x16 and up): its response logger indexes a table of six. Ours answers
+  `NOT_SUPPORTED`.
+- CIX's clock protocol answers `CLOCK_NAME_GET` and the rate
+  notifications; ours has not got them (no clock offers either).
+- The DSU's level by message: ours sets the PLL's post-divider, CIX's DVFS
+  programs the PLL (one owner, above).
+- `PERFORMANCE_LEVEL_GET` of a cluster or the DSU whose level was not set
+  by a message (the OS's fast channel, or the DPM's cap): ours answers the
+  level that runs, CIX's the level its DVFS last had by message.
+- Under the DPM's cap (in `options`, entries marked `capped`): a level set
+  by message while the cap comes down, CIX's DVFS catching up at the next
+  message, and the DSU's entry of `opp_grant` sampled at a phase's end
+  (above).
+- CIX's image asserts on `SYSTEM_POWER_STATE_SET` with a state that does
+  not exist (0x80000000); ours answers `INVALID_PARAMETERS`.
+- CIX's PVT warning handler (`dev_pvt_ht_warning_isr`,
+  `convert_temperature_to_data`) computes in floating point: taken while a
+  task without coprocessor state runs (the idle task), FreeRTOS's
+  coprocessor exception handler panics. CIX leaves that line masked, so it
+  does not happen as shipped; ours takes the line.
+- CIX's fan message 0x802 refuses a user table of nine points but has
+  already set the table's count to 0: with the fan in the user's mode, its
+  fans' loop asserts at the next pass (`adjust_fan_rpm`). Ours refuses and
+  keeps the table (O6N, MS-R1, Orange Pi 6: the boards whose fans the PM
+  drives).
+- On those boards the fans' loop runs on its own period, so between
+  questions the images are not at the same point of it; the fans are
+  compared by time in the `fans: ...` phases instead.
+- The die arbiter's PID term, sampled at a phase's end.
+
+A run of every suite on every configuration (`emu/test-pm.sh`, logs in
+`out/emu/test/`) takes five to ten minutes on eight cores; there is no
+result cache. What the model has of devices (the S5 controller, power
+policy units, DDR controllers, the SE's side of suspend, PMICs and TMP75s,
+tachometers, the watchdog's lock and first-time-out interrupt, the DDR
+controllers' frequency-switch handshake, the local GPIO's interrupt) is in
+its source: modelled on what CIX's image does with them (the DDR
+handshake inferred from what CIX's code waits for), not known from
 documentation.
 
-[`scripts/open/test_vf.py`](../../scripts/open/test_vf.py) checks the V/F
-tables beyond the emulator's blank fuses: it gives both images the same
-simulated part (PM strap, random V/F fuses for an ATE phase, part number,
-the BIOS's configuration, Phecda's PMICs, GB1's boost) and compares the 12
-domains' OPPs, the table selectors and the I2C transfers:
+The full suite and the `options` configuration found ten faults in the
+open firmware, since fixed: the transport went on after signalling a
+message of a bad length; the SCMI power-domain policy lost the state's
+type bit (an off taken for an on); `SYSTEM_POWER_STATE_NOTIFY` without a
+table answered wrongly (now `NOT_SUPPORTED`, as CIX's); sensor events were
+not built in; negative temperatures were not sign-extended; notifications
+did not ring the PM-to-AP doorbell bit CIX's does; the ownership of
+performance levels (the agent in `PERFORMANCE_LEVEL_CHANGED`, the DSU's
+level by message reported); `mclp_hwif_is_dfs_supported` read the DDR
+controllers' register 0x1ca4 for "both frequency copies trained" where
+CIX's reads 0x2034 ([`src/mclp/mclp_hwif.c`](src/mclp/mclp_hwif.c));
+`arch_getTimeNowUs` divided the whole cycle count by the core's clock of
+the moment, so time doubled when the core went to 200 MHz and halved when
+it came back, and the services' timers (the fans' loop, PROCHOT's, the
+heartbeat) then waited as long as the PM had been up
+([`src/clk/clk_port.c`](src/clk/clk_port.c), [`src/lcru.c`](src/lcru.c));
+and a `PERFORMANCE_LEVEL_CHANGED` of a pass the DPM's cap caused carried
+the agent of the last message for the domain (`scmi_perf`,
+`sky1soc_perf`).
+
+`sky1emu pm-vf` ([`emu/src/pm/vf.rs`](../../emu/src/pm/vf.rs)) checks the
+V/F tables beyond the emulator's blank fuses: it gives both images the
+same simulated part (PM strap, random V/F fuses for an ATE phase, part
+number, the BIOS's configuration, Phecda's PMICs, GB1's boost) and
+compares the 12 domains' OPPs, the table selectors and the I2C transfers:
 
 ```sh
-python3 scripts/open/test_vf.py OURS.elf --strap 0x000c0000:0 --fuses 7 --phase 4
+sky1emu pm-vf OURS.elf --strap 0x000c0000:0 --fuses 7 --phase 4
+sky1emu pm-vf OURS.elf --matrix         # 78 cases
 ```
 
-The tables match in every case tried.
+The tables match in every case.
 
 Not ported, on purpose: the debug CLI and what only it reaches (CI-700
 event collections and DFD trace, GPIO interrupt helpers, forced operating
@@ -465,14 +588,17 @@ for the same interrupts with CIX's polled register sequence). Where the
 open firmware differs from CIX's on purpose: the heartbeat timer is
 created once (CIX's adds another on every resume), the services start
 1 ms after the handshake (CIX's from its event worker once it first
-idles), and I2C: the 10 ms time-out, the controller reset and the
+idles), the tick and timers keep their period when the core's clock
+changes (CIX's run at half speed while the SoC idles at 200 MHz; Tasks
+and I2C, above), the cap's differences (one owner, above), and I2C: the 10 ms time-out, the controller reset and the
 back-off of a bus that is down, the PMIC writes' end on a dead bus, the
-masters' interrupt sources on line 24 (`test_pm.py` leaves that register
+masters' interrupt sources on line 24 (`pm-test` leaves that register
 out; CIX's masters poll). What the emulator cannot
 show: real fans (pulses per turn, polarity, stall), the EC's reads over
 the I2C slave, MP2845/AU4683 read-back formats, the watchdog's count. CIX
 never unmasks interrupt lines 28-30 (PVT alarms, PROCHOT), whose reset
-masks are unknown; the test unmasks them to exercise those paths. Built
+masks are unknown; the test unmasks them to exercise those paths (where
+CIX's image panics in its PVT warning handler, above). Built
 with `make CSUPM_THERMAL_IRQ=1` (a clean output directory), ours enables
 the PVT warnings and PROCHOT itself: on a part where these reset masked, a
 board's PROCHOT# is otherwise never seen. Off by default, as CIX's: on a
@@ -487,7 +613,7 @@ SCP-firmware's, 4 KB for each worker, 2 KB for idle.
 
 ### What CIX's image does before it idles
 
-From `pm_emu` with a backtrace on every device write (registers written,
+From the emulator with a backtrace on every device write (registers written,
 in order; the shared-memory ones counted by 4 KiB page):
 
 | Phase | What | Registers |
@@ -502,7 +628,7 @@ in order; the shared-memory ones counted by 4 KiB page):
 ## Plan
 
 How much of CIX's code the port covers (by function size; translation, not
-equivalence, which `test_pm.py` checks):
+equivalence, which `sky1emu pm-test` checks):
 
 ```sh
 python3 scripts/open/csupm_coverage.py OURS.elf [--units]
@@ -512,23 +638,25 @@ python3 scripts/open/csupm_coverage.py OURS.elf [--units]
 |---|---|
 | Toolchain for pm_core_v1, instruction-set check | done |
 | FLIX formats of pm_core_v1, inferred from known code (`xtensa_flix.py`) | done |
-| Emulator for the core (`xt_emu.py`), running CIX's image into its drivers | done |
-| Model of the SoC as CSU_PM sees it (`pm_emu.py`): CIX's image reaches its idle task and answers SCMI | done |
-| Differential test harness (`test_pm.py`: register writes, I2C, SCMI answers, PM messages, suspend/resume, shutdown, reset) | done |
+| Emulator for the core (`emu/src/xtensa`), running CIX's image into its drivers | done |
+| Model of the SoC as CSU_PM sees it (`emu/src/pm/soc.rs`): CIX's image reaches its idle task and answers SCMI | done |
+| Differential test harness (`sky1emu pm-test`: register writes, I2C, SCMI answers, PM messages, suspend/resume, shutdown, reset; `--full`) | done |
+| Emulator and tests in Rust (`emu/`; the Python ones removed), interpreter audit (`--audit`), coverage (`sky1emu cov`) | done |
+| Model of the core's clock (simulated time apart from cycles), the DDR's frequency switch, the watchdog's and GPIO's interrupts; the options no board sets (`options` configuration) | done |
 | Start-up, vectors, libc, XBIN image; stage 1 boots and does the SE handshake | done |
 | Power-on: clock and reset block, watchdog, UART, I2C, PMICs | done |
 | Interconnect counters, PVT sensors, mailboxes | done |
 | Interrupts (aggregator, mailboxes), timer, idle with WAITI | done |
-| Tasks (FreeRTOS, co-operative), I2C workers, I2C on interrupts with time-outs and bus recovery (`test_pm_faults.py`) | done |
+| Tasks (FreeRTOS, co-operative), I2C workers, I2C on interrupts with time-outs and bus recovery (`sky1emu pm-faults`) | done |
 | SCP-firmware framework and modules: transport, SCMI base, power domains, system power, sensors, permissions | done |
 | Clock tree and PLLs, SCMI clocks | done |
-| V/F tables from the fuses, boot DVFS levels (`test_vf.py`) | done |
+| V/F tables from the fuses, boot DVFS levels (`sky1emu pm-vf`) | done |
 | DVFS: PMIC, PSU, DVFS, performance plugins, SCMI perf | done |
 | DPM runtime: performance streams, power model, arbiters, TDP/EDP limits (`--runtime`) | done |
 | Board services: fans, PVT, board sensors, PROCHOT, watchdog, MP2845/AU4683, rail layouts, I2C slave, DDR DFS, with the boards' PM configurations (`--services`, `--board`) | done |
 | RTT, RAM log, version, PCC tables | done |
 | System power sequence (shutdown, reset, suspend/resume, DDR retention, S3 script), PM messages | done |
 | CIX `Source/common` and `Source/projects/sky1`, without the debug CLI | 72% and 96% of CIX's code; what is left (`csupm_coverage.py --units`) is replaced (FreeRTOS's port, CIX's timer/event/job framework, `ipc_arbiter`), CLI-only, or CIX's I2C state machine for tasks |
-| Our image passes `test_pm.py` | done: every phase, six configurations; the version and RAM log pages differ by design; on O6N, MS-R1 and Orange Pi 6 `--runtime` places some of the same fan and sensor writes one phase early (instruction pacing, as before the tasks) |
+| Our image passes `sky1emu pm-test`, `pm-faults` and `pm-vf --matrix` | done: every phase, `--full` included, seven configurations; no difference outside the table of expected ones; all suites run 74.0% of its code bytes |
 | `build.sh --open` puts it in bootloader1 (`--vendor-pm` keeps CIX's); the open SE verifies it in secure boot and both SEs load it identically (`test_se.py`) | done |
 | Boot test on hardware (UART4, SCMI from Linux, fans, suspend/resume) | to do |

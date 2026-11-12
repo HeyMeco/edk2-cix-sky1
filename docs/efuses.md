@@ -222,7 +222,7 @@ the case in the emulator). From the copy
   for the DPM's power model.
 
 The open CSU_PM computes all of this as CIX's does
-([test_vf.py](../scripts/open/test_vf.py) gives both images the same
+([`sky1emu pm-vf`](../emu/README.md) gives both images the same
 simulated fuses: every ATE phase, part numbers, patches).
 
 ## Reading fuses from the AP
@@ -299,7 +299,7 @@ The SE emulator ([se_emu.py](../scripts/open/se_emu.py)) models the mirror
 as a byte map and the life cycle as a register; `test_se.py` runs life
 cycles 4, 5 and 7, with test device and model keys (`--keys`) and with the
 secure boot bit and the image's own root hashes fused (`--secure`). The PM
-emulator ([pm_emu.py](../scripts/open/pm_emu.py)) leaves the PM's copy at
-its marker; `test_vf.py --fuses SEED --phase N --opn ...` fills it with
+emulator ([emu/src/pm/soc.rs](../emu/src/pm/soc.rs)) leaves the PM's copy at
+its marker; `sky1emu pm-vf --fuses SEED --phase N --opn ...` fills it with
 random curves for an ATE phase, a part number and leakage data. None of
 this says what a real board holds.

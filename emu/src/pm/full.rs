@@ -24,11 +24,27 @@
 //! * every PM message id on every channel, with its neighbours that do not
 //!   exist: the SMN writes, performance streams, locked levels;
 //! * the I2C slave the EC reads (the SoC's temperature for the O6's fan):
-//!   every register read and written as the EC does;
+//!   every register read and written as the EC does; transfers of the EC's
+//!   that go wrong (arbitration lost, a time-out with the bus busy, FIFO
+//!   overflows) and the slave there again afterwards;
+//! * the fans by time: every mode on each fan, the automatic loop from 30
+//!   to 100 C and back and at the sensors' raw codes;
 //! * a temperature sweep from 30 to 130 C and back: fans, PVT thresholds,
-//!   the DPM's limits, the thermal trip;
-//! * the watchdog over 6 s (its count modelled): never left to run out;
+//!   the DPM's limits, the thermal trip; the same with the alarm lines
+//!   CIX's firmware leaves masked unmasked;
+//! * PCC (ACPI CPPC) commands by the fast channel;
+//! * the interrupt lines nothing else raises, each by itself: the PVT safe
+//!   line, PROCHOT for 3 ms and held, the local GPIO's;
+//! * the SoC idle switch and the DDR's frequency switch, the core's clock
+//!   down to 200 MHz and back;
+//! * the watchdog (its count and interrupt modelled), its interrupt's
+//!   source on, then off;
 //! * suspend asked by PM message 3, a second suspend and resume.
+//!
+//! Differences that are known (meant, or CIX's image failing) are in
+//! EXPECTED below, each with its reason; an entry marked `capped` counts
+//! only in a configuration whose DPM caps the CPUs from boot (the skin
+//! temperature controllers on: test.rs, set_capped).
 
 use super::soc::{self, Cpu};
 use super::test::{self, ask, ms, pm_msg, run_until, to_val, Ask, Expected, Opts, Periodic, Phase, PhaseStart, Pm, Val, CHANNELS, TFA};

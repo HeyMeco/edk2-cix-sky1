@@ -15,7 +15,7 @@ mask ROM ─▶ SE firmware ─▶ CSU_PM ─▶ TF-A BL2 ─▶ BL31 + OP-TEE (
 | Stage | Source | Status here |
 |---|---|---|
 | SE firmware (Cortex-M33: SoC bring-up, eFuse, image checks, AP services) | [firmware/se](../firmware/se), translated from CIX's debug build, DDR driver included | **built from source** (`--open`; `--vendor-se` keeps CIX's); same register writes and memory contents as CIX's in [test_se.py](../scripts/open/test_se.py) ([below](#se-firmware)) |
-| CSU_PM (Xtensa LX7, Arm SCP-firmware based) | [firmware/csupm](../firmware/csupm): SCP-firmware v2.11.0 and CIX's code translated from its debug build | **built from source** (`--open`; `--vendor-pm` keeps CIX's); does what CIX's does in [test_pm.py](../scripts/open/test_pm.py) at boot, over SCMI, for PM messages, through suspend/resume, shutdown and reset and at run time (DPM, fans, thermal), with each board's PM configuration; not yet boot-tested on hardware ([below](#csu_pm)) |
+| CSU_PM (Xtensa LX7, Arm SCP-firmware based) | [firmware/csupm](../firmware/csupm): SCP-firmware v2.11.0 and CIX's code translated from its debug build | **built from source** (`--open`; `--vendor-pm` keeps CIX's); does what CIX's does in the emulator ([`sky1emu pm-test`](../emu/README.md)) at boot, over SCMI, for PM messages, through suspend/resume, shutdown and reset and at run time (DPM, fans, thermal), with each board's PM configuration; not yet boot-tested on hardware ([below](#csu_pm)) |
 | TF-A BL2 | `arm-trusted-firmware` + patch 0002 | **built from source** (`--open`, chain A), re-signed into bootloader1 |
 | TF-A BL31 | `arm-trusted-firmware` + patches 0004-0007 | **built from source** (`--open`) |
 | OP-TEE BL32 | `optee_os` + patch queue | **built from source** (`--open`) |
@@ -75,7 +75,7 @@ open firmware has a counterpart for (same name, or named in its sources as
 what they translate), regenerated with
 `python3 scripts/open/csupm_coverage.py csupm.elf --tracker` (`--units`
 lists what is left per CIX source file). It counts translation, not
-equivalence; `test_pm.py` checks behaviour. What is left is mostly code
+equivalence; the emulator's tests (`sky1emu pm-test`) check behaviour. What is left is mostly code
 the open firmware replaces rather than translates (CIX's timer, event and
 job framework and IPC arbiter, by SCP-firmware's events, alarms and
 transport; FreeRTOS's Xtensa port and CIX's I2C state machine for tasks,
@@ -248,7 +248,8 @@ What `--open` builds for the O6 and O6N differs from CIX's firmware only
 where listed here; everything else matched CIX's write for write in the
 emulator tests (SE: boot, DRAM initialisation on the O6 and O6N,
 suspend/resume, secure boot; CSU_PM: boot, SCMI, PM messages, power
-transitions, run time, all five boards' PM configurations; SFH: every
+transitions, run time, all five boards' PM configurations and one with
+the options no board sets; SFH: every
 hardware write). The open SE and CSU_PM have not run on hardware, and
 what the emulators model of the hardware is inferred from CIX's code.
 
@@ -285,7 +286,11 @@ Behaviour that differs slightly:
 
 * CSU_PM: the run-time services start 1 ms after the ready handshake
   (CIX's from its event worker once it first idles); the heartbeat timer
-  is created once (CIX's adds one on every resume).
+  is created once (CIX's adds one on every resume); its tick and timers
+  keep their period while the SoC idles at 200 MHz (CIX's run at half
+  speed); under the DPM's cap, `PERFORMANCE_LEVEL_GET` answers the level
+  that runs and no notification is sent for a level that does not change
+  ([below](#csu_pm-differences)).
 * StandaloneMM: a failed flash program or erase re-reads the block; partial
   writes land at their offset.
 * SE: a memory-configuration block lookup that stays inside its table; a
@@ -414,8 +419,11 @@ off), the defaults BL31 also uses where the layout has none. BL31 (patch
 ### CSU_PM differences
 
 Written from CIX's debug build (`csupm_sky1` 00.12.001) and checked with
-[test_pm.py](../scripts/open/test_pm.py); the details are in
-[firmware/csupm/README.md](../firmware/csupm/README.md). Differences:
+[`sky1emu pm-test`](../emu/README.md); the details are in
+[firmware/csupm/README.md](../firmware/csupm/README.md); every difference,
+with what each firmware does and where it is shown, is in
+[firmware/csupm/differences.md](../firmware/csupm/differences.md).
+In short:
 
 * No debug CLI, and nothing only it reaches: CI-700 event collections, the
   DFD trace, GPIO interrupt helpers, forced operating points; no log
@@ -437,6 +445,22 @@ Written from CIX's debug build (`csupm_sky1` 00.12.001) and checked with
   it first idles.
 * The heartbeat timer is created once; CIX's creates another on every
   resume, so after one two timers toggle the LED.
+* The tick and the timers keep their period when the core's clock
+  changes; CIX's tick keeps its cycle count, so while the SoC idle switch
+  has the core at 200 MHz its tick, DPM ticker, heartbeat and timers run
+  at half speed.
+* The CPU clusters and the DSU have one owner, `sky1soc_perf`. Over SCMI:
+  a DSU level by message sets the PLL's post-divider (CIX's DVFS
+  programs the PLL); `PERFORMANCE_LEVEL_GET` answers the level that runs
+  after a fast channel or under the DPM's cap (CIX's the level of its last
+  message); under the cap no notification is sent for a level that does
+  not change (CIX's sends one at the next message); a level set while the
+  cap comes down follows each step of it.
+* SCMI: a message of a protocol the PM has not got is answered
+  `NOT_SUPPORTED` (CIX's image dies), `SYSTEM_POWER_STATE_SET` with a
+  state that does not exist `INVALID_PARAMETERS` (CIX's asserts); the
+  clock protocol has no `CLOCK_NAME_GET` or rate notifications (CIX's has;
+  no clock offers them).
 * The version page reports the build's version and commit; the RAM log
   holds the messages logged (CIX's holds bytes from past its line buffer,
   which is never flushed).
@@ -586,16 +610,19 @@ states, CI-700/NI-700 counters, messages, a debug CLI).
 so Espressif's GCC builds for it with a core description made from the
 instruction set CIX's own build uses (`xtensa_core.py`), and
 `xtensa_isa.py check` keeps every build inside that set. `xtensa_flix.py`
-decodes the core's FLIX bundles, `xt_emu.py` interprets the core and
-`pm_emu.py` models the SoC around it (I2C and PMICs, PLLs, mailboxes,
-interrupts, the SE's side, S5 and DDR controllers as CIX's image expects
-them).
+decodes the core's FLIX bundles. The emulator, [emu](../emu/README.md)
+(Rust, `sky1emu`), interprets the core
+([emu/src/xtensa](../emu/src/xtensa)) and models the SoC around it
+([emu/src/pm/soc.rs](../emu/src/pm/soc.rs): I2C and PMICs, PLLs,
+mailboxes, interrupts, the SE's side, S5 and DDR controllers as CIX's
+image expects them).
 
 The open firmware is SCP-firmware v2.11.0 and FreeRTOS-Kernel V11.1.0
 (submodules, FreeRTOS with our co-operative Xtensa port) with CIX's changes
 to SCP-firmware's modules, CIX's own modules and CIX's sources translated function by
 function from the debug build. In the emulator, against CIX's image
-([test_pm.py](../scripts/open/test_pm.py)):
+([`sky1emu pm-test`](../emu/README.md); both images asked the same things
+in lock-step on simulated time):
 
 | What | Same as CIX's |
 |---|---|
@@ -607,8 +634,32 @@ function from the debug build. In the emulator, against CIX's image
 | suspend, resume, shutdown, warm reset | all |
 | run time: DPM (performance streams, power model, arbiters, TDP/EDP limits), PROCHOT, die at 100 C | all, including the DPM's state |
 | board services: fans and Linux's fan modes, PVT thresholds, PMIC faults, DDR DFS, board sensors | all |
+| what the short suites leave out (`--full`, 27 phases: every SCMI message on every channel, every domain switched and every level set, notifications, malformed messages, every PM message id, PCC commands, the I2C slave the EC reads and its errors, the fans by time, a temperature sweep from 30 to 130 C, the thermal and GPIO interrupt lines, the SoC idle switch and the DDR's frequency, the watchdog and its interrupt, a second suspend) | all but the expected differences below |
 | the five boards' PM configurations (O6, O6N, MS-R1, Orange Pi 6 with MP2845 PMICs and shared bucks, Orange Pi 6 Plus) | every phase above |
-| V/F tables on simulated parts ([test_vf.py](../scripts/open/test_vf.py): straps, fuses, ATE phases, part numbers, BIOS configurations, Phecda) | every case tried |
+| the options of the BIOS's PM configuration no board sets, on the O6N's (watchdog, heartbeat and EC GPIOs, the SoC idle switch's thresholds with DDR controllers that can switch frequency, the four skin temperature controllers) | every phase above |
+| I2C buses made to hang or fail (`sky1emu pm-faults`, open image alone) | every check |
+| V/F tables on simulated parts (`sky1emu pm-vf --matrix`: straps, fuses, ATE phases, part numbers, BIOS configurations, Phecda; 78 cases) | every case |
+
+Differences that are known and meant, or are CIX's image failing, are
+listed with their reason in the emulator's table and not counted (about
+705 to 730 per standard configuration, in six to ten kinds; 827 in ten
+kinds with the options no board sets): CIX's image dies on an
+SCMI protocol it has not got and asserts on a system power state that does
+not exist (ours answers with an error); its clock protocol has
+`CLOCK_NAME_GET` and rate notifications, ours not; the DSU's level by
+message, `PERFORMANCE_LEVEL_GET` after a fast channel or under the DPM's
+cap, a level set while the cap comes down and CIX's notification of a
+level that already runs at the next message (one owner, `sky1soc_perf`,
+in ours); CIX's PVT warning handler computes in floating
+point and, taken while the idle task runs, panics in FreeRTOS's
+coprocessor handler (CIX leaves that line masked, so not as shipped; ours
+takes it); CIX's fan message 0x802 empties the user's table when it
+refuses one, which asserts at the fans' next pass; and timing of the fans'
+loop and the DPM's PID and grant values at a phase's ends. Anything else
+is a failure; there are none in the seven configurations. The list is in
+[emu/README.md](../emu/README.md#expected-differences); what each means
+for the OS, in
+[firmware/csupm/differences.md](../firmware/csupm/differences.md).
 
 The emulator models devices from what CIX's image does with them, so what
 it cannot show is real hardware behaviour: fans (pulses per turn,

@@ -9,7 +9,7 @@ function with its size and compile unit.  A function counts as covered
 when the open image has a function of the same name (the port keeps CIX's
 names), or when the open sources name it as what they translate (`CIX's
 foo`, or the name itself in code or a comment).  It is a measure of the
-port, not of equivalence: test_pm.py checks behaviour.  Code CIX's image
+port, not of equivalence: sky1emu pm-test (emu/) checks behaviour.  Code CIX's image
 has that the open firmware replaces rather than translates (FreeRTOS's
 port, by our port of upstream FreeRTOS; the Cadence runtime) and the debug CLI, which is not ported, are reported
 apart.
