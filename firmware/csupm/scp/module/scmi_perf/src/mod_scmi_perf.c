@@ -183,6 +183,9 @@ struct scmi_perf_domain_ctx {
     /* the agent whose message asked for owned_level (0: the fast channel),
      * for the PERFORMANCE_LEVEL_CHANGED notification, as CIX's dvfs has it */
     uint32_t owned_agent;
+    /* that agent, for the pass sky1soc_perf runs: the pass that took the
+     * message's request (scmi_perf_owned_pass_planned) */
+    uint32_t owned_pass_agent;
 
     /* Tables of OPPs */
     struct perf_opp_table *opp_table;
@@ -335,6 +338,23 @@ static void owned_request(unsigned int idx, uint32_t level, unsigned int agent_i
     }
 #endif
     fast_channel_callback(0);
+}
+
+/*
+ * CSU_PM (open): sky1soc_perf has planned a pass from the requests.  The
+ * level changes of this pass are the agents' whose messages it took; a
+ * later pass (the DPM's cap, a fast channel) is the platform's, agent 0,
+ * as in CIX's, where only a message's change (dvfs's) carries its agent.
+ */
+void scmi_perf_owned_pass_planned(void)
+{
+    unsigned int i;
+
+    for (i = 0; i < scmi_perf_ctx.domain_count; i++) {
+        scmi_perf_ctx.domain_ctx_table[i].owned_pass_agent =
+            scmi_perf_ctx.domain_ctx_table[i].owned_agent;
+        scmi_perf_ctx.domain_ctx_table[i].owned_agent = 0;
+    }
 }
 
 #ifdef BUILD_HAS_SCMI_PERF_FAST_CHANNELS
@@ -2016,8 +2036,8 @@ static void scmi_perf_notify_level_updated(
 
 #ifdef BUILD_HAS_SCMI_NOTIFICATIONS
     if (owned_domain((unsigned int)idx)) {
-        /* sky1soc_perf's pass: the agent that asked by message, if one did */
-        cookie = scmi_perf_ctx.domain_ctx_table[idx].owned_agent;
+        /* sky1soc_perf's pass: the agent whose message it took, if any */
+        cookie = scmi_perf_ctx.domain_ctx_table[idx].owned_pass_agent;
     }
     level_changed.agent_id = (uint32_t)cookie;
     level_changed.domain_id = (uint32_t)idx;

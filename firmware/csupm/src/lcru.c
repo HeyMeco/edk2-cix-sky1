@@ -8,6 +8,8 @@
 
 uint32_t core_hz;
 
+uint64_t arch_getTimeNowUs(void);	/* src/clk/clk_port.c */
+
 __attribute__((noinline)) void udelay_cycles(uint32_t cycles)
 {
 	uint32_t start = ccount();
@@ -18,6 +20,8 @@ __attribute__((noinline)) void udelay_cycles(uint32_t cycles)
 
 void lcru_core_clock(uint32_t div)
 {
+	/* the cycles so far are time at the clock they were counted at */
+	(void)arch_getTimeNowUs();
 	REG32(LCRU_CORE_DIV) = (REG32(LCRU_CORE_DIV) & ~7u) | (div & 7);
 	core_hz = CORE_PLL_HZ / ((div & 7) + 1);
 }

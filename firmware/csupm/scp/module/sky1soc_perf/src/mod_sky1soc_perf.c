@@ -516,6 +516,8 @@ static int sky1soc_perf_update(struct perf_plugins_perf_update *data)
 	status = fwk_put_event(&start_event);
 	if (status != FWK_SUCCESS)
 		return status;
+	/* Not CIX's: this pass has the requests; its changes are their agents' */
+	scmi_perf_owned_pass_planned();
 	g_ctx.ops_count = 0;
 	g_ctx.state = SKY1SOC_STATE_START;
 	for (uint8_t i = 0; i <= n; i++)

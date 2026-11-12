@@ -16,7 +16,7 @@
 #define DDR_PLL_GATE		0xa006701cu
 #define DDR_PLL_GATE_CTRL	0xa0067020u
 #define DENALI_CTL_198		0x318		/* [1:0] current copy, [9:8] previous */
-#define DENALI_DFS_CAP		0x1ca4		/* [2:1] both set: DFS possible */
+#define DENALI_DFS_CAP		0x2034		/* [2:1] both set: DFS possible */
 #define LP_STATE_SRPD_SHORT	11
 
 /* CIX's lp_cmd: each channel's last expected state, its last command */

@@ -586,6 +586,13 @@ void on_fast_channel_interrupt(bool force_event);
 void on_tdp_notify(uint32_t dvfs_elem_bitmap);
 
 /*!
+ * \brief CSU_PM (open): sky1soc_perf has planned a pass from the requests:
+ *      the agents that asked by message are that pass's (the agent of its
+ *      PERFORMANCE_LEVEL_CHANGED notifications), and of no later pass.
+ */
+void scmi_perf_owned_pass_planned(void);
+
+/*!
  * \brief CSU_PM (CIX's config_scmi_perf.c): the performance domains SCMI
  *      exposes (mod_scmi_perf_config.perf_doms_enabled).
  */

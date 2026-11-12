@@ -32,17 +32,33 @@ void us_delay(uint32_t us)
 	udelay_cycles(us * (core_hz / 1000000));
 }
 
-/* microseconds since start-up: CCOUNT extended by the reads */
+/*
+ * Microseconds since start-up, counted from CCOUNT as it is read (at least
+ * once in 2^32 cycles: the tick does).  The cycles since the last read are
+ * turned into microseconds at the core's clock then: the count goes on
+ * evenly when the clock changes (lcru_core_clock reads it before it does;
+ * the SoC idle switch runs the core at 200 MHz, suspend at 100 MHz).
+ * Dividing the whole count by the clock of the moment, as this did, made
+ * the time jump with the clock: back by half when the SoC left idle, and
+ * the services' timers then waited as long as the PM had been up.
+ */
 uint64_t arch_getTimeNowUs(void)
 {
-	static uint32_t high, last;
-	uint32_t ps = clk_lock(), c = ccount();
+	static uint32_t last, part;	/* part: cycles short of a microsecond */
+	static uint64_t us;
+	uint32_t ps = clk_lock(), c = ccount(), per = core_hz / 1000000;
+	uint64_t now;
 
-	if (c < last)
-		high++;
+	if (per) {
+		uint64_t d = (uint64_t)(c - last) + part;
+
+		us += d / per;
+		part = (uint32_t)(d % per);
+	}
 	last = c;
+	now = us;
 	clk_unlock(ps);
-	return ((uint64_t)high << 32 | c) / (core_hz / 1000000);
+	return now;
 }
 
 uint32_t get_c_count(void)
