@@ -1,4 +1,4 @@
-From d014f250275846e01cbec50511c9d247537e8bac Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mecid <mecidi.cc@gmail.com>
 Date: Sat, 31 Oct 2026 12:47:21 +0100
 Subject: [PATCH] plat/cix: sky1: audio domain and resume marker after system
@@ -17,12 +17,27 @@ before the platform's suspend_finish handler):
 
 Do both at the start of the system-level restore in
 sky1_pwr_domain_suspend_finish(), with the CIX BL31's register sequence.
+
+Compared with the CIX BL31 of July 2026 (v2.7-33527c31abbe) in the
+emulator (sky1emu a64-test, phase "SYSTEM_SUSPEND and resume"), which
+found four more places where the public tree is not that BL31:
+
+* the audio domain and the marker come first on the way back, before
+  the counter is read (the CIX BL31 has them in
+  psci_warmboot_entrypoint()): the counter value written back after the
+  resume is then the same;
+* bit 0 of 0x16000800 is cleared, then set (two writes);
+* going down, the suspending core is left in bits 31:28 of SW_USED_REG2
+  (the SE's harvest word) after the PM's suspend message;
+* the SE's suspend command carries the state as a word (the CIX BL31
+  passes the address of a one-byte variable and sends three bytes of its
+  stack with it).
 ---
- plat/cix/sky1/sky1_pm.c | 76 +++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 76 insertions(+)
+ plat/cix/sky1/sky1_pm.c | 97 ++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 96 insertions(+), 1 deletion(-)
 
 diff --git a/plat/cix/sky1/sky1_pm.c b/plat/cix/sky1/sky1_pm.c
-index 3332ffde9..e57db3eb2 100644
+index 3332ffd..405ef86 100644
 --- a/plat/cix/sky1/sky1_pm.c
 +++ b/plat/cix/sky1/sky1_pm.c
 @@ -13,6 +13,7 @@
@@ -33,7 +48,33 @@ index 3332ffde9..e57db3eb2 100644
  #include <plat/common/platform.h>
  #include <drivers/arm/css/scmi.h>
  #include <sky1_plat.h>
-@@ -538,6 +539,77 @@ void sky1_pwr_domain_on_finish(const psci_power_state_t *target_state)
+@@ -444,7 +445,12 @@ void sky1_pwr_domain_suspend(const psci_power_state_t *target_state)
+ {
+ 	unsigned long mpidr = read_mpidr();
+ 	unsigned int core = MPIDR_AFFLVL1_VAL(mpidr);
+-	plat_local_state_t state = SYSTEM_PWR_STATE(target_state);
++	/*
++	 * The SE's suspend message carries a word.  (The CIX BL31 passes the
++	 * address of a one-byte state: the word's other three bytes are what
++	 * its stack holds next to it.)
++	 */
++	uint32_t state = SYSTEM_PWR_STATE(target_state);
+ 
+ #ifndef CONFIG_CIX_STR_SE
+ 	void *scmi_handle = sky1_get_scmi_handle();
+@@ -501,6 +507,11 @@ void sky1_pwr_domain_suspend(const psci_power_state_t *target_state)
+ 	#ifndef CONFIG_CIX_STR_SE
+ 		scmi_sys_pwr_state_set(scmi_handle, SCMI_SYS_PWR_FORCEFUL_REQ, SCMI_SYS_PWR_SUSPEND);
+ 	#endif
++		/*
++		 * The suspending core in bits 31:28 of the SE's harvest word,
++		 * as the CIX BL31 (July 2026) leaves it for the resume.
++		 */
++		mmio_setbits_32(SW_USED_REG2, core << 28);
+ 		suspend_value = sky1_syscounter_read();
+ 	}
+ 
+@@ -538,6 +549,79 @@ void sky1_pwr_domain_on_finish(const psci_power_state_t *target_state)
  	sky1_boot_cpu_save(core);
  }
  
@@ -72,6 +113,8 @@ index 3332ffde9..e57db3eb2 100644
 +	uint32_t pd, clk, val;
 +	int tries;
 +
++	/* bit 0 low, then high: two writes, as the CIX BL31 makes them */
++	mmio_clrbits_32(SKY1_S5_CTRL_800, BIT(0));
 +	mmio_setbits_32(SKY1_S5_CTRL_800, BIT(0));
 +	if ((mmio_read_32(AUDIO_RCSU_PD_REG) & AUDIO_RESUME_PENDING) == 0U)
 +		return;
@@ -111,17 +154,31 @@ index 3332ffde9..e57db3eb2 100644
  /*******************************************************************************
   * Sky1 Handler called when a power domain has just been powered on after
   * having been suspended earlier. The target_state encodes the low power state
-@@ -564,6 +636,10 @@ void sky1_pwr_domain_suspend_finish(const psci_power_state_t *target_state)
+@@ -550,6 +634,16 @@ void sky1_pwr_domain_suspend_finish(const psci_power_state_t *target_state)
+ 	unsigned int val = 0, delta_time;
+ 	uint64_t cpuidle_end = 0;
+ 
++	/*
++	 * Back from system suspend: the audio domain and the resume marker
++	 * (the top byte of SW_USED_REG1) first, before anything reads the
++	 * counter, where the CIX BL31 has them (psci_warmboot_entrypoint()).
++	 */
++	if (SYSTEM_PWR_STATE(target_state) == CIX_LOCAL_STATE_OFF) {
++		sky1_audio_resume();
++		mmio_clrsetbits_32(SW_USED_REG1, 0xff000000U, SKY1_RESUME_MARK);
++	}
++
+ 	/*Calculate the cpuidle off time*/
+ 	cpuidle_end = sky1_syscounter_read();
+ 	val = mmio_read_32(AP_OFF_RISD_CNT_ADDR(core));
+@@ -564,6 +658,7 @@ void sky1_pwr_domain_suspend_finish(const psci_power_state_t *target_state)
  	assert(CORE_PWR_STATE(target_state) == CIX_LOCAL_STATE_OFF);
  	/* Perform system domain restore if woken up from system suspend */
  	if (SYSTEM_PWR_STATE(target_state) == CIX_LOCAL_STATE_OFF) {
-+		sky1_audio_resume();
-+		/* Resume marker in the top byte, as the CIX BL31 sets it */
-+		mmio_clrsetbits_32(SW_USED_REG1, 0xff000000U, SKY1_RESUME_MARK);
 +
  		/* Initialize the console */
  		cix_console_runtime_init();
  		/* Assert system power domain is available on the platform */
 -- 
-2.56.0
+2.56.1
 

@@ -1,0 +1,104 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mecid <mecidi.cc@gmail.com>
+Date: Thu, 12 Nov 2026 04:00:00 +0100
+Subject: [PATCH] drivers: cadence: xspi: give the caller its operation back
+
+A transfer that crosses a 2 MiB boundary of the flash goes out in
+pieces, and cdns_xspi_mem_op_execute() left the last piece's address,
+length and buffer in the caller's operation.  spi_nor_read() goes on
+from those fields ("length -= op.data.nbytes"), so after such a read it
+read on: loading an image that crosses a boundary (UEFI, at 0x406000 in
+the Orion O6's layout), BL2 read some 4 MiB more of the flash, beyond
+the chip's end, into the memory behind the image.
+
+The CIX BL2 of June 2026 (v2.7-ed9772217e49) does the same; the one of
+July 2026 (v2.7-33527c31abbe) restores the three fields after the last
+piece (its function at 0x80002880).  Do as it does, and stop at the
+first piece that fails.
+
+Found with the emulator (sky1emu a64-test bl2: the SPI transactions of
+the two BL2s).
+---
+ drivers/cadence/xspi/xspi.c | 56 ++++++++++++++++++++++---------------
+ 1 file changed, 34 insertions(+), 22 deletions(-)
+
+diff --git a/drivers/cadence/xspi/xspi.c b/drivers/cadence/xspi/xspi.c
+index be34c50..5f60567 100755
+--- a/drivers/cadence/xspi/xspi.c
++++ b/drivers/cadence/xspi/xspi.c
+@@ -453,38 +453,50 @@ static bool is_cross_regional(uint64_t addr_val,unsigned int len,uint8_t *cur_se
+ 	return false;
+ }
+ 
++/*
++ * A transfer that crosses a 2 MiB boundary of the flash goes out in pieces.
++ * The caller gets its operation back as it gave it: spi_nor_read() goes on
++ * from the operation's own address, length and buffer, and with the last
++ * piece's left in them it read on past the end of what was asked for, into
++ * the memory behind the buffer (loading an image that crosses a boundary,
++ * BL2 read some 4 MiB more of the flash behind it).  As in the CIX BL2 of
++ * July 2026 (v2.7-33527c31abbe), which restores the three fields.
++ */
+ static int cdns_xspi_mem_op_execute(struct spi_mem_op *op)
+ {
+ 	uint8_t cur_section_num;
+ 	uint8_t section_num = 0;
+ 	uint64_t raw_addr = op->addr.val;
+ 	uint32_t raw_len = op->data.nbytes;
++	void *raw_buf = op->data.buf;
+ 	uint32_t remaining_bytes = raw_len;
++	uint32_t done = 0;
++	uint32_t chunk;
+ 	int ret = 0;
+ 
+-	if(is_cross_regional(op->addr.val,op->data.nbytes,&cur_section_num)) {
+-		while(remaining_bytes > 0){
+-			if(section_num == 0){
+-				op->data.nbytes = cur_section_num * SZ_2M - raw_addr;
+-				ret +=__cdns_xspi_mem_op_execute(op);
+-				remaining_bytes = raw_len - (cur_section_num * SZ_2M - raw_addr);
+-			}
+-			if(remaining_bytes > SZ_2M){
+-				op->data.nbytes = SZ_2M;
+-				remaining_bytes -= SZ_2M;
+-
+-			}else{
+-				op->data.nbytes = remaining_bytes;
+-				remaining_bytes = 0;
+-			}
+-			op->data.buf = (uint8_t *)op->data.buf + \
+-			(cur_section_num + section_num) * SZ_2M - raw_addr;
+-			op->addr.val = (cur_section_num + section_num) * SZ_2M;
+-			ret += __cdns_xspi_mem_op_execute(op);
+-			section_num++;
++	if (!is_cross_regional(raw_addr, raw_len, &cur_section_num))
++		return __cdns_xspi_mem_op_execute(op);
++
++	while (remaining_bytes > 0) {
++		if (section_num == 0) {
++			chunk = cur_section_num * SZ_2M - raw_addr;
++			op->addr.val = raw_addr;
++		} else {
++			chunk = remaining_bytes > SZ_2M ? SZ_2M : remaining_bytes;
++			op->addr.val = (uint64_t)(cur_section_num - 1 + section_num) * SZ_2M;
+ 		}
+-	}else
+-		ret = __cdns_xspi_mem_op_execute(op);
++		op->data.nbytes = chunk;
++		op->data.buf = (uint8_t *)raw_buf + done;
++		ret += __cdns_xspi_mem_op_execute(op);
++		if (ret < 0)
++			return ret;
++		done += chunk;
++		remaining_bytes -= chunk;
++		section_num++;
++	}
++	op->addr.val = raw_addr;
++	op->data.nbytes = raw_len;
++	op->data.buf = raw_buf;
+ 	return ret;
+ }
+ 
+-- 
+2.56.1
+

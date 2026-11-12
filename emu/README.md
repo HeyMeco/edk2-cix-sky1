@@ -308,8 +308,8 @@ a fault of one image:
 
 The emulators still being written are modules behind a Cargo feature
 each, so that work in progress in one does not stop the others' builds
-(`cargo build --release --manifest-path emu/Cargo.toml --features ec`); a
-finished one moves into `default`. Each adds its own commands to
+(`cargo build --release --manifest-path emu/Cargo.toml --features se`); a
+finished one moves into `default` (`ec` and `a64` are there). Each adds its own commands to
 `sky1emu` and its section to this file:
 
 | Feature | Module | What |
@@ -333,8 +333,8 @@ flash image (`output/orion-o6/RELEASE/cix_flash_all.bin`, `--flash`) is
 where the update check takes the EC image from.
 
 ```sh
-cargo build --release --manifest-path emu/Cargo.toml --features ec --target-dir emu/target-ec
-E=emu/target-ec/release/sky1emu
+cargo build --release --manifest-path emu/Cargo.toml
+E=emu/target/release/sky1emu
 $E ec-test --open firmware/ec/build/ec_fw.bin              # everything, ~35 s
 $E ec-test --open IMG -v s3_button host_bad                # some scenarios, every difference
 $E ec-test --open IMG --port                               # the Python test_ec.py, exactly
@@ -425,3 +425,155 @@ are pairs low, high; Keil's bank switches go through 0x2Axx).
 | [src/ec/seqmatch.rs](src/ec/seqmatch.rs) | `difflib.SequenceMatcher` |
 | [src/ec/cov.rs](src/ec/cov.rs) | `ec-cov`: functions from the SDCC listings |
 | [src/ec/ntc.rs](src/ec/ntc.rs) | `ec-ntc-table` |
+
+## BL2 and BL31 (AArch64)
+
+Feature `a64`, [src/a64](src/a64/mod.rs): the two TF-A stages built from
+`arm-trusted-firmware` and its patch queue, against the vendor's, from
+BL2's entry to the jump to UEFI and then every SMC. There was no emulator
+for these stages before; what the comparison found is in
+[docs/differences-bl2-bl31.md](../docs/differences-bl2-bl31.md).
+
+```sh
+emu/build-open.sh bl2 bl31                    # the open BL2 and BL31 (release, in the container) -> out/emu/a64
+cargo build --release --manifest-path emu/Cargo.toml
+E=emu/target/release/sky1emu
+$E a64-test                               # everything: 0 differences, N expected in K kinds
+$E a64-test bl31 --only 'SUSPEND' -v      # some phases, every item and answer
+emu/test-a64.sh --cov --o6                # self-check, audit, both vendor builds, coverage
+```
+
+**Images.** The open ones are `bl2.elf` and `bl31.elf` as
+`scripts/open/trusted.py` builds them (`--bl2`, `--bl31` take others).
+The vendor's are taken out of its bootloaders: BL2 from bootloader1's
+"CIXBTFF!" container, BL31 from bootloader2's FIP. The default is CIX's
+own build (`edk2-non-osi/.../PackageTool/Firmwares`, TF-A
+`v2.7-33527c31abbe` of 2026-07-15), which the patches were written from;
+`--cix-bl1 FILE --cix-fip FILE` take another vendor's, and the table of
+expected differences has a part for Radxa's Orion O6 bootloaders (a month
+older, `ed9772217e49`). Both sides boot the same flash image
+(`dist/orion-o6_2026Q3_open.bin`, `--flash`): one whose certificates are
+all under one root, which the open BL2 needs. `out/emu/a64-re.sh DIR`
+names a vendor's functions (`funcmatch.py`, Ghidra) for the messages and
+for reading; without it the vendor's code is addresses.
+
+| Command | What it does |
+|---|---|
+| `a64-test [bl2] [bl31] [--flash F] [--dram MB] [--core N] [--only TEXT] [--audit] [--cov FILE] [-v]` | the comparison |
+| `a64 IMAGE [--base ADDR] [--names SYMS] [--flash F] [--secure] [--until ADDR] [--calls FN --depth N] [--io] [--audit]` | run one stage from its entry: console, where it stopped, registers the model did not know; `--calls` prints the calls made inside a function with arguments and results |
+| `a64-selfcheck IMAGE... [--rounds N]` | the interpreter against the host's CPU |
+| `a64-cov FILE IMAGE... [--names SYMS --as NAME] [--partial] [--all] [--summary]` | what the runs recorded with `--cov FILE` executed (cov.rs's own report reads 32-bit ELF only) |
+
+`SKY1EMU_WATCH=0xADDR` before any of them prints who reads and writes a
+device register (image, function, caller): how most findings were traced.
+
+**The interpreter** ([cpu.rs](src/a64/cpu.rs)) has the integer
+instruction set (all four images are built without FP and SIMD), the
+system registers the images name, and the EL3 stage-1 translation walked
+for real once the firmware turns the MMU on: an address the firmware did
+not map, or a write to what it mapped read-only, is a fault, as on the
+chip. An encoding or a system register it has not got stops the run. A
+fault stops the run too and is reported with its function; it is not
+delivered to the firmware's vector. Lower exception levels do not run:
+an ERET below EL3 stops, and the harness plays them.
+
+Two checks of the interpreter itself, since there is no second emulator
+to compare it with:
+
+- `a64-selfcheck`: on an AArch64 host, every distinct instruction word of
+  the images that user mode may execute (data processing, loads and
+  stores, branches) is run on the CPU and by the interpreter from the
+  same random registers, flags and memory, and everything it can change
+  is compared ([native.rs](src/a64/native.rs)). All four images: no
+  difference (8151 distinct words of the open images, 11939 of CIX's
+  with their data taken for code; its first run found an unallocated
+  load-pair form the decoder accepted). System instructions and branches
+  through a register are not run this way.
+- `--audit`: at every return to where a call left, with the call's stack
+  pointer, x19 to x29 must be what they were. Calls on SP_EL3 are not
+  followed (the vectors' assembly that saves and loads the lower level's
+  registers; TF-A's C code runs on SP_EL0). A full run: 17.8 million
+  returns, none flagged.
+
+**The model** ([soc.rs](src/a64/soc.rs)) is the Sky1 as TF-A drives it,
+inferred from the drivers: a register with no behaviour reads back what
+was written. With behaviour: the Cadence xSPI controller and a SPI NOR
+(the flash image; erase and program work), the UART, the system counter,
+four TZC-400, the GICv3 (redistributor frames assigned through
+`GICD_RDOFFR` and `GICR_MPIDR` as CIX's code programs them, the CPU
+interface's pending, running priority and end of interrupt), the cores'
+power policy units and reset vectors, the AP's mailbox to the PM with an
+SCMI responder, its mailbox to the SE, and what the SE leaves in DRAM for
+BL2 (the key block at 0x801ff000, the DRAM description at 0x83c00000, its
+harvest word). Cores 0 to 3 are Cortex-A520, 4 to 11 Cortex-A720, with
+the identification registers of the cores' manuals; the SE's default boot
+core is 10.
+
+**Time** is simulated nanoseconds and not an instruction count: it passes
+a microsecond whenever the firmware reads the counter (so delays end and
+time-outs expire) and when the harness lets it (a core asleep, a
+suspend); before every question both machines' clocks are set to the
+same millisecond. What the firmware derives from time (the boot record,
+the counter rewritten after a suspend) is then compared exactly, and
+differs only if the two read the clock a different number of times.
+
+**What is compared**, item by item ([test.rs](src/a64/test.rs)): every
+device register's writes in order, the SPI transactions, the messages to
+the PM and the SE, core power requests, SGIs, interrupts taken and ended,
+the console and RAM log (the version and build time apart), the registers
+and system registers each next stage is entered with, the images in DRAM
+by hash, every other DRAM page a stage changed; per SMC the registers the
+caller gets back (x0 to x3, any other that changed, where it finds
+itself) and what OP-TEE was entered with on the way.
+
+- BL2 ([bl2.rs](src/a64/bl2.rs)), 34 configurations: DRAM of 4 to
+  64 GiB, DDR channel masks, the TZC debug regions, boot cores, flashes
+  in and out of bootloader1's table (single and quad reads), no firmware
+  header, the boot ROM's second copy, a flash controller that never gets
+  idle, a byte changed in each entry of both FIPs, the vendor's layout.
+- BL31 ([bl31.rs](src/a64/bl31.rs)): the cold boot behind each side's
+  own BL2 (the stage under test put in BL31's place at the jump), then
+  from copies of the booted machines: SMCCC and PSCI queries, every SiP
+  call with its arguments, every owning entity and function number, calls
+  for OP-TEE and OP-TEE's own calls, every core on, off and on again,
+  CPU_SUSPEND (standby and power down, with the AMU's virtual offsets in
+  use), SYSTEM_SUSPEND and resume (also with the audio domain's resume
+  pending), SYSTEM_OFF and RESET, SDEI, interrupts and exceptions taken
+  to EL3, the SPI NOR and SCMI by SiP call, the power domains with memory
+  repair, the PDC's wake-up sources, deferred errors; and some 35 cold
+  boots that differ from the hand-over on (TrustZone configuration files
+  of every kind, no SE, no PM, cores the eFuses leave out, other DRAM,
+  boot cores and flashes), each followed by a few questions.
+
+A question that kills an image (a fault, a panic, a hang, no return) puts
+both machines back as they were before it. Expected differences are
+`EXPECTED` in [expected.rs](src/a64/expected.rs), matched by phase, item
+and both values; `O6_JUNE` there is what Radxa's older build lacks of
+CIX's. Results now: 121 phases, 0 differences, 1656 expected in 16 kinds
+against CIX's build (under three minutes); 0 differences, 1725 expected
+in 19 kinds against the Orion O6's with its part of the table.
+
+**Coverage.** All phases together run 81 % of the open BL31's code bytes
+(69 of its 653 functions never run) and 51 % of the open BL2's (152 of
+450 never run, 103 of them Mbed TLS functions the chain of trust does not
+use); what is left and why is in
+[docs/differences-bl2-bl31.md](../docs/differences-bl2-bl31.md#what-no-test-reaches).
+
+Not run: CIX's BL2 with secure boot fused on. It verifies with a
+hardware crypto engine (0x05050000) that the model has not got, so its
+authenticating path stops at the first certificate; with the fuses of the
+boards sold it authenticates nothing, which is the path compared.
+
+| File | What |
+|---|---|
+| [src/a64/mod.rs](src/a64/mod.rs) | the commands, `a64`, `a64-cov` |
+| [src/a64/cpu.rs](src/a64/cpu.rs) | the AArch64 interpreter, system registers, translation, the audit |
+| [src/a64/native.rs](src/a64/native.rs) | `a64-selfcheck`: instruction words on the host's CPU |
+| [src/a64/elf64.rs](src/a64/elf64.rs) | ELF64 and raw images, names |
+| [src/a64/images.rs](src/a64/images.rs) | BL2 out of bootloader1, BL31 out of a FIP, the flash's header |
+| [src/a64/soc.rs](src/a64/soc.rs) | the Sky1 as TF-A sees it, simulated time |
+| [src/a64/machine.rs](src/a64/machine.rs) | a machine with an image; the configuration a board gives |
+| [src/a64/test.rs](src/a64/test.rs) | `a64-test`: the harness (the lower levels, OP-TEE), items, the report |
+| [src/a64/bl2.rs](src/a64/bl2.rs), [bl31.rs](src/a64/bl31.rs) | the scenarios |
+| [src/a64/expected.rs](src/a64/expected.rs) | `EXPECTED`, `O6_JUNE` |
+| [test-a64.sh](test-a64.sh) | all of it in one go |

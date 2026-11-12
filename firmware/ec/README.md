@@ -8,7 +8,7 @@ every way it differs from the vendor's image is in
 
     make [O=dir]        # build/ec_fw.bin: 128 KiB e-flash image (SDCC 4.2-4.6)
     ./build.sh orion-o6 --open-ec   # (repository root) into the flash image
-    E=emu/target-ec/release/sky1emu # (repository root) cargo build --release --manifest-path emu/Cargo.toml --features ec --target-dir emu/target-ec
+    E=emu/target/release/sky1emu # (repository root) cargo build --release --manifest-path emu/Cargo.toml
     $E ec-test --open firmware/ec/build/ec_fw.bin [-v] [scenario...]   # ~35 s
     $E ec-test --open firmware/ec/build/ec_fw.bin --cov ec.cov && $E ec-cov ec.cov firmware/ec/build --partial --lines
 

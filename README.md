@@ -188,9 +188,9 @@ the READMEs in [firmware/se](firmware/se/README.md),
 
 The open firmware is checked against CIX's (or Radxa's) binaries in
 emulators of the SoC, run on the host rather than in the container. The
-CSU_PM's and the Orion O6 EC's emulators and their tests are the Rust
-crate [emu](emu/README.md) (`sky1emu`, no dependencies beyond a Rust
-toolchain; the EC's with `--features ec`); the SE's and SFH's are still
+CSU_PM's, the Orion O6 EC's and the BL2/BL31 emulators and their tests are
+the Rust crate [emu](emu/README.md) (`sky1emu`, no dependencies beyond a
+Rust toolchain); the SE's and SFH's are still
 Python in `scripts/open`, and need `unicorn` 2.1.4,
 `capstone` and `pyelftools` (PyPy runs them much faster than CPython). CIX's
 debug builds they compare against are pinned in
@@ -203,7 +203,7 @@ pypy3 scripts/open/test_se.py <se_fw.elf> <image.bin> --services --suspend
 pypy3 scripts/open/test_se.py <se_fw.elf> <image.bin> --secure
 emu/test-pm.sh <csupm.elf>                     # CSU_PM: every suite, every board
 pypy3 scripts/open/test_sfh.py <sfh_fw.bin>    # sensor fusion hub
-emu/target-ec/release/sky1emu ec-test --open firmware/ec/build/ec_fw.bin   # Orion O6 EC (cargo build --release --manifest-path emu/Cargo.toml --features ec --target-dir emu/target-ec)
+emu/target/release/sky1emu ec-test --open firmware/ec/build/ec_fw.bin   # Orion O6 EC (cargo build --release --manifest-path emu/Cargo.toml)
 ```
 
 ### Orange Pi vendor images

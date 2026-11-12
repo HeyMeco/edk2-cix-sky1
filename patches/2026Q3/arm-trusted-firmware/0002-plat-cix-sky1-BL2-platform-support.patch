@@ -28,17 +28,29 @@ loads (v2.7-33527c31abbe):
 
 Not reproduced: bootloader3 recovery from a backup copy (needs flash
 regions no current layout has) and boot progress codes.
+
+Found by running this BL2 in the emulator (sky1emu a64-test) against the
+CIX one:
+
+* plat_set_nv_ctr2() of the platform, returning 0 as the CIX BL2's does
+  (plat/common/tbbr/plat_tbbr.c is no longer built).  The generic one
+  refuses a certificate whose counter is above the platform's unless the
+  root key signed it; the platform's counter reads 0 and the certificates
+  carry the vendor FIP's (31 on the Orion O6), so BL2 stopped at "Verify
+  image: 9 fail" before loading anything.
+* The RAM log has no tick source, as the CIX BL2's: its entries are
+  numbered 1, 2, 3 (they carried the counter's value).
 ---
  .../common/aarch64/cix_bl2_mem_params_desc.c  |  72 ++
- plat/cix/common/cix_common.mk                 |   3 +-
+ plat/cix/common/cix_common.mk                 |   8 +-
  plat/cix/common/cix_cot_bl2.c                 | 724 ++++++++++++++++++
  plat/cix/common/cix_image_load.c              |  31 +
  plat/cix/common/cix_io_storage.c              | 459 +++++++++++
  plat/cix/sky1/platform.mk                     |  17 +
- plat/cix/sky1/sky1_bl2_el3_setup.c            | 115 +++
+ plat/cix/sky1/sky1_bl2_el3_setup.c            | 112 +++
  plat/cix/sky1/sky1_rotpk.S                    |  20 +
- plat/cix/sky1/sky1_trusted_boot.c             |  47 ++
- 9 files changed, 1487 insertions(+), 1 deletion(-)
+ plat/cix/sky1/sky1_trusted_boot.c             |  63 ++
+ 9 files changed, 1503 insertions(+), 3 deletions(-)
  create mode 100644 plat/cix/common/aarch64/cix_bl2_mem_params_desc.c
  create mode 100644 plat/cix/common/cix_cot_bl2.c
  create mode 100644 plat/cix/common/cix_image_load.c
@@ -49,7 +61,7 @@ regions no current layout has) and boot progress codes.
 
 diff --git a/plat/cix/common/aarch64/cix_bl2_mem_params_desc.c b/plat/cix/common/aarch64/cix_bl2_mem_params_desc.c
 new file mode 100644
-index 000000000..0c698534b
+index 0000000..0c69853
 --- /dev/null
 +++ b/plat/cix/common/aarch64/cix_bl2_mem_params_desc.c
 @@ -0,0 +1,72 @@
@@ -126,7 +138,7 @@ index 000000000..0c698534b
 +
 +REGISTER_BL_IMAGE_DESCS(bl2_mem_params_descs)
 diff --git a/plat/cix/common/cix_common.mk b/plat/cix/common/cix_common.mk
-index db5c5d62f..8509dad53 100644
+index db5c5d6..d2d4a3f 100644
 --- a/plat/cix/common/cix_common.mk
 +++ b/plat/cix/common/cix_common.mk
 @@ -301,8 +301,9 @@ ifneq (${TRUSTED_BOARD_BOOT},0)
@@ -140,9 +152,21 @@ index db5c5d62f..8509dad53 100644
          endif
      else ifeq (${COT},dualroot)
          AUTH_SOURCES	+=	drivers/auth/dualroot/cot.c
+@@ -311,8 +312,9 @@ ifneq (${TRUSTED_BOARD_BOOT},0)
+     endif
+ 
+ 
+-    BL2_SOURCES		+=	${AUTH_SOURCES}					\
+-				plat/common/tbbr/plat_tbbr.c
++    # (not plat/common/tbbr/plat_tbbr.c: the platform has its own
++    # plat_set_nv_ctr2, sky1_trusted_boot.c)
++    BL2_SOURCES		+=	${AUTH_SOURCES}
+ 
+     $(eval $(call TOOL_ADD_IMG,ns_bl2u,--fwu,FWU_))
+ endif
 diff --git a/plat/cix/common/cix_cot_bl2.c b/plat/cix/common/cix_cot_bl2.c
 new file mode 100644
-index 000000000..e580c6c93
+index 0000000..e580c6c
 --- /dev/null
 +++ b/plat/cix/common/cix_cot_bl2.c
 @@ -0,0 +1,724 @@
@@ -872,7 +896,7 @@ index 000000000..e580c6c93
 +REGISTER_COT(cot_desc);
 diff --git a/plat/cix/common/cix_image_load.c b/plat/cix/common/cix_image_load.c
 new file mode 100644
-index 000000000..830eaade5
+index 0000000..830eaad
 --- /dev/null
 +++ b/plat/cix/common/cix_image_load.c
 @@ -0,0 +1,31 @@
@@ -909,7 +933,7 @@ index 000000000..830eaade5
 +}
 diff --git a/plat/cix/common/cix_io_storage.c b/plat/cix/common/cix_io_storage.c
 new file mode 100644
-index 000000000..f1b13c10d
+index 0000000..f1b13c1
 --- /dev/null
 +++ b/plat/cix/common/cix_io_storage.c
 @@ -0,0 +1,459 @@
@@ -1373,7 +1397,7 @@ index 000000000..f1b13c10d
 +	return false;
 +}
 diff --git a/plat/cix/sky1/platform.mk b/plat/cix/sky1/platform.mk
-index 1ffab7574..de79f2086 100644
+index 1ffab75..de79f20 100644
 --- a/plat/cix/sky1/platform.mk
 +++ b/plat/cix/sky1/platform.mk
 @@ -100,6 +100,23 @@ override ARM_PLAT_MT	:=	0
@@ -1402,10 +1426,10 @@ index 1ffab7574..de79f2086 100644
  PLAT_INCLUDES		+=	-I${SKY1_BASE}/include/	\
 diff --git a/plat/cix/sky1/sky1_bl2_el3_setup.c b/plat/cix/sky1/sky1_bl2_el3_setup.c
 new file mode 100644
-index 000000000..7a63b907c
+index 0000000..8a91dc8
 --- /dev/null
 +++ b/plat/cix/sky1/sky1_bl2_el3_setup.c
-@@ -0,0 +1,115 @@
+@@ -0,0 +1,112 @@
 +/*
 + * Copyright (c) 2017-2022, ARM Limited and Contributors. All rights reserved.
 + *
@@ -1445,15 +1469,12 @@ index 000000000..7a63b907c
 +};
 +
 +#if RAM_LOG_SUPPORT
-+static unsigned long long sky1_rlog_get_tick(void)
-+{
-+	return read_cntpct_el0();
-+}
-+
-+/* BL2 log in DRAM, shown by UEFI's RamLogDumpDxe as BL31's is */
++/*
++ * BL2 log in DRAM, shown by UEFI's RamLogDumpDxe as BL31's is.  No tick
++ * source, as in the CIX BL2: its entries are numbered 1, 2, 3.
++ */
 +static ramlog_ops sky1_bl2_rlog_ops = {
 +	.flush = flush_dcache_range,
-+	.get_tick = sky1_rlog_get_tick,
 +};
 +#endif
 +
@@ -1523,7 +1544,7 @@ index 000000000..7a63b907c
 +}
 diff --git a/plat/cix/sky1/sky1_rotpk.S b/plat/cix/sky1/sky1_rotpk.S
 new file mode 100644
-index 000000000..ee90a9036
+index 0000000..ee90a90
 --- /dev/null
 +++ b/plat/cix/sky1/sky1_rotpk.S
 @@ -0,0 +1,20 @@
@@ -1549,10 +1570,10 @@ index 000000000..ee90a9036
 +sky1_rotpk_hash_der_end:
 diff --git a/plat/cix/sky1/sky1_trusted_boot.c b/plat/cix/sky1/sky1_trusted_boot.c
 new file mode 100644
-index 000000000..c099d1ed1
+index 0000000..438690f
 --- /dev/null
 +++ b/plat/cix/sky1/sky1_trusted_boot.c
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,63 @@
 +/*
 + * Copyright (c) 2015-2022, ARM Limited and Contributors. All rights reserved.
 + *
@@ -1576,6 +1597,7 @@ index 000000000..c099d1ed1
 +
 +#include <stdint.h>
 +
++#include <drivers/auth/auth_mod.h>
 +#include <plat/common/platform.h>
 +
 +extern unsigned char sky1_rotpk_hash_der_header[];
@@ -1600,3 +1622,21 @@ index 000000000..c099d1ed1
 +{
 +	return 0;
 +}
++
++/*
++ * Every certificate carries a counter above the platform's, which reads 0
++ * (the O6's carry 31).  TF-A's plat_set_nv_ctr2 (plat/common/tbbr) refuses
++ * such an "upgrade" from a certificate the root key did not sign, which
++ * here is every key and content certificate: BL2 stopped at "Verify image:
++ * 9 fail".  With no counter kept there is nothing to protect: accept it,
++ * as the CIX BL2 does (its plat_set_nv_ctr2 is "return 0").
++ */
++int plat_set_nv_ctr2(void *cookie __unused,
++		     const auth_img_desc_t *img_desc __unused,
++		     unsigned int nv_ctr __unused)
++{
++	return 0;
++}
+-- 
+2.56.1
+

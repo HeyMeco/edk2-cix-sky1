@@ -16,8 +16,8 @@ mask ROM ─▶ SE firmware ─▶ CSU_PM ─▶ TF-A BL2 ─▶ BL31 + OP-TEE (
 |---|---|---|
 | SE firmware (Cortex-M33: SoC bring-up, eFuse, image checks, AP services) | [firmware/se](../firmware/se), translated from CIX's debug build, DDR driver included | **built from source** (`--open`; `--vendor-se` keeps CIX's); same register writes and memory contents as CIX's in [test_se.py](../scripts/open/test_se.py) ([below](#se-firmware)) |
 | CSU_PM (Xtensa LX7, Arm SCP-firmware based) | [firmware/csupm](../firmware/csupm): SCP-firmware v2.11.0 and CIX's code translated from its debug build | **built from source** (`--open`; `--vendor-pm` keeps CIX's); does what CIX's does in the emulator ([`sky1emu pm-test`](../emu/README.md)) at boot, over SCMI, for PM messages, through suspend/resume, shutdown and reset and at run time (DPM, fans, thermal), with each board's PM configuration; not yet boot-tested on hardware ([below](#csu_pm)) |
-| TF-A BL2 | `arm-trusted-firmware` + patch 0002 | **built from source** (`--open`, chain A), re-signed into bootloader1 |
-| TF-A BL31 | `arm-trusted-firmware` + patches 0004-0007 | **built from source** (`--open`) |
+| TF-A BL2 | `arm-trusted-firmware` + patches 0002, 0008 | **built from source** (`--open`, chain A), re-signed into bootloader1; does what CIX's does from its entry to the jump to BL31 in the emulator ([`sky1emu a64-test`](../emu/README.md#bl2-and-bl31-aarch64)) but for what [differences-bl2-bl31.md](differences-bl2-bl31.md) lists |
+| TF-A BL31 | `arm-trusted-firmware` + patches 0004-0008 | **built from source** (`--open`); same cold boot and same answer to every SMC as CIX's in the emulator, but for what [differences-bl2-bl31.md](differences-bl2-bl31.md) lists |
 | OP-TEE BL32 | `optee_os` + patch queue | **built from source** (`--open`) |
 | StandaloneMM inside OP-TEE | EDK2 + [Sky1 StandaloneMm](../edk2-project/Platform/CIX/Sky1/StandaloneMm) | **built from source** (`--open`; `--vendor-stmm` embeds CIX's instead) |
 | FIP certificates, `fiptool` | TF-A `cert_create` (patched), `fiptool` | **open** for bootloader2 and bootloader3 |
@@ -127,9 +127,12 @@ built from [firmware/ec](../firmware/ec) (SDCC, in the container) at
 
 `--open` builds, with [scripts/open/trusted.py](../scripts/open/trusted.py):
 
-1. BL31: `make PLAT=sky1 SPD=opteed bl31` in `arm-trusted-firmware` (CIX
-   `cix_p1_k6.6_2025q3_tfa_open_dev`, TF-A v2.7 + `plat/cix`, with the
-   patch queue).
+1. BL31: `make PLAT=sky1 SPD=opteed SMP=1 ENABLE_FEAT_HCX=1 bl31` in
+   `arm-trusted-firmware` (CIX `cix_p1_k6.6_2025q3_tfa_open_dev`, TF-A
+   v2.7 + `plat/cix`, with the patch queue). `SMP=1` and
+   `ENABLE_FEAT_HCX=1` are what CIX's own build passes, read off its BL31
+   in the emulator: without the first BL31 is CIX's single-core variant,
+   which does not get past its GIC setup on the core the SE boots.
 2. StandaloneMM: `build -p Platform/CIX/Sky1/StandaloneMm/Sky1StandaloneMm.dsc`
    (see [below](#standalonemm)). With `--vendor-stmm` the build instead
    decompresses CIX's image from the OP-TEE in the reference bootloader2
@@ -143,7 +146,8 @@ built from [firmware/ec](../firmware/ec) (SDCC, in the container) at
    only the trusted-world key, as CIX's does. `fiptool create`, then an
    independent check (`cixfw.verify_fip`): root, key and content
    certificates, NV counters and the BL31/BL32 hashes.
-5. BL2: `make PLAT=sky1 TRUSTED_BOARD_BOOT=1 ROT_KEY=cix_privatekey.pem bl2`
+5. BL2: `make PLAT=sky1 SMP=1 ENABLE_FEAT_HCX=1 TRUSTED_BOARD_BOOT=1
+   ROT_KEY=cix_privatekey.pem bl2`
    with mbed TLS 2.28 (submodule `mbedtls`). The root of trust is the
    SHA-256 of that key's public half, built into BL2.
 6. SE firmware: `make -C firmware/se` builds `se_fw.bin` (arm-none-eabi
@@ -234,7 +238,7 @@ check_open.py IMAGE REF_BOOTLOADER1 BL2.bin [--root ROOT.pem]
 
 | Submodule | Pin | Patches |
 |---|---|---|
-| `arm-trusted-firmware` | `114fb205` (CIX, 2026-03-10) | 0001, 0003 `cert_create`: certificates that carry only one world's key; 0002 BL2 platform support; 0004 TrustZone configuration in BL31; 0005 audio domain and resume marker after system suspend; 0006 NI-700 QoS as in the CIX BL31; 0007 normal-world SiP argument checks |
+| `arm-trusted-firmware` | `114fb205` (CIX, 2026-03-10) | 0001, 0003 `cert_create`: certificates that carry only one world's key; 0002 BL2 platform support; 0004 TrustZone configuration in BL31; 0005 audio domain and resume marker after system suspend; 0006 NI-700 QoS as in the CIX BL31; 0007 normal-world SiP argument checks; 0008 xSPI: a read across a 2 MiB boundary no longer reads on (CIX's fix of July 2026) |
 | `mbedtls` | `8b3f26a5` (2.28.0) | none |
 | `edk2` | CIX `9212cf39` | 0001, 0002 Secure Boot defaults and TPM page ([parity](parity.md)); 0003 the StandaloneMM core builds CIX's NVRAM information HOB |
 | `optee_os` | `cc66640f` (CIX, 2025-11-11) | 0001-0005 from [orion-unofficial/edk2-cix](https://github.com/orion-unofficial/edk2-cix) `source/unofficial/cix/1.2/op-tee/3.17.0` (BSD-2-Clause, authorship kept): compiler fixes, fail-closed hardware entropy and key return, FF-A 1.2 StandaloneMM loader behind `CFG_STMM_FFA_VERSION=12` (default 10 keeps the vendor StMM interface), stop StMM on a failed NOR transaction; 0006 NOR secure storage only where the TrustZone configuration puts it; 0007 the secure storage key derived as CIX's OP-TEE derives it |
@@ -314,10 +318,18 @@ Not functional:
   in the source, not fixed (in CSU_PM and the DDR driver, e.g. the memory
   configuration write-back writing as many bytes as the checksum's value).
 
-The open BL2 and BL31 were written and checked against the CIX binaries in
-the 2026Q3 bootloader1/bootloader2 (TF-A `v2.7(release):Beta_2.1.5_release`,
+The open BL2 and BL31 were written from the CIX binaries in the 2026Q3
+bootloader1/bootloader2 (TF-A `v2.7(release):Beta_2.1.5_release`,
 built 2026-07-15): functions matched against a build of the public tree
-(`funcmatch.py`), the rest decompiled. Where they differ on purpose:
+(`funcmatch.py`), the rest decompiled. They are checked by running both
+pairs in an emulator ([`sky1emu a64-test`](../emu/README.md#bl2-and-bl31-aarch64)):
+BL2 from its entry to the jump to BL31 in 34 configurations, BL31's cold
+boot and every SMC. That found what reading had not (BL2 refusing every
+certificate with a counter, BL31 built as the single-core variant, a
+flash read running on past the image, four places of the suspend
+sequence), all fixed; the complete list of what differs now, with the
+evidence for each, is [differences-bl2-bl31.md](differences-bl2-bl31.md).
+In short, where they differ on purpose:
 
 ### BL2
 
@@ -341,21 +353,27 @@ IDs the chain never loads. Differences:
   types 0x68/0x69) over a failing one when the TrustZone configuration
   enables it. No board layout here has those regions and every
   configuration disables it.
-* No POST codes at `0x05030F00` beyond the public tree's; they are a
-  debugging aid (UEFI writes its own).
+* No POST codes at `0x05030F00`; they are a debugging aid (UEFI writes
+  its own).
+* The firmware header is used only with its magic; bootloader3 as the
+  vendor's tool certifies it (under another root key) is refused.
 
 ### BL31
 
 The public BL31 is the CIX tree; the patches add what the CIX BL31 has and
-it lacks. Every NI-700 and CI-700 QoS entry, power domain, RAS and TZC table
-was compared between the two binaries; after patch 0006 they agree.
+it lacks, and the build passes what CIX's passes (`SMP=1`,
+`ENABLE_FEAT_HCX=1`). In the emulator its cold boot writes what CIX's
+writes (every NI-700 and CI-700 QoS entry, the GIC, the power domains,
+RAS) and it answers every SMC as CIX's does, but for:
 
 * **TrustZone configuration** (patch 0004), as the CIX BL31 reads it: SPE for
   the normal world follows `spe_feature_en`, and the data bytes go to
   `0x80400000` for OP-TEE. Unlike CIX, a secure storage region that overlaps
   the flash header or an image it lists is dropped (see below).
 * **System suspend** (patch 0005): the audio domain sequence and the `0xBB`
-  resume marker in `SW_USED_REG1` the CIX BL31 has on the first core back.
+  resume marker in `SW_USED_REG1` the CIX BL31 has on the first core back,
+  the suspending core in `SW_USED_REG2`; the SE's suspend command carries
+  the state alone (CIX's sends three bytes of its stack with it).
 * **QoS** (patch 0006): NPU at 0x7, SE and PM ports at 0xD.
 * **SiP argument checks** (patch 0007). `CIX_SIP_NOR_STORAGE`
   (`0xC200000B`) runs a SPI NOR transaction on a buffer the caller gives as

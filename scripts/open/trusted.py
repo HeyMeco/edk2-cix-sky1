@@ -87,9 +87,18 @@ def tfa_timestamp(env):
     return '"' + t.strftime("%H:%M:%S, %b %d %Y") + '"'
 
 
+# What CIX's own build passes to make, read off its BL31 (v2.7-33527c31abbe) in
+# the emulator (sky1emu a64-test): SMP=1 defines CIX_ARCH_SMP (without it BL31
+# is the single-core variant: it turns every redistributor but one off and
+# stops at "No GICR base frame found for Primary CPU" on the core the SE
+# boots), ENABLE_FEAT_HCX=1 sets SCR_EL3.HXEn (without it an OS's first write
+# to HCRX_EL2 traps to EL3).
+TFA_OPTIONS = ["SMP=1", "ENABLE_FEAT_HCX=1"]
+
+
 def build_bl31(out, debug, jobs):
     env = build_env()
-    run(["make", "-C", str(TFA), f"-j{jobs}", "PLAT=sky1", "SPD=opteed", f"DEBUG={int(debug)}",
+    run(["make", "-C", str(TFA), f"-j{jobs}", "PLAT=sky1", "SPD=opteed", *TFA_OPTIONS, f"DEBUG={int(debug)}",
          f"CROSS_COMPILE={CROSS}", f"BUILD_BASE={out}", f"BUILD_MESSAGE_TIMESTAMP={tfa_timestamp(env)}",
          "bl31"], env=env, capture=True)
     return out / "sky1" / ("debug" if debug else "release") / "bl31.bin"
@@ -99,7 +108,7 @@ def build_bl2(out, debug, jobs, root_key):
     """TF-A BL2 (plat/cix BL2 support from the patch queue) with trusted
     board boot against root_key."""
     env = build_env()
-    run(["make", "-C", str(TFA), f"-j{jobs}", "PLAT=sky1", "SPD=opteed", f"DEBUG={int(debug)}",
+    run(["make", "-C", str(TFA), f"-j{jobs}", "PLAT=sky1", "SPD=opteed", *TFA_OPTIONS, f"DEBUG={int(debug)}",
          "TRUSTED_BOARD_BOOT=1", f"MBEDTLS_DIR={ROOT / 'mbedtls'}", f"ROT_KEY={root_key}",
          f"CROSS_COMPILE={CROSS}", f"BUILD_BASE={out}", f"BUILD_MESSAGE_TIMESTAMP={tfa_timestamp(env)}",
          "bl2"], env=env, capture=True)

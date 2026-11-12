@@ -25,24 +25,35 @@ as the CIX BL31 behaves (v2.7 release Beta 2.1.5):
 * cix_spi_nor.c: plat_get_nor_data() (bootloader1 flash table) and the
   firmware header lookup move out of the BL2 io storage code so that
   BL31 can use them.
+
+Run against the CIX BL31 (July 2026, v2.7-33527c31abbe) in the emulator
+(sky1emu a64-test bl31, the "TrustZone configuration" cold boots): the
+messages are now the CIX BL31's where it has one for the case, at its
+level and in its words ("TrustZone: CRC check failed", "TrustZone: Flash
+config invalid, use default", ...), so a release build's console and the
+RAM log read the same; BL2's fall-back to the default FIP offsets is an
+error too, as in the CIX BL2.  Where this BL31 is stricter on purpose (a
+region over the boot firmware, a length the tool does not write,
+spe_feature_en other than 0 and 1) is listed in
+docs/differences-bl2-bl31.md.
 ---
  bl31/bl31_main.c                       |   3 +
  include/plat/common/platform.h         |   4 +
  lib/el3_runtime/aarch64/context_mgmt.c |  14 +-
  plat/cix/common/cix_common.mk          |   1 +
- plat/cix/common/cix_io_storage.c       | 147 ++----------------
- plat/cix/common/cix_spi_nor.c          | 195 ++++++++++++++++++++++++
+ plat/cix/common/cix_io_storage.c       | 150 ++----------------
+ plat/cix/common/cix_spi_nor.c          | 195 +++++++++++++++++++++++
  plat/cix/common/include/plat_cix.h     |   7 +
  plat/cix/sky1/include/platform_def.h   |   4 +
  plat/cix/sky1/platform.mk              |   5 +-
  plat/cix/sky1/sky1_bl31_setup.c        |   2 +
- plat/cix/sky1/sky1_tz_config.c         | 200 +++++++++++++++++++++++++
- 11 files changed, 444 insertions(+), 138 deletions(-)
+ plat/cix/sky1/sky1_tz_config.c         | 210 +++++++++++++++++++++++++
+ 11 files changed, 456 insertions(+), 139 deletions(-)
  create mode 100644 plat/cix/common/cix_spi_nor.c
  create mode 100644 plat/cix/sky1/sky1_tz_config.c
 
 diff --git a/bl31/bl31_main.c b/bl31/bl31_main.c
-index 85974e7ad..c9bef4d13 100644
+index 85974e7..c9bef4d 100644
 --- a/bl31/bl31_main.c
 +++ b/bl31/bl31_main.c
 @@ -138,6 +138,7 @@ void bl31_setup(u_register_t arg0, u_register_t arg1, u_register_t arg2,
@@ -63,7 +74,7 @@ index 85974e7ad..c9bef4d13 100644
  
  	/* Initialise helper libraries */
 diff --git a/include/plat/common/platform.h b/include/plat/common/platform.h
-index b62a63158..36f43ce87 100644
+index b62a631..36f43ce 100644
 --- a/include/plat/common/platform.h
 +++ b/include/plat/common/platform.h
 @@ -7,6 +7,7 @@
@@ -85,7 +96,7 @@ index b62a63158..36f43ce87 100644
   * The following function is mandatory when the
   * firmware update feature is used.
 diff --git a/lib/el3_runtime/aarch64/context_mgmt.c b/lib/el3_runtime/aarch64/context_mgmt.c
-index e393493a2..867eda630 100644
+index e393493..867eda6 100644
 --- a/lib/el3_runtime/aarch64/context_mgmt.c
 +++ b/lib/el3_runtime/aarch64/context_mgmt.c
 @@ -29,6 +29,7 @@
@@ -124,7 +135,7 @@ index e393493a2..867eda630 100644
  
  #if ENABLE_AMU
 diff --git a/plat/cix/common/cix_common.mk b/plat/cix/common/cix_common.mk
-index 8509dad53..ecee2f41c 100644
+index d2d4a3f..cca89a2 100644
 --- a/plat/cix/common/cix_common.mk
 +++ b/plat/cix/common/cix_common.mk
 @@ -169,6 +169,7 @@ endif
@@ -136,7 +147,7 @@ index 8509dad53..ecee2f41c 100644
  ifeq (${SPD},spmd)
      ifeq (${BL2_ENABLE_SP_LOAD},1)
 diff --git a/plat/cix/common/cix_io_storage.c b/plat/cix/common/cix_io_storage.c
-index f1b13c10d..88cf7a3ef 100644
+index f1b13c1..17bb3a7 100644
 --- a/plat/cix/common/cix_io_storage.c
 +++ b/plat/cix/common/cix_io_storage.c
 @@ -10,8 +10,7 @@
@@ -328,18 +339,21 @@ index f1b13c10d..88cf7a3ef 100644
  		return -1;
  	}
  	return 0;
-@@ -387,7 +262,7 @@ int cix_io_setup(void)
+@@ -387,8 +262,9 @@ int cix_io_setup(void)
  		return io_result;
  	}
  
 -	if (cix_read_fw_header() != 0) {
+-		WARN("get bootloader address from cix_flash_all.bin header fail, use deault value\n");
 +	if (cix_find_fips() != 0) {
- 		WARN("get bootloader address from cix_flash_all.bin header fail, use deault value\n");
++		/* (an error in the CIX BL2 too: it is on a release build's console) */
++		ERROR("get bootloader address from cix_flash_all.bin header fail, use deault value\n");
  		fip_block_spec.offset = PLAT_CIX_SPI_NOR_FIP_IMAGE_BASE;
  		fip_block_spec.length = PLAT_CIX_SPI_NOR_FLASH_IMAGE_MAX_SIZE;
+ 		fip_uefi_block_spec.offset = PLAT_CIX_SPI_NOR_FIP_UEFI_IMAGE_BASE;
 diff --git a/plat/cix/common/cix_spi_nor.c b/plat/cix/common/cix_spi_nor.c
 new file mode 100644
-index 000000000..f0c43fe68
+index 0000000..f0c43fe
 --- /dev/null
 +++ b/plat/cix/common/cix_spi_nor.c
 @@ -0,0 +1,195 @@
@@ -539,7 +553,7 @@ index 000000000..f0c43fe68
 +	return false;
 +}
 diff --git a/plat/cix/common/include/plat_cix.h b/plat/cix/common/include/plat_cix.h
-index 8a32541f4..12b776baf 100644
+index 8a32541..12b776b 100644
 --- a/plat/cix/common/include/plat_cix.h
 +++ b/plat/cix/common/include/plat_cix.h
 @@ -204,6 +204,13 @@ int sdei_tee_exception_handler(uint32_t data_len);
@@ -557,7 +571,7 @@ index 8a32541f4..12b776baf 100644
  uint32_t cix_get_reboot_reason(void);
  
 diff --git a/plat/cix/sky1/include/platform_def.h b/plat/cix/sky1/include/platform_def.h
-index 327f04da5..dbcca962f 100644
+index 327f04d..dbcca96 100644
 --- a/plat/cix/sky1/include/platform_def.h
 +++ b/plat/cix/sky1/include/platform_def.h
 @@ -74,6 +74,10 @@
@@ -572,7 +586,7 @@ index 327f04da5..dbcca962f 100644
  #define AUDIO_RCSU_BASE_REG	ULL(0x07000000)
  #define AUDIO_RCSU_PD_REG	ULL(0x07000020)
 diff --git a/plat/cix/sky1/platform.mk b/plat/cix/sky1/platform.mk
-index de79f2086..59d69c557 100644
+index de79f20..59d69c5 100644
 --- a/plat/cix/sky1/platform.mk
 +++ b/plat/cix/sky1/platform.mk
 @@ -167,7 +167,10 @@ BL31_SOURCES		+=	${ENT_GIC_SOURCES}			\
@@ -588,7 +602,7 @@ index de79f2086..59d69c557 100644
  include ${SKY1_BASE}/dst/dst.mk
  include ${SKY1_BASE}/ras/ras.mk
 diff --git a/plat/cix/sky1/sky1_bl31_setup.c b/plat/cix/sky1/sky1_bl31_setup.c
-index 7f7b7452b..f91ca47d0 100644
+index 7f7b745..f91ca47 100644
 --- a/plat/cix/sky1/sky1_bl31_setup.c
 +++ b/plat/cix/sky1/sky1_bl31_setup.c
 @@ -227,6 +227,8 @@ void __init bl31_plat_arch_setup(void)
@@ -602,10 +616,10 @@ index 7f7b7452b..f91ca47d0 100644
  
 diff --git a/plat/cix/sky1/sky1_tz_config.c b/plat/cix/sky1/sky1_tz_config.c
 new file mode 100644
-index 000000000..5e045c18d
+index 0000000..aa5085c
 --- /dev/null
 +++ b/plat/cix/sky1/sky1_tz_config.c
-@@ -0,0 +1,200 @@
+@@ -0,0 +1,210 @@
 +/*
 + * Copyright (c) 2026, edk2-cix contributors. All rights reserved.
 + *
@@ -712,31 +726,36 @@ index 000000000..5e045c18d
 +
 +	/* Only the Orion O6/O6N layouts have one */
 +	if (cix_fw_header_find(TZ_CONFIG_FW_TYPE, &offset, &length) != 0) {
-+		INFO("TrustZone: no configuration in the flash, using the defaults\n");
++		ERROR("TrustZone: Failed to get config address from flash header, use default\n");
 +		return -ENOENT;
 +	}
 +	if ((length < sizeof(raw)) ||
 +	    (spi_nor_read(offset, (uintptr_t)raw, sizeof(raw), &read) != 0) ||
 +	    (read != sizeof(raw))) {
-+		ERROR("TrustZone: cannot read the configuration at 0x%zx\n",
++		ERROR("TrustZone: Failed to read 4096 bytes from flash at offset 0x%zx\n",
 +		      offset);
 +		return -1;
 +	}
 +	if (cfg->signature != TZ_CONFIG_SIGNATURE) {
-+		ERROR("TrustZone: invalid signature 0x%08x\n", cfg->signature);
++		/* (%08X: the RAM log prints it; the console's printf stops there) */
++		ERROR("TrustZone: Invalid signature 0x%08X\n", cfg->signature);
 +		return -1;
 +	}
 +	if ((cfg->version_major != TZ_CONFIG_VERSION_MAJOR) ||
-+	    (cfg->version_minor != TZ_CONFIG_VERSION_MINOR) ||
-+	    (cfg->version_id != TZ_CONFIG_VERSION_MAJOR)) {
-+		ERROR("TrustZone: unsupported version %u.%u/%u\n",
-+		      cfg->version_major, cfg->version_minor, cfg->version_id);
++	    (cfg->version_minor != TZ_CONFIG_VERSION_MINOR)) {
++		ERROR("TrustZone: Invalid version %u.%u\n",
++		      cfg->version_major, cfg->version_minor);
++		return -1;
++	}
++	if (cfg->version_id != TZ_CONFIG_VERSION_MAJOR) {
++		ERROR("TrustZone: Invalid header version 0x%02X\n",
++		      cfg->version_id);
 +		return -1;
 +	}
 +	if ((cfg->length < TZ_CONFIG_MIN_LENGTH) ||
 +	    (cfg->length > sizeof(raw)) || ((cfg->length % 4U) != 0U) ||
 +	    !tz_config_checksum_ok(raw, cfg->length)) {
-+		ERROR("TrustZone: checksum failed\n");
++		ERROR("TrustZone: CRC check failed\n");
 +		return -1;
 +	}
 +
@@ -755,6 +774,11 @@ index 000000000..5e045c18d
 +	return 0;
 +}
 +
++/*
++ * The messages of the CIX BL31 where it has one for the case, at its level
++ * (a release build prints them, and UEFI shows the RAM log).
++ */
++
 +/* Needs the boot flash (cix_qspi_init) */
 +void sky1_tz_config_setup(void)
 +{
@@ -769,7 +793,7 @@ index 000000000..5e045c18d
 +	if (ret == 0) {
 +		tz_config = data;
 +	} else if (ret != -ENOENT) {
-+		WARN("TrustZone: flash configuration invalid, using the defaults\n");
++		ERROR("TrustZone: Flash config invalid, use default\n");
 +	}
 +
 +	/*
@@ -807,5 +831,5 @@ index 000000000..5e045c18d
 +	return tz_config.spe_feature_en == 1U;
 +}
 -- 
-2.56.0
+2.56.1
 

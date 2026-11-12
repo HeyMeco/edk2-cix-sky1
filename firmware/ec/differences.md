@@ -19,8 +19,8 @@ the open image runs in these scenarios (99 % of its code bytes; the rest:
 [Not reached](#not-reached)).
 
 ```sh
-cargo build --release --manifest-path emu/Cargo.toml --features ec --target-dir emu/target-ec
-emu/target-ec/release/sky1emu ec-test --open firmware/ec/build/ec_fw.bin -v
+cargo build --release --manifest-path emu/Cargo.toml
+emu/target/release/sky1emu ec-test --open firmware/ec/build/ec_fw.bin -v
 ```
 
 ## Only emulated
