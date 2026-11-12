@@ -7,7 +7,7 @@
 #   emu/build-open.sh [se|csupm|sfh|ec|bl2|bl31]...     (none: all six)
 #
 #   se     out/emu/se/se_fw.elf        csupm  out/emu/csupm/csupm.elf
-#   sfh    out/emu/sfh/sfh_fw.elf      ec     out/emu/ec/ec_fw.bin
+#   sfh    out/emu/sfh/sfh_fw.bin      ec     out/emu/ec/ec_fw.bin
 #   bl2    out/emu/a64/bl2/sky1/release/bl2/bl2.elf      (arm-trusted-firmware
 #   bl31   out/emu/a64/bl31/sky1/release/bl31/bl31.elf    with the patch queue)
 #

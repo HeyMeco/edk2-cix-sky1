@@ -1,4 +1,4 @@
-# The open CSU_PM and CIX's: differences
+# How the open CSU_PM differs from CIX's
 
 How the open CSU_PM image (`csupm.xbin`, built from this directory) differs
 from CIX's (`csupm_sky1`, CSU_PM 00.12.001, the image in CIX's 2026Q3
@@ -9,11 +9,13 @@ phase of `sky1emu pm-test` (names as in `STEPS` in
 [emu/src/pm/full.rs](../../emu/src/pm/full.rs)), a reason of the table of
 expected differences (`EXPECTED`, same file), or a source file.
 
-## 1. Status
+## Status
 
 **The open CSU_PM has never run on hardware.** It is built from source and
 checked only in the emulator. `build.sh --open` puts it in bootloader1;
-`--vendor-pm` keeps CIX's.
+`--vendor-pm` keeps CIX's. It is compared with CIX's debug build of the
+image it ships (`csupm_sky1`, CSU_PM 00.12.001, full DWARF), pinned in
+[manifests/cix-debug-firmware.json](../../manifests/cix-debug-firmware.json).
 
 Both images run on the same model of the SoC (written from what CIX's
 image does with each device, not from documentation) and are asked the
@@ -21,13 +23,14 @@ same things in lock-step, on simulated time. Every register write, I2C
 transfer, SE handshake word, doorbell to the AP and answer is compared
 phase by phase; a difference is a failure unless it is in `EXPECTED` with
 its reason. The method, the suites and the commands are in
-[emu/README.md](../../emu/README.md).
+[emu/README.md](../../emu/README.md) ([Method](../../emu/README.md#method),
+[Suites](../../emu/README.md#suites)).
 
 So everything below is behaviour on that model. What the model cannot
 show (real fans, PMIC read-back formats, whether the thermal interrupt
 lines are live on a part, display timing) is untested.
 
-## 2. What is the same
+## What is the same
 
 In seven configurations (none loaded; the O6's, O6N's, MS-R1's, Orange Pi
 6's and Orange Pi 6 Plus's; and `options`, the O6N's with every option of
@@ -35,7 +38,7 @@ the BIOS's PM configuration block that no shipping board sets), every
 phase gives the same register writes, I2C transfers and answers as CIX's,
 outside the expected differences (about 705 to 730 per standard
 configuration in six to ten kinds, 827 in ten kinds in `options`, all
-listed in sections 4 and 5):
+listed under [Differences kept on purpose](#differences-kept-on-purpose) and [Faults of the vendor's image](#faults-of-the-vendors-image-that-the-open-one-does-not-have)):
 
 - boot: all 1329 register writes in order, the 33 I2C transfers (PMIC
   rails, boot DVFS levels), the SE handshake; in shared memory the RTT
@@ -69,10 +72,10 @@ version 0x20000), `scmi_system_power` (shutdown, reset and suspend go to
 the PM's power sequence), `dvfs`, `psu`. The configuration tables in
 [scp/config](scp/config) are CIX's, read from its image.
 
-## 3. Structure: what is not CIX's code
+## What is not the vendor's code
 
-None of this is visible to the AP except through the behaviour in section
-4; it is what someone reading the two images finds different.
+None of this is visible to the AP except through the behaviour under
+[Differences kept on purpose](#differences-kept-on-purpose); it is what someone reading the two images finds different.
 
 - SCP-firmware is upstream v2.11.0 (submodule) with CIX's changes
   re-applied per module, not CIX's fork. The `transport` and `cix_mbox`
@@ -104,7 +107,7 @@ None of this is visible to the AP except through the behaviour in section
   ([src/dpm/dfloat.c](src/dpm/dfloat.c)), bit-exact with CIX's FPU code;
   our build does not use the core's double-precision FPU.
 
-## 4. Behaviour that differs on purpose
+## Differences kept on purpose
 
 ### SCMI
 
@@ -153,7 +156,7 @@ None of this is visible to the AP except through the behaviour in section
   wrong until the cap was tested (`scmi_perf_owned_pass_planned`).
 - **Unknown protocols and bad system power states** are answered with an
   error (NOT_SUPPORTED, INVALID_PARAMETERS); CIX's image dies or asserts
-  (section 5).
+  ([Faults of the vendor's image](#faults-of-the-vendors-image-that-the-open-one-does-not-have)).
 
 ### Time
 
@@ -220,7 +223,7 @@ no frequency is raised on a voltage that was not set:
 - after a resume, the clusters whose rail could not be set go to their
   lowest OPP's frequency once DRAM is back
   ([src/hsm/subsys_hsm.c](src/hsm/subsys_hsm.c)); CIX's never gets past
-  restoring the voltages on a dead bus (section 5);
+  restoring the voltages on a dead bus ([Faults of the vendor's image](#faults-of-the-vendors-image-that-the-open-one-does-not-have));
 - at boot `sky1soc_perf`'s first pass waits until DVFS has set (or given
   up on) the boot OPPs.
 
@@ -241,13 +244,35 @@ Around the power sequence the workers finish their jobs first
   FreeRTOS asserts; CIX's keeps the UART quiet.
 - **Thermal interrupt lines.** Lines 28 to 30 (PVT alarms, PROCHOT) stay
   masked as CIX leaves them. When they are unmasked, ours takes them; CIX's
-  panics in its PVT warning handler (section 5). Built with `make
+  panics in its PVT warning handler ([Faults of the vendor's image](#faults-of-the-vendors-image-that-the-open-one-does-not-have)). Built with `make
   CSUPM_THERMAL_IRQ=1`, ours enables the PVT warnings and PROCHOT itself
   ([src/board/board.c](src/board/board.c)); off by default, as on a board
   whose PROCHOT# is not driven the pin could read asserted and hold the
   CPUs at 500 MHz.
 
-## 5. CIX's faults that the open one does not have
+## Left out
+
+- The debug CLI and what only it reaches: CI-700 event collections
+  ([src/perf/ci700_pmu.c](src/perf/ci700_pmu.c)) and the DFD trace, GPIO
+  interrupt helpers, forced operating points, `pmic_stress`,
+  `dump_dfs_gen`; log dumps and debug printing.
+- The RTT debug console: the control block and its channels are laid out
+  as CIX's, but nothing serves down channel 0 or writes up channel 0, and
+  the performance streams' log packages (up channel 1) are not written;
+  only the PM's log (up channel 2) is ([src/rtt/cfg_rtt.c](src/rtt/cfg_rtt.c),
+  [src/perf/act_streams.c](src/perf/act_streams.c)).
+- `CLOCK_NAME_GET` and the clock rate notifications ([Differences kept on purpose](#differences-kept-on-purpose)).
+- Aligning the DDR's frequency change to the displays' vertical blank
+  (CIX's DP/DPU driver): ours changes it without waiting
+  ([src/mclp/mclp_hwif.c](src/mclp/mclp_hwif.c)).
+- The SCMI sensor notifications CIX's PVT code has a callback for: nothing
+  in CIX's image signals it ([src/pvt.c](src/pvt.c)).
+- CIX's I2C state machine for tasks, its timer, event and job framework,
+  `ipc_arbiter`, its FreeRTOS port, code overlays and Cadence runtime
+  (replaced: [What is not the vendor's code](#what-is-not-the-vendors-code)). What is left of CIX's code untranslated is
+  listed by `scripts/open/csupm_coverage.py OURS.elf --units`.
+
+## Faults of the vendor's image that the open one does not have
 
 Each shown in the emulator and, where marked, confirmed in CIX's
 disassembly. CIX's shipping configurations avoid some of them; they are
@@ -277,12 +302,12 @@ listed because an OS or a BIOS setting can reach them.
   messages: arguments (SMN, streams, locked levels, cores, modes)".
 - **Under a cap of the DPM's, `PERFORMANCE_LEVEL_GET` answers a level that
   does not run, and the next message brings a notification of a level
-  that already runs** (confirmed; section 4).
+  that already runs** (confirmed; [Differences kept on purpose](#differences-kept-on-purpose)).
 - **A level set while the cap comes down runs above the cap** until the
   cap is below the level `sky1soc_perf` has on record (tens of
-  milliseconds in the test; section 4).
+  milliseconds in the test; [Differences kept on purpose](#differences-kept-on-purpose)).
 - **Its tick and timers run at half speed while the SoC idles at 200 MHz**
-  (section 4).
+  ([Differences kept on purpose](#differences-kept-on-purpose)).
 - **Two owners of the CPU clusters.** In CIX's, a fast channel after a
   message could raise a cluster's clock without its voltage: in the
   emulator big cluster 0 at level 6616 on 810 mV (README, one owner; ours
@@ -297,13 +322,13 @@ listed because an OS or a BIOS setting can reach them.
   big cluster 0's bus NACKing, CIX's image is still in
   `dpm_edp_restore_voltage` (in a critical section) after 4446 transfers
   (README, Tasks and I2C).
-- **A second heartbeat timer on every resume** (section 4).
+- **A second heartbeat timer on every resume** ([Differences kept on purpose](#differences-kept-on-purpose)).
 
 Two failures once put down to CIX's image were the emulator's: dying under
 back-to-back requests (a FLIX bundle whose `retw` took a window underflow
 ran twice) and asserting on a fan that does not exist. Neither is CIX's.
 
-## 6. CIX's quirks kept on purpose
+## Vendor quirks kept
 
 Where CIX's code is odd but harmless, or where changing it would change
 what the AP sees, the open firmware does what CIX's does and says so in a
@@ -331,29 +356,59 @@ comment ("CIX's oddity kept", "as CIX's"). Those checked in the sources:
 | `scmi_perf` answers a level set before DVFS has done it, so a failure does not reach the SCMI caller | README (Tasks and I2C) |
 | `SYSTEM_POWER_STATE_NOTIFY` answers NOT_SUPPORTED | [scp/module/scmi_system_power/README](scp/module/scmi_system_power/README) |
 
-## 7. Left out, not ported
+## Faults found in the open firmware by these tests
+The full suite and the `options` configuration found ten faults in the
+open firmware, all fixed since (from
+[README.md](README.md) and the commits "CSU_PM: seven faults found by the
+emulator's full suite" and "CSU_PM: three faults found with the options no
+board sets"); each phase that found one now passes:
 
-- The debug CLI and what only it reaches: CI-700 event collections
-  ([src/perf/ci700_pmu.c](src/perf/ci700_pmu.c)) and the DFD trace, GPIO
-  interrupt helpers, forced operating points, `pmic_stress`,
-  `dump_dfs_gen`; log dumps and debug printing.
-- The RTT debug console: the control block and its channels are laid out
-  as CIX's, but nothing serves down channel 0 or writes up channel 0, and
-  the performance streams' log packages (up channel 1) are not written;
-  only the PM's log (up channel 2) is ([src/rtt/cfg_rtt.c](src/rtt/cfg_rtt.c),
-  [src/perf/act_streams.c](src/perf/act_streams.c)).
-- `CLOCK_NAME_GET` and the clock rate notifications (section 4).
-- Aligning the DDR's frequency change to the displays' vertical blank
-  (CIX's DP/DPU driver): ours changes it without waiting
-  ([src/mclp/mclp_hwif.c](src/mclp/mclp_hwif.c)).
-- The SCMI sensor notifications CIX's PVT code has a callback for: nothing
-  in CIX's image signals it ([src/pvt.c](src/pvt.c)).
-- CIX's I2C state machine for tasks, its timer, event and job framework,
-  `ipc_arbiter`, its FreeRTOS port, code overlays and Cadence runtime
-  (replaced: section 3). What is left of CIX's code untranslated is
-  listed by `scripts/open/csupm_coverage.py OURS.elf --units`.
+- **transport**: a message whose length is under the header's or over the
+  buffer's is refused before its payload is copied. Upstream v2.11 set
+  the error and then copied length - 4 bytes all the same: any agent could
+  have had the PM overwrite its own memory.
+- **scmi_power_domain**: the default policy masked the state's type bit
+  before looking a device's state up, so "off" matched "on": a power-off
+  was taken for a power-on.
+- **scmi_system_power**: `SYSTEM_POWER_STATE_NOTIFY` wrote the agent's
+  entry through a null pointer; it answers NOT_SUPPORTED now, as CIX's.
+- **Sensor events** (`BUILD_HAS_SCMI_SENSOR_EVENTS`): the sensors' trip
+  points, which CIX's firmware answers, were compiled out; and
+  `SENSOR_TRIP_POINT_NOTIFY` or `_CONFIG` sent without a payload called a
+  null handler.
+- **soc_sensor**: a temperature below zero is reported as it is (a
+  negative 64-bit value, as CIX's), not as 0.
+- **cix_mbox**: a notification rings bit 0 of the PM-to-AP mailbox's
+  doorbell, as CIX's; it rang bit 1, the acknowledge of the agent's own
+  channels, which the AP's driver does not take for a message.
+- **scmi_perf, sky1soc_perf**: `PERFORMANCE_LEVEL_CHANGED` of a domain
+  `sky1soc_perf` drives carries the agent that asked by message (it was
+  0), and a DSU level asked by message is reported when it changes.
+- **`mclp_hwif_is_dfs_supported`** read the DDR controllers' register
+  0x1ca4 for "both frequency copies trained"; CIX's reads 0x2034
+  ([src/mclp/mclp_hwif.c](src/mclp/mclp_hwif.c)). The SoC idle switch
+  went on by another register's bits.
+- **`arch_getTimeNowUs`** divided the whole cycle count by the core's
+  clock of the moment: time doubled when the SoC idle switch took the
+  core to 200 MHz and halved when it came back, and the services' timers
+  (the fans' loop, PROCHOT's, the heartbeat) then waited as long as the
+  PM had been up, i.e. stalled ([src/clk/clk_port.c](src/clk/clk_port.c),
+  [src/lcru.c](src/lcru.c)). The cycles are turned into time as they are
+  read, at the clock they were counted at.
+- **The agent of a capped pass's notification**: a
+  `PERFORMANCE_LEVEL_CHANGED` of a pass the DPM's cap caused carried the
+  agent of the last message for the domain; only the pass that takes a
+  message's request is that agent's now, as in CIX's
+  (`scmi_perf_owned_pass_planned`; see "Whose notification" under
+  [Differences kept on purpose](#differences-kept-on-purpose)).
 
-## 8. Known limits and open points
+Before these, the open firmware also had two owners of the CPU clusters,
+as CIX's has: a fast channel after a message could raise a cluster's clock
+without its voltage (see "Two owners of the CPU clusters" under
+[Faults of the vendor's image](#faults-of-the-vendors-image-that-the-open-one-does-not-have));
+`sky1soc_perf` is the one owner now.
+
+## Known limits and open points
 
 Of the open firmware, from reading the code (not observed in any run;
 not fixed, narrow):
@@ -382,24 +437,48 @@ In both firmwares:
 
 Of the tests:
 
-- Nothing has run on hardware (section 1). What the model has of devices
+- Nothing has run on hardware ([Status](#status)). What the model has of devices
   is inferred from CIX's code; the DDR controllers' frequency-switch
   handshake in particular is inferred from what CIX's code waits for, and
   nothing documents it.
-- All suites together run 74.0% of the open image's code bytes; 182 of
-  its 1339 functions never run (292 before `--full`). Most of those never
-  run in CIX's image either under the same tests: code no agent can reach
-  as configured, or scenarios not written yet. `sky1emu cov` lists them.
 - The options no shipping board sets (watchdog, heartbeat and EC GPIOs,
   the SoC idle switch's thresholds, the skin temperature controllers) are
   tested only on the O6N's configuration.
 - The thermal interrupt lines' reset masks on a real part are unknown; the
   tests unmask them by hand.
 
-## 9. Checking it yourself
+## What no test reaches
+
+- All suites together run 74.0% of the open image's code bytes; 182 of
+  its 1339 functions never run (292 before `--full`). Most of those never
+  run in CIX's image either under the same tests: code no agent can reach
+  as configured, or scenarios not written yet. `sky1emu cov` lists them.
+
+`--cov FILE` (on `pm-test`, `pm-faults`, `pm-vf`) records the address
+ranges each run executed; `sky1emu cov FILE ELF...` reports, per image,
+how much of each function ran and the functions no test reached
+(`--partial`, `--all`; [emu/README.md](../../emu/README.md#coverage)).
+`emu/test-pm.sh OPEN.elf --cov` writes `out/emu/test/coverage.txt`.
+A function-by-function list of what never runs, with the reason for each,
+has not been written for this image.
+
+## Checking it yourself
 
 On the host, with a Rust toolchain; CIX's image is fetched into
-`blobs-cache/` by `scripts/open/cix_debug.py` when it is not there:
+`blobs-cache/` by `scripts/open/cix_debug.py` when it is not there. The
+boards' PM configurations come from the build output
+(`output/BOARD/RELEASE/pr/Firmwares/csu_pm_config.bin`) and, for the
+Orange Pi 6, from `vendor/orangepi/opi6`: build a board first to test with
+its configuration ([emu/README.md](../../emu/README.md#build)).
+
+```sh
+cargo build --release --manifest-path emu/Cargo.toml   # emu/target/release/sky1emu
+emu/build-open.sh csupm                                # out/emu/csupm/csupm.elf (in the build container)
+emu/test-pm.sh out/emu/csupm/csupm.elf [--cov] [--audit]   # every suite, seven configurations, pm-faults, pm-vf --matrix
+emu/test-all.sh [--build] [--cov] [--audit]            # every suite of every open binary (~14 min with coverage)
+```
+
+By hand, with a build of its own:
 
 ```sh
 make -C firmware/csupm O=/tmp/csupm all check        # in the build container

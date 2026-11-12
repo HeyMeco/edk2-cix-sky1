@@ -4,6 +4,7 @@ Goal: build, debug and modify everything that runs before UEFI (BL33) from
 source. This page tracks what is open, how to build it, what is still
 missing and in which order to close the gaps. What each binary is and where it
 came from is in [closed firmware](closed-firmware.md).
+How each open binary differs from the vendor's: [differences.md](differences.md).
 
 ## Boot chain and status
 

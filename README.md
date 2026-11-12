@@ -191,11 +191,13 @@ emulators of the SoC, run on the host rather than in the container. All
 of them (the SE's, the CSU_PM's, the sensor hub's, the Orion O6 EC's and
 the one for BL2 and BL31) and their tests are the Rust crate
 [emu](emu/README.md) (`sky1emu`, no dependencies beyond a Rust toolchain).
-What each open binary does differently from the vendor's is in its
-`differences.md` ([SE](firmware/se/differences.md),
+What each open binary does differently from the vendor's is in
+[docs/differences.md](docs/differences.md), with a document per binary
+([SE](firmware/se/differences.md),
 [CSU_PM](firmware/csupm/differences.md), [SFH](firmware/sfh/differences.md),
 [EC](firmware/ec/differences.md),
-[BL2 and BL31](docs/differences-bl2-bl31.md)). CIX's
+[BL2 and BL31](docs/differences-bl2-bl31.md),
+[OP-TEE and StandaloneMM](docs/differences-optee-stmm.md)). CIX's
 debug builds they compare against are pinned in
 [manifests/cix-debug-firmware.json](manifests/cix-debug-firmware.json) and
 fetched by `scripts/open/cix_debug.py`.

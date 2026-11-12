@@ -8,6 +8,26 @@ every way they differ from the vendor's stages that a user, the OS,
 OP-TEE or UEFI could observe, or that matters for trust, and how each is
 known.
 
+### At a glance
+
+| Where | The open stage | The vendor's |
+|---|---|---|
+| BL2: authentication | every image and certificate, against the root key built into BL2 | none with secure boot not fused (every board sold); bootloader3's trusted key certificate never |
+| BL2: bootloader3 as the vendor's tool certifies it | refused (another root key) | booted |
+| BL2: bootloader3 recovery | none | reads the TrustZone configuration and can restore bootloader3 from a backup |
+| BL2: firmware header without its magic | not used: default offsets | used |
+| BL2, BL31: progress codes at `0x05030f00` | none | written |
+| BL31: `0xc2000030`, `0xc2000031` (OEM key hash) | not there (`SMC_UNK`) | there, with a stack overflow from the caller's length |
+| BL31: `0xc200000b` (SPI NOR) from the normal world | buffer must be non-secure DRAM | any address: secure memory read to flash, flash over secure memory |
+| BL31: `0xc200000a` (power domain) with an ID out of range | ignored | faults |
+| BL31: TrustZone configuration | secure storage over the boot firmware dropped; SPE only for `spe_feature_en` 1; file lengths the tool does not write refused | handed on as it is; SPE for any value but 0; anything whose sums fit |
+| BL31: the SE's suspend command | the state as a word | the state and three bytes of BL31's stack |
+
+Everything else compared is the same, including the items that were not
+before the emulator found them ([faults found and fixed](#faults-found-in-the-open-firmware-by-these-tests)).
+
+## Status
+
 How it is known: both pairs of images run in an emulator
 ([`sky1emu a64-test`](../emu/README.md#bl2-and-bl31-aarch64)) on the same
 model of the Sky1, from BL2's entry to the jump to UEFI and through every
@@ -24,37 +44,70 @@ bootloaders are a month older and differ from it in three ways ([Radxa's
 build](#radxas-build-for-the-orion-o6-june-2026)).
 
 **Nothing here has run on hardware.** The model is inferred from the code
-that drives it ([what the emulator does not show](#what-was-only-emulated)).
+that drives it ([what the emulator does not show](#known-limits-and-open-points)).
 
-## At a glance
+Results ([emu/README.md](../emu/README.md#bl2-and-bl31-aarch64)): against
+CIX's build, 121 phases, 0 differences, 1656 expected in 16 kinds;
+against Radxa's Orion O6 bootloaders, 0 differences, 1725 expected in 19
+kinds. `emu/test-a64.sh` runs both, with the interpreter's self-check and
+audit.
 
-| Where | The open stage | The vendor's |
-|---|---|---|
-| BL2: authentication | every image and certificate, against the root key built into BL2 | none with secure boot not fused (every board sold); bootloader3's trusted key certificate never |
-| BL2: bootloader3 as the vendor's tool certifies it | refused (another root key) | booted |
-| BL2: bootloader3 recovery | none | reads the TrustZone configuration and can restore bootloader3 from a backup |
-| BL2: firmware header without its magic | not used: default offsets | used |
-| BL2, BL31: progress codes at `0x05030f00` | none | written |
-| BL31: `0xc2000030`, `0xc2000031` (OEM key hash) | not there (`SMC_UNK`) | there, with a stack overflow from the caller's length |
-| BL31: `0xc200000b` (SPI NOR) from the normal world | buffer must be non-secure DRAM | any address: secure memory read to flash, flash over secure memory |
-| BL31: `0xc200000a` (power domain) with an ID out of range | ignored | faults |
-| BL31: TrustZone configuration | secure storage over the boot firmware dropped; SPE only for `spe_feature_en` 1; file lengths the tool does not write refused | handed on as it is; SPE for any value but 0; anything whose sums fit |
-| BL31: the SE's suspend command | the state as a word | the state and three bytes of BL31's stack |
+## What is the same
 
-Everything else compared is the same, including the items that were not
-before the emulator found them ([faults found and fixed](#faults-of-the-open-stages-that-the-emulator-found)).
-
-## BL2
+### BL2
 
 Phases `BL2: ...` of `a64-test bl2` (34 configurations, in
 [emu/src/a64/bl2.rs](../emu/src/a64/bl2.rs)). In all of them without a
-note below, the two BL2s write the same values to the same registers in
+note under [Differences kept on purpose](#differences-kept-on-purpose), the two BL2s write the same values to the same registers in
 the same order (the TZC-400s for every DRAM size and channel mask, the
 flash controller, pads, clocks, watchdog), read the same flash
 transactions but the ones listed, hand BL31 the same image list, entry
 points, arguments, PSTATE and system registers, and leave the same bytes
 in DRAM: BL31, OP-TEE and UEFI (by SHA-256), the version string for UEFI,
 the boot record, the RAM log.
+
+Not different, and checked: the version string at `0x83e01080` and the
+boot record at `0x83e04000` (same format; the version itself differs),
+the RAM log at `0x83dbc000` (entries numbered 1, 2, 3 in both).
+
+### BL31
+
+Phases `BL31: ...` of `a64-test bl31` ([emu/src/a64/bl31.rs](../emu/src/a64/bl31.rs)).
+The cold boot's 708 items agree but for the addresses inside BL31's own
+image (`TTBR0_EL3`, `VBAR_EL3`, `TPIDR_EL3`, the cores' reset vector and
+the resume address it leaves in `SW_USED_REG7`: its entry point, which is
+not where CIX's is) and the progress codes. At run time every SMC of the
+phases returns the same registers and does the same to the devices, the
+PM and the SE, except for what
+[Differences kept on purpose](#differences-kept-on-purpose) and
+[Left out](#left-out) list.
+
+## What is not the vendor's code
+
+From [docs/open-firmware.md](open-firmware.md#how-the-open-firmware-differs-from-cixs)
+and its patch table: the open stages are CIX's public TF-A tree with the
+patch queue in `patches/2026Q3/arm-trusted-firmware`. The patches were
+written from the CIX binaries in the 2026Q3 bootloader1/bootloader2 (TF-A
+`v2.7(release):Beta_2.1.5_release`, built 2026-07-15): functions matched
+against a build of the public tree (`funcmatch.py`), the rest
+decompiled. Patch 0002 adds the five BL2 platform files CIX left out; its
+chain of trust, image descriptors, I/O policies and memory map decode
+identically to the CIX BL2's (`cot.py`, `bl2tables.py`), apart from two
+policy entries for image IDs the chain never loads. The patches add to
+BL31 what the CIX BL31 has and the public tree lacks (0004 TrustZone
+configuration, 0005 suspend, 0006 QoS, 0007 SiP argument checks, 0008 the
+xSPI read fix), and the build passes what CIX's passes (`SMP=1`,
+`ENABLE_FEAT_HCX=1`).
+
+**Mbed TLS in software** in place of CIX's crypto engine library, which
+drives a hardware engine at `0x05050000` and is not public. CIX's BL2
+with secure boot fused on has not been run in the emulator for that
+reason (the model has no such engine); what its authenticating path
+decides is known from its code only.
+
+## Differences kept on purpose
+
+### BL2
 
 **Every image is authenticated.** CIX's BL2 returns "authenticated"
 without looking when the SE's key block says secure boot is off (word
@@ -89,23 +142,6 @@ protection in either: the counters read 0 and are not written (CIX's
 `plat_get_nv_ctr` at `0x80006cfc`, `plat_set_nv_ctr2` at `0x80005650`;
 ours `sky1_trusted_boot.c:39`).
 
-**Mbed TLS in software** in place of CIX's crypto engine library, which
-drives a hardware engine at `0x05050000` and is not public. CIX's BL2
-with secure boot fused on has not been run in the emulator for that
-reason (the model has no such engine); what its authenticating path
-decides is known from its code only.
-
-**No bootloader3 recovery.** CIX's BL2 (July) sets the flash up a second
-time and reads the TrustZone configuration at `0xf0000` for
-`bl3_backup_recovery_en`; when that is set it can copy a backup
-bootloader3 (image types 0x68 and 0x69) over one that fails. No board's
-layout has those images and every configuration file here has the flag
-off. Seen as: six more SPI transactions and a second write of the
-flash's clock, reset and pad registers in CIX's (every `BL2` phase,
-items `SPI`, `(xSPI)`, `(FCH control)`, `(IOMUX_S5)`), and its message
-"TrustZone: Failed to get config address from flash header, use default"
-when there is no header (phase `BL2: boot ROM reports the second copy`).
-
 **The firmware header is taken only with its magic.** The header
 `cix_package_tool` writes at 1 MiB starts with `0x55aa55aa`; the open
 BL2 checks it and walks at most 256 entries
@@ -117,37 +153,11 @@ changed, the entries intact): CIX's finds bootloader3 by its entry and
 boots; the open one looks at `0x3f0000`, where this layout has no FIP,
 and stops.
 
-**No progress codes.** CIX's stages write codes to `0x05030f00` (43 in
-BL2, more in BL31's cold boot and at run time); the open ones write none.
-The public tree's `cix_postcode_debug()` writes to
-`POSTCODE_REGISTER_BASE`, which it defines as `0x85000000`, a word of
-DRAM: the open BL31 leaves `0xc203` there before UEFI starts, CIX's
-`0xc201` (phase `BL31: cold boot`, item `DRAM page 0x85000000`).
-
 **A flash controller that never gets idle** (phase of that name): both
 give up and panic. CIX's has tried once more by then, the open one says
 "BL2: cannot set up the boot flash".
 
-Not different, and checked: the version string at `0x83e01080` and the
-boot record at `0x83e04000` (same format; the version itself differs),
-the RAM log at `0x83dbc000` (entries numbered 1, 2, 3 in both).
-
-## BL31
-
-Phases `BL31: ...` of `a64-test bl31` ([emu/src/a64/bl31.rs](../emu/src/a64/bl31.rs)).
-The cold boot's 708 items agree but for the addresses inside BL31's own
-image (`TTBR0_EL3`, `VBAR_EL3`, `TPIDR_EL3`, the cores' reset vector and
-the resume address it leaves in `SW_USED_REG7`: its entry point, which is
-not where CIX's is) and the progress codes. At run time every SMC of the
-phases returns the same registers and does the same to the devices, the
-PM and the SE, except:
-
-**`0xc2000030` and `0xc2000031` are not there.** In CIX's BL31 they pass
-the caller's x1 and x2 as address and length into the SE commands
-`0x8200001a` (burn the OEM public key hash into the eFuse) and
-`0x8200001b` (read whether it is burnt). The open BL31 answers `SMC_UNK`
-and sends nothing (phase `BL31: SiP calls`, items `SMC 0xc200003...`).
-See [the stack overflow](#faults-of-the-vendors-images-that-the-open-ones-do-not-have).
+### BL31
 
 **The SPI NOR call checks the buffer.** `CIX_SIP_NOR_STORAGE`
 (`0xc200000b`) runs a flash transaction on a buffer given as a physical
@@ -210,7 +220,54 @@ open one an address inside BL31, CIX's a register of the caller's. Kept
 as the public tree has it; the value says nothing an image's listing does
 not.
 
-## Faults of the vendor's images that the open ones do not have
+### Radxa's build for the Orion O6 (June 2026)
+
+`a64-test --cix-bl1 .../Radxa/Orion/O6/Firmwares/bootloader1.img
+--cix-fip .../bootloader2.img` (TF-A `v2.7-ed9772217e49`, built
+2026-06-13): 0 differences with `O6_JUNE` added to the table. Against
+that build the open stages differ in what CIX changed in the month
+after:
+
+* NI-700 QoS: the NPU's two ports 0x7 (June: 0xd), and entries for the
+  SE's and the PM's ports at 0xd (June: none) (patch 0006);
+* the June BL31 knows the TrustZone tool's older file only (36 bytes): it
+  refuses CIX's stock 40-byte file ("CRC check failed") and uses its
+  defaults, which are that file's values; it has no bootloader3 recovery
+  flag, and its BL2 no recovery;
+* the June BL2 reads on past images (above).
+
+## Left out
+
+**No bootloader3 recovery.** CIX's BL2 (July) sets the flash up a second
+time and reads the TrustZone configuration at `0xf0000` for
+`bl3_backup_recovery_en`; when that is set it can copy a backup
+bootloader3 (image types 0x68 and 0x69) over one that fails. No board's
+layout has those images and every configuration file here has the flag
+off. Seen as: six more SPI transactions and a second write of the
+flash's clock, reset and pad registers in CIX's (every `BL2` phase,
+items `SPI`, `(xSPI)`, `(FCH control)`, `(IOMUX_S5)`), and its message
+"TrustZone: Failed to get config address from flash header, use default"
+when there is no header (phase `BL2: boot ROM reports the second copy`).
+
+**No progress codes.** CIX's stages write codes to `0x05030f00` (43 in
+BL2, more in BL31's cold boot and at run time); the open ones write none.
+The public tree's `cix_postcode_debug()` writes to
+`POSTCODE_REGISTER_BASE`, which it defines as `0x85000000`, a word of
+DRAM: the open BL31 leaves `0xc203` there before UEFI starts, CIX's
+`0xc201` (phase `BL31: cold boot`, item `DRAM page 0x85000000`).
+
+**`0xc2000030` and `0xc2000031` are not there.** In CIX's BL31 they pass
+the caller's x1 and x2 as address and length into the SE commands
+`0x8200001a` (burn the OEM public key hash into the eFuse) and
+`0x8200001b` (read whether it is burnt). The open BL31 answers `SMC_UNK`
+and sends nothing (phase `BL31: SiP calls`, items `SMC 0xc200003...`).
+See [the stack overflow](#faults-of-the-vendors-image-that-the-open-one-does-not-have).
+
+SPI-NOR erase and write in BL31 (`spi_nor_write`, "override flash"): the
+CIX BL31 has the code but nothing calls it; the open one leaves it out
+([docs/open-firmware.md](open-firmware.md#bl31)).
+
+## Faults of the vendor's image that the open one does not have
 
 Each found by a question that killed the vendor's image in the emulator,
 then read in its disassembly (CIX's July BL31 unless said).
@@ -239,7 +296,26 @@ then read in its disassembly (CIX's July BL31 unless said).
 * **The header lookup without bounds** (BL2, `0x80004920`): the entry
   count comes from the flash unchecked.
 
-## Faults of the open stages that the emulator found
+## Vendor quirks kept
+
+### The same in both, and worth knowing
+
+* An exception EL3 does not expect from a lower level (a trapped
+  register access, say) ends in `plat_panic_handler`, which selects
+  SP_EL0 (`plat/cix/common/cix_bl31_crash.S:8`) and runs CIX's panic
+  handler in C: on SP_EL0 as the interrupted level left it, since the
+  vector had not loaded EL3's own yet. In the emulator, with SP_EL0 0,
+  both images fault there instead of reporting (phase `BL31: interrupts
+  and exceptions taken to EL3`). Nothing in the phases makes such an
+  exception from the normal world with these builds' traps.
+* `SDEI_INTERRUPT_BIND` (`0xc400002d`) of interrupt 1020 or above ends in
+  a panic in both ("Activation priority mismatch").
+* OP-TEE's "CPU on done" without a CPU on, or an SMC number of its range
+  that the dispatcher does not know, ends both.
+* The flash's size is taken as twice the JEDEC capacity (`2 << id[2]`) in
+  `xspi.c` in both.
+
+## Faults found in the open firmware by these tests
 
 Fixed; before, no `--open` image could have booted.
 
@@ -269,40 +345,7 @@ Fixed; before, no `--open` image could have booted.
    its fall-back to the default FIP offsets was a warning (not printed)
    where CIX's is an error; BL31's TrustZone messages were its own.
 
-## The same in both, and worth knowing
-
-* An exception EL3 does not expect from a lower level (a trapped
-  register access, say) ends in `plat_panic_handler`, which selects
-  SP_EL0 (`plat/cix/common/cix_bl31_crash.S:8`) and runs CIX's panic
-  handler in C: on SP_EL0 as the interrupted level left it, since the
-  vector had not loaded EL3's own yet. In the emulator, with SP_EL0 0,
-  both images fault there instead of reporting (phase `BL31: interrupts
-  and exceptions taken to EL3`). Nothing in the phases makes such an
-  exception from the normal world with these builds' traps.
-* `SDEI_INTERRUPT_BIND` (`0xc400002d`) of interrupt 1020 or above ends in
-  a panic in both ("Activation priority mismatch").
-* OP-TEE's "CPU on done" without a CPU on, or an SMC number of its range
-  that the dispatcher does not know, ends both.
-* The flash's size is taken as twice the JEDEC capacity (`2 << id[2]`) in
-  `xspi.c` in both.
-
-## Radxa's build for the Orion O6 (June 2026)
-
-`a64-test --cix-bl1 .../Radxa/Orion/O6/Firmwares/bootloader1.img
---cix-fip .../bootloader2.img` (TF-A `v2.7-ed9772217e49`, built
-2026-06-13): 0 differences with `O6_JUNE` added to the table. Against
-that build the open stages differ in what CIX changed in the month
-after:
-
-* NI-700 QoS: the NPU's two ports 0x7 (June: 0xd), and entries for the
-  SE's and the PM's ports at 0xd (June: none) (patch 0006);
-* the June BL31 knows the TrustZone tool's older file only (36 bytes): it
-  refuses CIX's stock 40-byte file ("CRC check failed") and uses its
-  defaults, which are that file's values; it has no bootloader3 recovery
-  flag, and its BL2 no recovery;
-* the June BL2 reads on past images (above).
-
-## What was only emulated
+## Known limits and open points
 
 All of it. In particular:
 
@@ -366,3 +409,25 @@ Mbed TLS functions the chain of trust does not use (elliptic curves, key
 writing, other hashes), 29 the same device tree readers, the rest the SPI
 NOR paths for larger chips, `plat_report_exception` (exceptions are not
 delivered in the emulator), the console's input and a few empty hooks.
+
+## Checking it yourself
+
+On the host, with a Rust toolchain. The vendor's stages are taken out of
+its bootloaders (default: CIX's in `edk2-non-osi/.../PackageTool/Firmwares`;
+`--cix-bl1 FILE --cix-fip FILE` take another vendor's). Both sides boot
+`dist/orion-o6_2026Q3_open.bin` (`./build.sh orion-o6 --open`), whose
+certificates are all under one root; see the header of
+[emu/test-a64.sh](../emu/test-a64.sh).
+
+```sh
+cargo build --release --manifest-path emu/Cargo.toml   # emu/target/release/sky1emu
+emu/build-open.sh bl2 bl31                             # out/emu/a64/bl2/.../bl2.elf, out/emu/a64/bl31/.../bl31.elf (in the build container)
+emu/test-a64.sh [--cov] [--o6]                         # self-check, audit, CIX's build; --o6 Radxa's too
+emu/test-all.sh [--build] [--cov] [--audit]            # every suite of every open binary (~14 min with coverage)
+E=emu/target/release/sky1emu
+$E a64-test                                            # everything: 0 differences, N expected in K kinds
+$E a64-test bl31 --only 'SUSPEND' -v                   # some phases, every item and answer
+```
+
+The expected differences are `EXPECTED` (and `O6_JUNE` for Radxa's
+build) in [emu/src/a64/expected.rs](../emu/src/a64/expected.rs).

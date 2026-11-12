@@ -8,6 +8,8 @@ the firmware the boards ship is a later release build (2.0.2026W31.01)
 without symbols, which is not compared. Addresses of the form `0x2000…` are
 in that debug ELF.
 
+## Status
+
 The evidence is the differential test, `sky1emu se-test`
 ([emu/src/se](../../emu/src/se), [emu/README.md](../../emu/README.md)):
 both images run on the same model of the SoC, in step, and everything one
@@ -19,7 +21,18 @@ below in *italics*.
 
 **Nothing here has run on hardware.** The open SE has only been emulated;
 the model is built from what the two images do, not from the SoC's
-documentation. What only the hardware can show is at the end.
+documentation. What only the hardware can show is under
+[Known limits and open points](#known-limits-and-open-points).
+
+How the comparison works, its suites and commands:
+[emu/README.md, SE and SFH](../../emu/README.md#se-and-sfh-cortex-m33).
+`emu/test-se.sh` runs 18 jobs (every suite on the O6's open flash image,
+the boot with the DDR driver live on every board's image, life cycles 5
+and 7 with keys, `sfh-test`, `arm-check`); its result: 0 differences
+(commit "SE, SFH: the emulators in Rust on our own ARMv8-M interpreter").
+The number of expected differences per run is not stated in this
+document; each kind is an entry of `EXPECTED` in
+[emu/src/se/test.rs](../../emu/src/se/test.rs).
 
 ## What is the same
 
@@ -66,6 +79,29 @@ after):
 itself on the code it runs (the registers a callee must keep, at every
 return): nothing found in either image but CIX's stack overflow below.
 
+## What is not the vendor's code
+
+From [README.md](README.md) (Layout, DDR driver, Status) and
+[docs/open-firmware.md](../../docs/open-firmware.md):
+
+* The firmware is rebuilt from CIX's debug build (`se_fw.elf`
+  2.0.2026W01.01, full DWARF: all 1238 functions named), in a tree that
+  mirrors CIX's (`driver`, `framework`, `hal/common`, `service`,
+  `platform/sky1`), and built with GCC (`arm-none-eabi-`) instead of
+  CIX's toolchain. The image is 141 KB; CIX's is 334 KB.
+* The DDR driver ([ddr](ddr)) is CIX's, translated function by function,
+  one file per CIX source file, with CIX's function names and its
+  `drv_ddr_assert` file codes and line numbers. Its register tables
+  (`MemLpddr5RegData.c`), types (`mem_types.h`) and the PVT table
+  (`driver/pvt_data.c`, CIX's 10 672 bytes exactly) are generated from
+  CIX's ELF by scripts with `--check` against CIX's data.
+* Crypto: CIX's CE-Lite library is replaced: SHA-2, HKDF and RSA are Mbed
+  TLS, SM2 and SM3 are written here; the engine's bring-up, the TRNG and
+  the OTP are from CIX's binary (see [Left out](#left-out)).
+* `scripts/open/se_ddr_island.py` (CIX's driver as relinkable assembly)
+  is kept for tests only: `make DDR=cix CIX_ELF=...` links CIX's whole
+  driver in (`./build.sh <board> --open --cix-ddr`).
+
 ## Differences kept on purpose
 
 ### Security: what the open firmware refuses
@@ -76,33 +112,6 @@ return): nothing found in either image but CIX's stack overflow below.
 | Hash service `0x8200000c` | hashes only DRAM (AP addresses 0x80000000 to 0xbfffffff); anything else gets the error 0xfffffffd | hashes any address the SE can read: its own SRAM, the eFuse mirror | *8200000c hash below DRAM*, *hash of the fuse mirror's address*, *hash, end past the window* |
 | Request `0x8200001a`, burn the OEM root key hash | refused (0xffffffff); the firmware has no code that programs eFuses | checks the request's CRC and, where the life cycle allows it, programs the hash and its valid bit, which turns secure boot on for good | *8200001a burn the OEM key hash …* |
 | A CSU_PM image that fails its digest or signature check under secure boot | the boot stops (error 0x930c, system reset with reason 0x547) | **the PM is started all the same**: see the faults of CIX's image below | *secure boot, CSU_PM altered*, *CSU_PM's header altered*, *CSU_PM's signature altered*, *CIX key hash in the fuses wrong* |
-
-### Left out
-
-* **The UART debug monitor** (`service/debug/monitor`, 26 KB): CIX's debug
-  build waits 3 s for ESC before the boot ("boot time config") and, after
-  the boot, sits at the monitor's prompt until it is asked to suspend; the
-  requests `0x82000013` and `0x82000014` are registered only when it
-  leaves the prompt. CIX's release build has no monitor either. The open
-  firmware goes straight into the idle loop. (In the test CIX's
-  `service_monitor_entry` is replaced by a return.)
-* **CIX's crypto library (CE-Lite)**: SHA-2, HKDF and RSA are Mbed TLS,
-  SM2 and SM3 are written here; the engine is brought up and used for the
-  TRNG and the OTP only. The open firmware reads the engine's
-  configuration and status registers less often than CIX's library (six
-  registers in a boot; the writes are the same). Signature checks take the
-  core tens of milliseconds where the engine is faster.
-* **The DDR driver's training report and register dumps**: CIX's reads
-  four PHY registers per channel back for its report; the BIST pass/fail
-  arrays (only printed) are dropped, the BIST runs kept.
-* **The clock and power parts of the hang record**: CIX's records every
-  clock's state by walking its monitor's clock tree (record `CLK`, 4304
-  bytes) and every power domain (`POWER`, 1088 bytes). The open firmware
-  records the raw PLL and S5 power registers instead, under names of
-  their own (`CLK_RAW`, `PWR_RAW`, 68 bytes each), so that nothing reads
-  them as CIX's. The `AMU` record and the records of the three watchdogs
-  (`SE_WDT`, `PM_WDT`, `DDR`) are as CIX's but for the next point.
-  (*crash: hang record on request*, [monitor.c](platform/sky1/monitor.c))
 
 ### Done differently
 
@@ -160,7 +169,36 @@ return): nothing found in either image but CIX's stack overflow below.
 * **Log texts differ** throughout; the RAM log's contents and the version
   strings with them.
 
-## Faults of CIX's image that the open one does not have
+## Left out
+
+* **The UART debug monitor** (`service/debug/monitor`, 26 KB): CIX's debug
+  build waits 3 s for ESC before the boot ("boot time config") and, after
+  the boot, sits at the monitor's prompt until it is asked to suspend; the
+  requests `0x82000013` and `0x82000014` are registered only when it
+  leaves the prompt. CIX's release build has no monitor either. The open
+  firmware goes straight into the idle loop. (In the test CIX's
+  `service_monitor_entry` is replaced by a return.)
+* **CIX's crypto library (CE-Lite)**: SHA-2, HKDF and RSA are Mbed TLS,
+  SM2 and SM3 are written here; the engine is brought up and used for the
+  TRNG and the OTP only. The open firmware reads the engine's
+  configuration and status registers less often than CIX's library (six
+  registers in a boot; the writes are the same). Signature checks take the
+  core tens of milliseconds where the engine is faster.
+* **The DDR driver's training report and register dumps**: CIX's reads
+  four PHY registers per channel back for its report; the BIST pass/fail
+  arrays (only printed) are dropped, the BIST runs kept.
+* **The clock and power parts of the hang record**: CIX's records every
+  clock's state by walking its monitor's clock tree (record `CLK`, 4304
+  bytes) and every power domain (`POWER`, 1088 bytes). The open firmware
+  records the raw PLL and S5 power registers instead, under names of
+  their own (`CLK_RAW`, `PWR_RAW`, 68 bytes each), so that nothing reads
+  them as CIX's. The `AMU` record and the records of the three watchdogs
+  (`SE_WDT`, `PM_WDT`, `DDR`) are as CIX's but for the SE watchdog's
+  record's frame ([Done differently](#done-differently)).
+  (*crash: hang record on request*, [monitor.c](platform/sky1/monitor.c))
+
+<a id="faults-of-cixs-image-that-the-open-one-does-not-have"></a>
+## Faults of the vendor's image that the open one does not have
 
 Each was seen as a difference in the test and then found in CIX's code.
 
@@ -193,6 +231,17 @@ Each was seen as a difference in the test and then found in CIX's code.
 5. The time-out messages of the CI-700 cache flushes are printed when the
    flush succeeds at the last try, not when it times out.
 
+## Vendor quirks kept
+
+In the DDR driver CIX's oddities are kept and commented, not fixed
+([README.md](README.md#ddr-driver)): `CdcbUpdateBlockBuf`, for one,
+writes the memory configuration back with as many bytes as the new
+checksum's value. Both drivers refuse the MS-R1's memory configuration
+(format 1.6) with the same assertion (see [What is the same](#what-is-the-same)).
+Outside the DDR driver no list of kept quirks has been made.
+
+## Faults found in the open firmware by these tests
+
 Faults the open firmware had and the test found, now fixed: the hash
 service took addresses from 0xc0000000 up (the fuse mirror among them); a
 fuse field's bit offset could wrap its bounds check; SysTick was set up in
@@ -206,7 +255,10 @@ status once where CIX's reads it again; a debug certificate's feature was
 looked at before the debug control register was read; flash reads were
 split at every 2 MiB boundary where CIX's does not split past 14 MiB.
 
-## What the test cannot show
+## Known limits and open points
+
+No unfixed fault of the open firmware is recorded here or in
+[README.md](README.md). What the tests cannot show:
 
 * Anything the model gets wrong about the hardware in the same way for
   both images. The model's assumptions are marked "modelled, not known" in
@@ -233,6 +285,13 @@ split at every 2 MiB boundary where CIX's does not split past 14 MiB.
   checks the SE's image), which is not modelled. What the inputs suite varies of the
   hand-over (boot reason, life cycle, header copy, clocks, strap) is what
   the firmware was seen to read of it.
+
+* What only real DRAM shows ([README.md](README.md#ddr-driver)): training
+  itself (the PI does it in hardware: frequency order, failures and
+  retries), the parts' mode-register values, real BIST and eye-scan
+  results, the interrupt masks' reset values.
+* The shipping release build (2.0.2026W31.01) is not compared (see the
+  top of this document).
 
 ## What no test reaches
 
@@ -270,3 +329,24 @@ log formats.
 Of CIX's image the same runs execute 37 %: its debug monitor, its crypto
 library and most of its clock and power framework are replaced or never
 asked.
+
+## Checking it yourself
+
+On the host, with a Rust toolchain. CIX's SE image is its debug build,
+fetched into `blobs-cache/` by `scripts/open/cix_debug.py`; the flash
+images are the builds in `dist/` (`./build.sh BOARD [--open]`); see the
+header of [emu/test-se.sh](../../emu/test-se.sh).
+
+```sh
+cargo build --release --manifest-path emu/Cargo.toml   # emu/target/release/sky1emu
+emu/build-open.sh se sfh                               # out/emu/se/se_fw.elf, out/emu/sfh/ (in the build container)
+emu/test-se.sh out/emu/se/se_fw.elf out/emu/sfh/sfh_fw.bin [--cov] [--audit]   # every suite, every board's image, and sfh-test
+emu/test-all.sh [--build] [--cov] [--audit]            # every suite of every open binary (~14 min with coverage)
+E=emu/target/release/sky1emu
+$E se-test out/emu/se/se_fw.elf dist/orion-o6_2026Q3_open.bin --services --suspend
+$E se-test OPEN.elf FLASH.bin --secure --only 'CSU_PM altered' -v --uart cix:'CSU_PM altered'
+```
+
+`test-se.sh` writes its logs to `out/emu/test/se-*.log` and exits 0 when
+nothing differs outside `EXPECTED` in
+[emu/src/se/test.rs](../../emu/src/se/test.rs).

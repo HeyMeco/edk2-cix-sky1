@@ -5,6 +5,8 @@ Every way this firmware differs from CIX's `sfh_fw.bin` (the image in
 FreeRTOS and newlib based; no symbols) that the AP, the PM, the SE or a
 user could observe. The open image is 4.5 KB of C.
 
+## Status
+
 The evidence is the differential test, `sky1emu sfh-test OPEN_sfh_fw.bin`
 ([emu/src/sfh/test.rs](../../emu/src/sfh/test.rs),
 [emu/README.md](../../emu/README.md)): both images run on the same model
@@ -16,6 +18,14 @@ wake-up requests and how the image ends. A phase is named below in
 
 **Nothing here has run on hardware**, and the model is made from what the
 two images do with the hardware, not from its documentation.
+
+The method and the commands are in
+[emu/README.md, SE and SFH](../../emu/README.md#se-and-sfh-cortex-m33).
+Result: 162 phases, 0 differences (commit "SE, SFH: the emulators in Rust
+on our own ARMv8-M interpreter"); what differs on purpose is five entries
+of `EXPECTED` in [emu/src/sfh/test.rs](../../emu/src/sfh/test.rs), for
+two reasons: interrupts 61 to 63 (three entries), and CIX's logging after
+a resume (its late wake-ups, and the reads of address 0x18 it makes).
 
 ## What is the same
 
@@ -45,7 +55,33 @@ two images do with the hardware, not from its documentation.
   each SE image copied into the hub's SRAM (4400 bytes at its start, the
   flash's image), starts it in this model and sees the handshake.
 
-## Differences
+## What is not the vendor's code
+
+The open image is C written in this directory, built with
+`arm-none-eabi-gcc` ([Makefile](Makefile)); CIX's image has no symbols.
+
+* **No operating system.** CIX's image links FreeRTOS (the scheduler is
+  never started) and newlib's stdio; the open one has neither. Stack use
+  and SRAM contents differ accordingly (both start with the main stack at
+  0x2007fff0).
+
+## Differences kept on purpose
+
+* **Wake-ups are on time after the first resume**: CIX's are late; see
+  [Faults of the vendor's image](#faults-of-the-vendors-image-that-the-open-one-does-not-have).
+* **Interrupts 61 to 63 have a handler.** CIX's vector table ends at
+  interrupt 60; the three entries after it are the first instructions of
+  its code. The open table has the dispatcher up to 63. Nothing raises
+  these interrupts. (*interrupt 61*, *62*, *63*)
+* **Log texts**, where a build logs at all.
+
+## Left out
+
+* FreeRTOS and newlib's stdio (above, "No operating system").
+* The log: the open image logs nothing unless built with `LOG_UART=`
+  (below); CIX's turns its log on at the first resume.
+
+## Faults of the vendor's image that the open one does not have
 
 * **Wake-ups are on time after the first resume.** CIX's image turns its
   log on at the first resume and from then on logs through a UART pointer
@@ -59,15 +95,20 @@ two images do with the hardware, not from its documentation.
   CIX's wake-up request at 49.25 ms, ours at 0.01 ms; the test accepts
   CIX's being late, by at most 120 ms, as the one expected difference of
   the kind.)
-* **Interrupts 61 to 63 have a handler.** CIX's vector table ends at
-  interrupt 60; the three entries after it are the first instructions of
-  its code. The open table has the dispatcher up to 63. Nothing raises
-  these interrupts. (*interrupt 61*, *62*, *63*)
-* **No operating system.** CIX's image links FreeRTOS (the scheduler is
-  never started) and newlib's stdio; the open one has neither. Stack use
-  and SRAM contents differ accordingly (both start with the main stack at
-  0x2007fff0).
-* **Log texts**, where a build logs at all.
+* **Its vector table ends at interrupt 60**: the three entries after it
+  are the first instructions of its code, not handlers (*interrupt 61*,
+  *62*, *63*; above).
+
+## Vendor quirks kept
+
+As listed under [What is the same](#what-is-the-same): both images wait
+the full 100 ms of their send time-out in the mailbox interrupt handler
+before a wake-up request or a resume's answer goes out; a resume that
+arrives while a wake waits is served after it, and a second wake request
+waits for the first; on a HardFault both stop. No other kept quirk has
+been listed.
+
+## Faults found in the open firmware by these tests
 
 Faults the open image had and the test found, now fixed: it restarted
 itself on a HardFault (CIX's handler logs and stops at `0x200028a0`; the
@@ -75,6 +116,18 @@ restart after that call is never reached, and a restart inside the fault
 handler takes no interrupt any more); it did not read the FIFO status
 register on an overflow or underflow interrupt (CIX's does, for a log
 line).
+
+## Known limits and open points
+
+No unfixed fault of the open image is recorded. What the test cannot show:
+
+* Whatever the model has wrong about the timers, the mailbox FIFOs or
+  the interrupt controller in the same way for both images: the timers'
+  count direction and rate (25 MHz), which status bits the mailbox sets
+  and when, the FIFO's depth (32 words assumed), that address 0 shows the
+  start of SRAM.
+* The core's clock: the time code takes between two hardware events is
+  compared loosely (100 µs and half a percent).
 
 ## What no test reaches
 
@@ -86,12 +139,20 @@ callers pass constants), the timer modes other than 0 in `t32_config`
 log is on (`%x`, `%p`, `%c`, `%u`, `%%`, padding), and the branches of
 libgcc's 64-bit division for operands the log's numbers never have.
 
-## What the test cannot show
+## Checking it yourself
 
-* Whatever the model has wrong about the timers, the mailbox FIFOs or
-  the interrupt controller in the same way for both images: the timers'
-  count direction and rate (25 MHz), which status bits the mailbox sets
-  and when, the FIFO's depth (32 words assumed), that address 0 shows the
-  start of SRAM.
-* The core's clock: the time code takes between two hardware events is
-  compared loosely (100 µs and half a percent).
+On the host, with a Rust toolchain. CIX's `sfh_fw.bin` is read from
+`edk2-non-osi/Platform/CIX/Sky1/PackageTool/Firmwares` (`sfh-test OPEN.bin
+[CIX.bin]` takes another).
+
+```sh
+cargo build --release --manifest-path emu/Cargo.toml   # emu/target/release/sky1emu
+emu/build-open.sh sfh                                  # out/emu/sfh/sfh_fw.bin (in the build container)
+emu/target/release/sky1emu sfh-test out/emu/sfh/sfh_fw.bin -v [--cov FILE]
+emu/test-se.sh out/emu/se/se_fw.elf out/emu/sfh/sfh_fw.bin [--cov] [--audit]   # the SE's suites and sfh-test
+emu/test-all.sh [--build] [--cov] [--audit]            # every suite of every open binary (~14 min with coverage)
+```
+
+The differences that are meant are `EXPECTED` in
+[emu/src/sfh/test.rs](../../emu/src/sfh/test.rs); anything else fails the
+run.
