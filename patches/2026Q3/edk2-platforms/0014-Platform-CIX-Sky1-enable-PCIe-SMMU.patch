@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: edk2-cix <edk2-cix@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 19:53:03 +0000
+Subject: [PATCH] Platform/CIX/Sky1: enable PCIe SMMU
+
+The IORT mapped the PCIe root complex straight to the ITS, so the OS
+saw no SMMU in front of PCIe devices.  Set PCIE_SMMU_ENABLE: the IORT
+then describes the PCIe SMMUv3 (SMMU0_BASE, PCIe hub TCU interrupts)
+and routes the root complex's IDs through it; MSIs still reach the ITS
+through the SMMU node's ID mapping.  The PCIe PMCG stays out of the
+IORT, since PMCG_ENABLE is 0.
+---
+ Platform/CIX/Sky1/Drivers/AcpiSocTables/CommonDefines.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Platform/CIX/Sky1/Drivers/AcpiSocTables/CommonDefines.h b/Platform/CIX/Sky1/Drivers/AcpiSocTables/CommonDefines.h
+index 31fb399c..2cc571c4 100644
+--- a/Platform/CIX/Sky1/Drivers/AcpiSocTables/CommonDefines.h
++++ b/Platform/CIX/Sky1/Drivers/AcpiSocTables/CommonDefines.h
+@@ -32,7 +32,7 @@
+ #define RAMOOPS_RES_SIZE   0xa0000
+ 
+ // IORT
+-#define PCIE_SMMU_ENABLE        0
++#define PCIE_SMMU_ENABLE        1
+ #define MM_HUB_SMMU_ENABLE      1
+ #define SUB_SYSTEM_SMMU_ENABLE  0
+ 
