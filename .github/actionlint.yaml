@@ -1,0 +1,5 @@
+# Runner labels actionlint does not know: Avrea's hosted arm64 runners
+# (https://docs.avrea.com/runners/).
+self-hosted-runner:
+  labels:
+    - avrea-ubuntu-24.04-arm-8-vcpu
