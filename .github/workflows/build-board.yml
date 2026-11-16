@@ -19,7 +19,7 @@ on:
         default: RELEASE
       runner:
         type: string
-        default: ubuntu-24.04-arm
+        default: avrea-ubuntu-24.04-arm-8-vcpu
 
 jobs:
   build:

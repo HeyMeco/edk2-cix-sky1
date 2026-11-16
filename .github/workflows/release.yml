@@ -29,10 +29,10 @@ on:
         type: boolean
         default: false
       runner:
-        description: "Runner (arm64 runners are free for public repositories)"
+        description: "Runner (Avrea arm64 is billed; ubuntu-24.04-arm is GitHub's free fallback)"
         type: choice
-        options: [ubuntu-24.04-arm, ubuntu-24.04]
-        default: ubuntu-24.04-arm
+        options: [avrea-ubuntu-24.04-arm-8-vcpu, ubuntu-24.04-arm, ubuntu-24.04]
+        default: avrea-ubuntu-24.04-arm-8-vcpu
 
 permissions:
   contents: read
